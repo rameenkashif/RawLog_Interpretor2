@@ -13,6 +13,7 @@ metadata out".
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
@@ -105,14 +106,33 @@ def load_las_file(
                 f"Failed to parse LAS file '{filename}': {exc}"
             ) from exc
     else:
+        # `source` is an in-memory upload stream (e.g. FastAPI's UploadFile.file,
+        # wrapped in io.BytesIO by the caller). LAS files are plain text, but
+        # `lasio.read()` does its own encoding detection and line-based text
+        # parsing when given a *path* -- feeding it a raw binary stream directly
+        # bypasses that and breaks internal str operations (bytes vs str
+        # mismatches). To keep upload behavior identical to the path-based
+        # CLI/script path (which works correctly), write the uploaded bytes to
+        # a temporary .las file on disk and let lasio read/decode it exactly
+        # the same way it does for backend/data/raw/*.las files.
         if filename is None:
             raise LasValidationError("filename is required when loading from a stream")
+
+        raw_bytes = source.read() if hasattr(source, "read") else source
+
+        with tempfile.NamedTemporaryFile(suffix=".las", delete=False) as tmp:
+            tmp.write(raw_bytes)
+            tmp_path = tmp.name
+
         try:
-            las = lasio.read(source)
+            las = lasio.read(tmp_path)
         except Exception as exc:  # pragma: no cover
             raise LasValidationError(
                 f"Failed to parse LAS file '{filename}': {exc}"
             ) from exc
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
         path = Path(filename)
 
     # Resolve each required curve to whatever mnemonic is actually present.
