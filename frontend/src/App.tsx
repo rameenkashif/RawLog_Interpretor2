@@ -10,25 +10,41 @@ export default function App() {
   return (
     <div className="min-h-screen bg-surface text-ink">
       <header className="border-b border-border bg-surface sticky top-0 z-30">
-        <div className="mx-auto max-w-[1600px] px-6 py-3 flex items-center gap-8">
-          <span className="font-semibold text-lg tracking-tight">
-            Petro<span className="text-accent">Interp</span>
-          </span>
-          <nav className="flex gap-1">
-            <NavLink
-              to="/"
-              end
-              className={({ isActive }) =>
-                `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                  isActive
-                    ? "bg-accent-soft text-accent-strong"
-                    : "text-ink-muted hover:bg-surface-sunken"
-                }`
-              }
-            >
-              Dashboard
-            </NavLink>
-          </nav>
+        <div className="mx-auto max-w-[1600px] px-6 py-3 flex items-center justify-between gap-8">
+          <div className="flex items-center gap-8">
+            <span className="font-semibold text-lg tracking-tight">
+              Petro<span className="text-accent">Interp</span>
+            </span>
+            <nav className="flex gap-1">
+              <NavLink
+                to="/"
+                end
+                className={({ isActive }) =>
+                  `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                    isActive
+                      ? "bg-accent-soft text-accent-strong"
+                      : "text-ink-muted hover:bg-surface-sunken"
+                  }`
+                }
+              >
+                Dashboard
+              </NavLink>
+            </nav>
+          </div>
+
+          {/* Partner/vendor logos, top-right, horizontal: GeoGraphix first, then LMKR. */}
+          <div className="flex items-center gap-4 shrink-0">
+            <img
+              src="/logos/geographix-logo.png"
+              alt="GeoGraphix"
+              className="h-7 w-auto object-contain"
+            />
+            <img
+              src="/logos/lmkr-logo.png"
+              alt="LMKR"
+              className="h-7 w-auto object-contain"
+            />
+          </div>
         </div>
       </header>
 
