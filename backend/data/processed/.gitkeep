@@ -1,0 +1,3 @@
+Processed well curves (Parquet + JSON metadata) are written here by the app.
+Contents are gitignored (regenerable from raw LAS files) -- this file just
+keeps the empty folder tracked in git.
