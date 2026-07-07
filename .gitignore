@@ -1,0 +1,23 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Environment secrets
+backend/.env
+.env
+
+# Processed data cache (regenerate from raw LAS files; keep raw/ though)
+backend/data/processed/*.parquet
+backend/data/processed/*.meta.json
+backend/data/models/*.joblib
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Editor/OS
+.DS_Store
+Thumbs.db

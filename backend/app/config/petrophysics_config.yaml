@@ -1,0 +1,95 @@
+# =============================================================================
+# petrophysics_config.yaml
+# -----------------------------------------------------------------------------
+# Single source of truth for every constant/cutoff used by app/petrophysics.py.
+# Nothing in petrophysics.py should hardcode a constant inline -- everything
+# tunable lives here so a petrophysicist can adjust the interpretation without
+# touching code.
+#
+# Structure:
+#   defaults:      field-wide fallback values, used when a well has no
+#                   override defined below.
+#   wells:          optional per-well overrides. Any key omitted for a well
+#                   falls back to `defaults`.
+#
+# All of these are PLACEHOLDER defaults taken from common industry rules of
+# thumb (documented inline). They MUST be reviewed/replaced by a petro-
+# physicist (SME) for a real field study -- especially Rw, Swirr, matrix
+# density, and the Archie exponents, which are highly formation-specific.
+# =============================================================================
+
+defaults:
+  vsh:
+    # Larionov correction to use by default. Options: "older" | "tertiary"
+    method: older
+    # GR_clean / GR_shale are normally derived per-well as the 5th/95th
+    # percentile of the well's own GR curve (see petrophysics.compute_vsh).
+    # These are only used if `use_percentiles: false` below.
+    use_percentiles: true
+    gr_clean_percentile: 5
+    gr_shale_percentile: 95
+    gr_clean_override: null   # API units, only used if use_percentiles is false
+    gr_shale_override: null   # API units, only used if use_percentiles is false
+
+  phit:
+    # Matrix/fluid density (g/cc). Common lithology presets:
+    #   sandstone: 2.65   limestone: 2.71   dolomite: 2.87
+    rhob_matrix: 2.65
+    rhob_fluid: 1.0
+
+  phie:
+    # If true, also compute the density-neutron cross-check (PHIE_DN)
+    compute_density_neutron_crosscheck: true
+
+  swe:
+    # Archie's equation parameters. a/m/n are lithology + formation specific.
+    a: 1.0
+    m: 2.0
+    n: 2.0
+    # Formation water resistivity (ohm.m) at formation temperature.
+    # THIS MUST BE SUPPLIED PER WELL/FIELD -- 0.05 is a placeholder only.
+    rw: 0.05
+
+  perm_tixier:
+    # Irreducible water saturation. If null, it is estimated automatically
+    # as the SWE value in the cleanest / highest-PHIE interval of the well.
+    swirr: null
+    swirr_default: 0.25
+
+  vvolc:
+    # Density-neutron crossplot heuristic thresholds (Section 3.9)
+    rhob_threshold: 2.7
+    nphi_threshold: 0.15
+    gr_shale_fraction: 0.6
+    rhob_scale_min: 2.7
+    rhob_scale_max: 2.9
+
+  zones:
+    # Reservoir / pay cutoffs -- field specific, tune freely.
+    vsh_max: 0.4
+    phie_min: 0.08
+    swe_reservoir_max: 0.65
+    swe_pay_max: 0.5
+
+  dptm:
+    # Sonic-integration time-depth approximation (Section 3.5).
+    # This is a placeholder pending real checkshot/VSP data.
+    enabled: true
+
+  core_perm_pred:
+    # Random Forest regression config for the CORE_PERM_PRED proxy model
+    n_estimators: 200
+    max_depth: 8
+    random_state: 42
+
+# Per-well overrides. Add a block per well ID (must match the well name
+# derived from the LAS file, e.g. "Z-02") to override any default above.
+# Example:
+#
+# wells:
+#   Z-02:
+#     swe:
+#       rw: 0.08
+#     phit:
+#       rhob_matrix: 2.71   # limestone section
+wells: {}

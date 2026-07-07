@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Force light color-scheme at the CSS level too, so form controls (date
+   pickers, checkboxes, scrollbars) rendered by the browser also stay light
+   even if the OS is set to dark mode. */
+:root {
+  color-scheme: light only;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background-color: #ffffff;
+}
+
+body {
+  @apply bg-surface text-ink antialiased;
+}
+
+/* Thin, light-themed scrollbars (WebKit) so long log tracks/chat panels
+   don't render the OS's dark-mode scrollbar. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #f8f9fb;
+}
+::-webkit-scrollbar-thumb {
+  background: #d0d5dd;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #98a2b3;
+}
