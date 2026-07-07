@@ -10,10 +10,10 @@ export default function App() {
   return (
     <div className="min-h-screen bg-surface text-ink">
       <header className="border-b border-border bg-surface sticky top-0 z-30">
-        <div className="mx-auto max-w-[1600px] px-6 py-3 flex items-center justify-between gap-8">
+        <div className="mx-auto max-w-[2000px] px-6 py-3 flex items-center justify-between gap-8">
           <div className="flex items-center gap-8">
             <span className="font-semibold text-lg tracking-tight">
-              Petro<span className="text-accent">Interp</span>
+              RawReservoir<span className="text-accent">Classifier</span>
             </span>
             <nav className="flex gap-1">
               <NavLink
@@ -33,17 +33,17 @@ export default function App() {
           </div>
 
           {/* Partner/vendor logos, top-right, horizontal: GeoGraphix first, then LMKR. */}
-          <div className="flex items-center gap-4 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
             <img
-              src="/logos/geographix-logo.png"
-              alt="GeoGraphix"
-              className="h-7 w-auto object-contain"
-            />
-            <img
-              src="/logos/lmkr-logo.png"
-              alt="LMKR"
-              className="h-7 w-auto object-contain"
-            />
+  src="/logos/geographix-logo.png"
+  alt="GeoGraphix"
+  className="h-28 w-auto object-contain"
+/>
+<img
+  src="/logos/lmkr-logo.png"
+  alt="LMKR"
+  className="h-20 w-auto object-contain"
+/>
           </div>
         </div>
       </header>
