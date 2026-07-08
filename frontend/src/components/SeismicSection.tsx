@@ -12,7 +12,11 @@ import { colors } from "@/styles/tokens";
  * data itself, not the surrounding page chrome, which stays on the
  * light background per the app's UI requirement.
  */
-export default function SeismicSection({ section }: { section: SeismicSectionResponse }) {
+export default function SeismicSection({
+  section,
+}: {
+  section: SeismicSectionResponse;
+}) {
   const { data, layout } = useMemo(() => buildFigure(section), [section]);
 
   return (
@@ -27,20 +31,34 @@ export default function SeismicSection({ section }: { section: SeismicSectionRes
   );
 }
 
-function buildFigure(section: SeismicSectionResponse): { data: Data[]; layout: Partial<Layout> } {
+function buildFigure(section: SeismicSectionResponse): {
+  data: Data[];
+  layout: Partial<Layout>;
+} {
   // amplitude is (n_traces, n_samples); Plotly heatmap wants z as
   // (rows=y, cols=x), so transpose to (n_samples, n_traces).
   const nTraces = section.trace_indices.length;
   const nSamples = section.twt_axis_ms.length;
   const z: number[][] = Array.from({ length: nSamples }, (_, sampleIdx) =>
-    Array.from({ length: nTraces }, (_, traceIdx) => section.amplitude[traceIdx][sampleIdx])
+    Array.from(
+      { length: nTraces },
+      (_, traceIdx) => section.amplitude[traceIdx][sampleIdx],
+    ),
   );
 
-  const maxAbs = Math.max(
-    Math.abs(Math.min(...z.flat())),
-    Math.abs(Math.max(...z.flat())),
-    1e-6
-  );
+  // NOTE: deliberately NOT using Math.min(...z.flat()) / Math.max(...z.flat())
+  // here -- spreading a large flattened array (up to MAX_SECTION_TRACES x
+  // MAX_SECTION_SAMPLES = hundreds of thousands of numbers) as individual
+  // function arguments throws "RangeError: Maximum call stack size exceeded"
+  // in most JS engines well before reaching that size. A manual reduce loop
+  // has no such limit.
+  let maxAbs = 1e-6;
+  for (const row of z) {
+    for (const value of row) {
+      const abs = Math.abs(value);
+      if (abs > maxAbs) maxAbs = abs;
+    }
+  }
 
   const trace: Data = {
     type: "heatmap",
@@ -52,7 +70,11 @@ function buildFigure(section: SeismicSectionResponse): { data: Data[]; layout: P
     zmax: maxAbs,
     colorscale: "RdBu",
     reversescale: true,
-    colorbar: { title: "Amplitude", titlefont: { size: 10 }, tickfont: { size: 9 } },
+    colorbar: {
+      title: "Amplitude",
+      titlefont: { size: 10 },
+      tickfont: { size: 9 },
+    },
   };
 
   const layout: Partial<Layout> = {

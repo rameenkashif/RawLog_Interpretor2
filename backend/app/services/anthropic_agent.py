@@ -23,7 +23,19 @@ from typing import Any, AsyncIterator
 
 from anthropic import AsyncAnthropic
 
-from app.services import seismic_service, well_service
+from app.services import well_service
+
+# The seismic tools depend on the optional seismic module (segyio, scipy). If
+# those packages aren't installed, degrade gracefully: the chat agent still
+# works for wells, just without seismic tools, rather than crashing the whole
+# app (chat.py -> anthropic_agent.py -> here, at import time).
+try:
+    from app.services import seismic_service
+
+    _SEISMIC_AVAILABLE = True
+except Exception:  # noqa: BLE001
+    seismic_service = None  # type: ignore[assignment]
+    _SEISMIC_AVAILABLE = False
 
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 
@@ -127,6 +139,12 @@ TOOLS = [
             "required": ["well_ids", "metric"],
         },
     },
+]
+
+# Seismic tools are only advertised to Claude when the seismic module
+# actually loaded successfully (see the try/except import above) -- this
+# keeps the tool list honest about what the agent can actually do.
+SEISMIC_TOOLS = [
     {
         "name": "list_seismic_datasets",
         "description": (
@@ -153,6 +171,9 @@ TOOLS = [
         },
     },
 ]
+
+if _SEISMIC_AVAILABLE:
+    TOOLS = TOOLS + SEISMIC_TOOLS
 
 
 # -----------------------------------------------------------------------------
@@ -230,9 +251,11 @@ TOOL_DISPATCH = {
     "get_curve_values": _tool_get_curve_values,
     "get_zone_breakdown": _tool_get_zone_breakdown,
     "compare_wells": _tool_compare_wells,
-    "list_seismic_datasets": _tool_list_seismic_datasets,
-    "get_seismic_summary": _tool_get_seismic_summary,
 }
+
+if _SEISMIC_AVAILABLE:
+    TOOL_DISPATCH["list_seismic_datasets"] = _tool_list_seismic_datasets
+    TOOL_DISPATCH["get_seismic_summary"] = _tool_get_seismic_summary
 
 
 def _run_tool(name: str, tool_input: dict[str, Any]) -> Any:
@@ -243,9 +266,11 @@ def _run_tool(name: str, tool_input: dict[str, Any]) -> Any:
         return fn(**tool_input)
     except well_service.WellNotFoundError as exc:
         return {"error": str(exc)}
-    except seismic_service.SeismicDatasetNotFoundError as exc:
-        return {"error": str(exc)}
     except Exception as exc:  # noqa: BLE001 -- surface tool errors to the model, not a 500
+        if _SEISMIC_AVAILABLE and isinstance(
+            exc, seismic_service.SeismicDatasetNotFoundError
+        ):
+            return {"error": str(exc)}
         return {"error": f"Tool '{name}' failed: {exc}"}
 
 
