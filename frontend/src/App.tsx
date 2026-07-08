@@ -5,24 +5,32 @@ import WellDetailPage from "./pages/WellDetailPage";
 /**
  * App shell: light-themed top nav + routed pages. Every page below renders
  * on the shared white/near-white background -- there is no dark variant.
+ * Brand accent: a subtle blue-to-orange gradient strip under the header,
+ * echoed sparingly elsewhere (buttons, active states) to keep the palette
+ * cohesive without ever going dark.
  */
 export default function App() {
   return (
     <div className="min-h-screen bg-surface text-ink">
-      <header className="border-b border-border bg-surface sticky top-0 z-30">
-        <div className="mx-auto max-w-[1600px] px-6 py-3 flex items-center justify-between gap-8">
+      <header className="sticky top-0 z-30 bg-surface/95 backdrop-blur supports-[backdrop-filter]:bg-surface/80 shadow-card">
+        <div className="mx-auto max-w-[1600px] px-6 py-3.5 flex items-center justify-between gap-8">
           <div className="flex items-center gap-8">
-            <span className="font-semibold text-lg tracking-tight">
-              Petro<span className="text-accent">Interp</span>
-            </span>
+            <div className="flex items-center gap-2.5">
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-brand-gradient text-white font-bold text-sm shadow-card">
+                PI
+              </span>
+              <span className="font-bold text-lg tracking-tight text-ink">
+                Petro<span className="text-accent">Interp</span>
+              </span>
+            </div>
             <nav className="flex gap-1">
               <NavLink
                 to="/"
                 end
                 className={({ isActive }) =>
-                  `px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  `px-3.5 py-1.5 rounded-full text-sm font-medium transition-all ${
                     isActive
-                      ? "bg-accent-soft text-accent-strong"
+                      ? "bg-accent text-white shadow-card"
                       : "text-ink-muted hover:bg-surface-sunken"
                   }`
                 }
@@ -33,7 +41,7 @@ export default function App() {
           </div>
 
           {/* Partner/vendor logos, top-right, horizontal: GeoGraphix first, then LMKR. */}
-          <div className="flex items-center gap-4 shrink-0">
+          <div className="flex items-center gap-4 shrink-0 pl-4 border-l border-border">
             <img
               src="/logos/geographix-logo.png"
               alt="GeoGraphix"
@@ -46,6 +54,7 @@ export default function App() {
             />
           </div>
         </div>
+        <div className="h-[3px] bg-brand-gradient" />
       </header>
 
       <main className="mx-auto max-w-[1600px] px-6 py-6">

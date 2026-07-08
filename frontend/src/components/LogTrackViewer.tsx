@@ -35,11 +35,17 @@ const AXIS_STYLE = {
  *   6. ZONES (categorical color column: green = Pay, amber = Reservoir
  *      non-pay, gray = Non-reservoir)
  */
-export default function LogTrackViewer({ curves, depthRange }: LogTrackViewerProps) {
-  const { data, layout } = useMemo(() => buildFigure(curves, depthRange), [curves, depthRange]);
+export default function LogTrackViewer({
+  curves,
+  depthRange,
+}: LogTrackViewerProps) {
+  const { data, layout } = useMemo(
+    () => buildFigure(curves, depthRange),
+    [curves, depthRange],
+  );
 
   return (
-    <div className="bg-surface border border-border rounded-lg p-2 shadow-sm">
+    <div className="bg-surface border border-border rounded-xl p-2 shadow-card">
       <Plot
         data={data}
         layout={layout}
@@ -52,7 +58,7 @@ export default function LogTrackViewer({ curves, depthRange }: LogTrackViewerPro
 
 function buildFigure(
   curves: WellCurvesResponse,
-  depthRange?: [number, number]
+  depthRange?: [number, number],
 ): { data: Data[]; layout: Partial<Layout> } {
   const rows = curves.data;
   const depth = rows.map((r) => r.DEPT as number);
@@ -207,7 +213,13 @@ function buildFigure(
       domain: [0, 1],
       ...AXIS_STYLE,
     },
-    xaxis: { title: "GR (API)", domain: [0, 0.14], anchor: "y", side: "top", ...AXIS_STYLE },
+    xaxis: {
+      title: "GR (API)",
+      domain: [0, 0.14],
+      anchor: "y",
+      side: "top",
+      ...AXIS_STYLE,
+    },
     xaxis7: {
       overlaying: "x",
       domain: [0, 0.14],

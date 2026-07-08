@@ -27,22 +27,32 @@ export default function WellDetailPage() {
 
   return (
     <div className="pb-24 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <Link to="/" className="text-xs text-accent hover:underline">
-            ← Back to dashboard
-          </Link>
-          <h1 className="text-xl font-semibold text-ink mt-1">{wellId}</h1>
-          <p className="text-sm text-ink-faint">Single-well petrophysical interpretation</p>
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-brand-gradient-soft px-6 py-5">
+        <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-orange/10 blur-2xl" />
+        <div className="relative flex items-center justify-between flex-wrap gap-4">
+          <div>
+            <Link
+              to="/"
+              className="text-xs font-medium text-accent-strong hover:underline inline-flex items-center gap-1"
+            >
+              ← Back to dashboard
+            </Link>
+            <h1 className="text-2xl font-extrabold text-ink tracking-tight mt-1">
+              {wellId}
+            </h1>
+            <p className="text-sm text-ink-muted">
+              Single-well petrophysical interpretation
+            </p>
+          </div>
+          <ExportButtons wellId={wellId} />
         </div>
-        <ExportButtons wellId={wellId} />
       </div>
 
       {curvesQuery.isLoading && (
-        <div className="h-[720px] rounded-lg bg-surface-sunken animate-pulse" />
+        <div className="h-[720px] rounded-xl bg-surface-sunken animate-pulse" />
       )}
       {curvesQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-lg px-4 py-3">
+        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
           Failed to load curves: {(curvesQuery.error as Error).message}
         </div>
       )}
@@ -63,7 +73,10 @@ export default function WellDetailPage() {
       {curvesQuery.data && (
         <section>
           <h2 className="text-sm font-semibold text-ink mb-2">Crossplots</h2>
-          <CrossplotBuilder wellId={wellId} curveNames={curvesQuery.data.curve_names} />
+          <CrossplotBuilder
+            wellId={wellId}
+            curveNames={curvesQuery.data.curve_names}
+          />
         </section>
       )}
 

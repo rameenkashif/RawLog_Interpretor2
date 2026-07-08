@@ -27,7 +27,8 @@ const PRESETS: Preset[] = [
     x: "NPHI",
     y: "RHOB",
     color: "VSH",
-    description: "Classic lithology/porosity crossplot, colored by shale volume.",
+    description:
+      "Classic lithology/porosity crossplot, colored by shale volume.",
   },
   {
     label: "Pickett Plot",
@@ -36,7 +37,8 @@ const PRESETS: Preset[] = [
     color: "ZONES",
     logX: true,
     logY: true,
-    description: "log(Rt) vs log(PHIE) for Archie Sw QC -- points trending toward the origin along an Sw=const line indicate consistent saturation.",
+    description:
+      "log(Rt) vs log(PHIE) for Archie Sw QC -- points trending toward the origin along an Sw=const line indicate consistent saturation.",
   },
   {
     label: "PHIE vs PERM_TIXIER",
@@ -44,7 +46,8 @@ const PRESETS: Preset[] = [
     y: "PERM_TIXIER",
     color: "ZONES",
     logY: true,
-    description: "Porosity-permeability transform (Tixier). Log-scale permeability axis.",
+    description:
+      "Porosity-permeability transform (Tixier). Log-scale permeability axis.",
   },
   {
     label: "VSH vs Depth",
@@ -70,14 +73,19 @@ const PRESETS: Preset[] = [
  * Backed by GET /wells/{well_id}/crossplot so the same endpoint powers both
  * the presets and free-form exploration.
  */
-export default function CrossplotBuilder({ wellId, curveNames }: CrossplotBuilderProps) {
+export default function CrossplotBuilder({
+  wellId,
+  curveNames,
+}: CrossplotBuilderProps) {
   const [xCurve, setXCurve] = useState("NPHI");
   const [yCurve, setYCurve] = useState("RHOB");
   const [colorCurve, setColorCurve] = useState<string | null>("VSH");
   const [logX, setLogX] = useState(false);
   const [logY, setLogY] = useState(false);
   const [reverseY, setReverseY] = useState(false);
-  const [activePreset, setActivePreset] = useState<string | null>("Neutron-Density");
+  const [activePreset, setActivePreset] = useState<string | null>(
+    "Neutron-Density",
+  );
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["crossplot", wellId, xCurve, yCurve, colorCurve],
@@ -104,16 +112,26 @@ export default function CrossplotBuilder({ wellId, curveNames }: CrossplotBuilde
     let marker: Partial<Data>["marker"];
     if (isCategoricalColor) {
       marker = {
-        color: points.map((p) => (typeof p.color === "number" ? zoneColors[p.color] ?? colors.inkFaint : colors.inkFaint)),
+        color: points.map((p) =>
+          typeof p.color === "number"
+            ? (zoneColors[p.color] ?? colors.inkFaint)
+            : colors.inkFaint,
+        ),
         size: 5,
         line: { width: 0 },
       };
     } else if (colorCurve) {
       marker = {
-        color: points.map((p) => (typeof p.color === "number" ? p.color : null)),
+        color: points.map((p) =>
+          typeof p.color === "number" ? p.color : null,
+        ),
         colorscale: "Viridis",
         showscale: true,
-        colorbar: { title: colorCurve, titlefont: { size: 10 }, tickfont: { size: 9 } },
+        colorbar: {
+          title: colorCurve,
+          titlefont: { size: 10 },
+          tickfont: { size: 9 },
+        },
         size: 5,
         line: { width: 0 },
       };
@@ -160,16 +178,16 @@ export default function CrossplotBuilder({ wellId, curveNames }: CrossplotBuilde
   }, [data, colorCurve, xCurve, yCurve, logX, logY, reverseY]);
 
   return (
-    <div className="bg-surface border border-border rounded-lg p-4 shadow-sm space-y-4">
+    <div className="bg-surface border border-border rounded-xl p-4 shadow-card space-y-4">
       <div className="flex flex-wrap gap-2">
         {PRESETS.map((p) => (
           <button
             key={p.label}
             onClick={() => applyPreset(p)}
-            className={`text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
+            className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition-all ${
               activePreset === p.label
-                ? "bg-accent text-white border-accent"
-                : "bg-surface text-ink-muted border-border-strong hover:bg-surface-sunken"
+                ? "bg-brand-gradient text-white border-transparent shadow-card"
+                : "bg-surface text-ink-muted border-border-strong hover:border-accent hover:text-accent"
             }`}
           >
             {p.label}
@@ -178,12 +196,31 @@ export default function CrossplotBuilder({ wellId, curveNames }: CrossplotBuilde
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Select label="X axis" value={xCurve} onChange={(v) => { setXCurve(v); setActivePreset(null); }} options={curveNames} />
-        <Select label="Y axis" value={yCurve} onChange={(v) => { setYCurve(v); setActivePreset(null); }} options={curveNames} />
+        <Select
+          label="X axis"
+          value={xCurve}
+          onChange={(v) => {
+            setXCurve(v);
+            setActivePreset(null);
+          }}
+          options={curveNames}
+        />
+        <Select
+          label="Y axis"
+          value={yCurve}
+          onChange={(v) => {
+            setYCurve(v);
+            setActivePreset(null);
+          }}
+          options={curveNames}
+        />
         <Select
           label="Color by"
           value={colorCurve ?? ""}
-          onChange={(v) => { setColorCurve(v || null); setActivePreset(null); }}
+          onChange={(v) => {
+            setColorCurve(v || null);
+            setActivePreset(null);
+          }}
           options={["", ...curveNames]}
         />
         <Toggle label="Log X" checked={logX} onChange={setLogX} />
@@ -196,9 +233,13 @@ export default function CrossplotBuilder({ wellId, curveNames }: CrossplotBuilde
         </p>
       )}
 
-      {isLoading && <div className="h-[420px] rounded-md bg-surface-sunken animate-pulse" />}
+      {isLoading && (
+        <div className="h-[420px] rounded-md bg-surface-sunken animate-pulse" />
+      )}
       {isError && (
-        <div className="text-sm text-danger">Failed to load crossplot: {(error as Error).message}</div>
+        <div className="text-sm text-danger">
+          Failed to load crossplot: {(error as Error).message}
+        </div>
       )}
 
       {trace && layout && (
@@ -256,7 +297,15 @@ function Select({
   );
 }
 
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
   return (
     <label className="text-xs text-ink-muted flex flex-col gap-1 justify-end pb-1.5">
       <span className="flex items-center gap-2">

@@ -23,7 +23,12 @@ interface ToolCallRecord {
  * calls the agent made -- so the user can see exactly which real computed
  * values grounded the answer (per section 5 of the brief).
  */
-export default function ChatPanel({ scope, wellId, title, subtitle }: ChatPanelProps) {
+export default function ChatPanel({
+  scope,
+  wellId,
+  title,
+  subtitle,
+}: ChatPanelProps) {
   const { chatOpen, toggleChat, conversations, appendMessage } = useAppStore();
   const messages = conversations[scope] ?? [];
 
@@ -37,7 +42,10 @@ export default function ChatPanel({ scope, wellId, title, subtitle }: ChatPanelP
   const abortRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
   }, [messages, streamingText, pendingTools]);
 
   useEffect(() => () => abortRef.current?.(), []);
@@ -80,7 +88,7 @@ export default function ChatPanel({ scope, wellId, title, subtitle }: ChatPanelP
       (err) => {
         setError(err.message);
         setIsStreaming(false);
-      }
+      },
     );
   }
 
@@ -88,7 +96,7 @@ export default function ChatPanel({ scope, wellId, title, subtitle }: ChatPanelP
     return (
       <button
         onClick={toggleChat}
-        className="fixed bottom-6 right-6 z-40 rounded-full bg-accent text-white shadow-lg px-5 py-3 text-sm font-medium hover:bg-accent-strong transition-colors"
+        className="fixed bottom-6 right-6 z-40 rounded-full bg-brand-gradient text-white shadow-card-hover px-5 py-3 text-sm font-semibold hover:scale-105 transition-transform"
       >
         Ask the assistant
       </button>
@@ -97,26 +105,30 @@ export default function ChatPanel({ scope, wellId, title, subtitle }: ChatPanelP
 
   return (
     <aside className="fixed top-0 right-0 h-full w-[380px] bg-surface border-l border-border shadow-xl z-40 flex flex-col">
-      <div className="px-4 py-3 border-b border-border flex items-start justify-between">
+      <div className="px-4 py-3.5 border-b border-border flex items-start justify-between bg-brand-gradient">
         <div>
-          <h3 className="font-semibold text-sm">{title}</h3>
-          <p className="text-xs text-ink-faint">{subtitle}</p>
+          <h3 className="font-semibold text-sm text-white">{title}</h3>
+          <p className="text-xs text-white/80">{subtitle}</p>
         </div>
         <button
           onClick={toggleChat}
-          className="text-ink-faint hover:text-ink text-lg leading-none px-1"
+          className="text-white/80 hover:text-white text-lg leading-none px-1"
           aria-label="Close chat"
         >
           ×
         </button>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-surface-muted">
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto px-4 py-3 space-y-3 bg-surface-muted"
+      >
         {messages.length === 0 && !streamingText && (
           <p className="text-xs text-ink-faint leading-relaxed">
-            Ask about VSH, PHIE, SWE, zonation, or compare wells. Answers are grounded in the
-            computed curves for this dataset -- the assistant will flag when a cutoff or
-            assumption (Rw, Swirr, matrix density) may need SME review.
+            Ask about VSH, PHIE, SWE, zonation, or compare wells. Answers are
+            grounded in the computed curves for this dataset -- the assistant
+            will flag when a cutoff or assumption (Rw, Swirr, matrix density)
+            may need SME review.
           </p>
         )}
 
@@ -132,7 +144,9 @@ export default function ChatPanel({ scope, wellId, title, subtitle }: ChatPanelP
           </div>
         )}
 
-        {streamingText && <ChatBubble role="assistant" content={streamingText} />}
+        {streamingText && (
+          <ChatBubble role="assistant" content={streamingText} />
+        )}
         {isStreaming && !streamingText && (
           <div className="text-xs text-ink-faint italic px-1">Thinking…</div>
         )}
@@ -143,7 +157,10 @@ export default function ChatPanel({ scope, wellId, title, subtitle }: ChatPanelP
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="p-3 border-t border-border bg-surface">
+      <form
+        onSubmit={handleSubmit}
+        className="p-3 border-t border-border bg-surface"
+      >
         <div className="flex gap-2">
           <input
             value={input}
@@ -170,7 +187,7 @@ function ChatBubble({ role, content }: { role: string; content: string }) {
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap leading-relaxed ${
+        className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm whitespace-pre-wrap leading-relaxed shadow-card ${
           isUser
             ? "bg-accent text-white rounded-br-sm"
             : "bg-surface border border-border text-ink rounded-bl-sm"
@@ -185,18 +202,22 @@ function ChatBubble({ role, content }: { role: string; content: string }) {
 function ToolCallChip({ record }: { record: ToolCallRecord }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="text-xs border border-border rounded-md bg-surface">
+    <div className="text-xs border border-orange/30 rounded-md bg-orange-soft/60">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="w-full text-left px-2 py-1.5 flex items-center gap-1.5 text-ink-muted hover:bg-surface-sunken rounded-md"
+        className="w-full text-left px-2 py-1.5 flex items-center gap-1.5 text-orange-strong hover:bg-orange-soft rounded-md"
       >
-        <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent" />
+        <span className="inline-block w-1.5 h-1.5 rounded-full bg-orange" />
         Called <code className="font-mono">{record.name}</code>
         <span className="ml-auto text-ink-faint">{open ? "▲" : "▼"}</span>
       </button>
       {open && (
         <pre className="px-2 pb-2 text-[11px] text-ink-muted overflow-x-auto">
-          {JSON.stringify({ input: record.input, output: record.output }, null, 2)}
+          {JSON.stringify(
+            { input: record.input, output: record.output },
+            null,
+            2,
+          )}
         </pre>
       )}
     </div>

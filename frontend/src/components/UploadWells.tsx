@@ -22,8 +22,13 @@ export default function UploadWells() {
   }
 
   return (
-    <div className="bg-surface border border-border rounded-lg p-4 shadow-sm">
-      <h3 className="text-sm font-semibold text-ink mb-2">Upload Well Logs</h3>
+    <div className="bg-surface border border-border rounded-xl p-4 shadow-card">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-semibold text-ink">Upload Well Logs</h3>
+        <span className="inline-flex items-center gap-1 text-xs text-orange-strong bg-orange-soft px-2 py-0.5 rounded-full font-medium">
+          .las
+        </span>
+      </div>
       <div
         onDragOver={(e) => {
           e.preventDefault();
@@ -36,12 +41,30 @@ export default function UploadWells() {
           handleFiles(e.dataTransfer.files);
         }}
         onClick={() => inputRef.current?.click()}
-        className={`cursor-pointer border-2 border-dashed rounded-md px-4 py-8 text-center transition-colors ${
-          dragActive ? "border-accent bg-accent-soft" : "border-border-strong bg-surface-muted"
+        className={`cursor-pointer border-2 border-dashed rounded-lg px-4 py-8 text-center transition-all ${
+          dragActive
+            ? "border-orange bg-orange-soft scale-[1.01]"
+            : "border-border-strong bg-surface-muted hover:border-accent hover:bg-accent-soft/50"
         }`}
       >
-        <p className="text-sm text-ink-muted">
-          Drop raw <code className="font-mono">.las</code> files here, or click to browse
+        <div className="mx-auto mb-2 h-10 w-10 rounded-full bg-brand-gradient flex items-center justify-center">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="white"
+            strokeWidth={2}
+            className="h-5 w-5"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"
+            />
+          </svg>
+        </div>
+        <p className="text-sm text-ink-muted font-medium">
+          Drop raw <code className="font-mono text-accent-strong">.las</code>{" "}
+          files here, or click to browse
         </p>
         <p className="text-xs text-ink-faint mt-1">
           Requires curves: DEPT, GR, RESISTIVITY, RHOB, NPHI, DT
@@ -56,10 +79,15 @@ export default function UploadWells() {
         />
       </div>
 
-      {mutation.isPending && <p className="text-xs text-accent mt-2">Uploading and processing…</p>}
+      {mutation.isPending && (
+        <p className="text-xs text-accent mt-2 flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+          Uploading and processing…
+        </p>
+      )}
 
       {mutation.isSuccess && mutation.data.uploaded.length > 0 && (
-        <p className="text-xs text-pay mt-2">
+        <p className="text-xs text-pay mt-2 font-medium">
           Processed: {mutation.data.uploaded.map((w) => w.well_id).join(", ")}
         </p>
       )}
