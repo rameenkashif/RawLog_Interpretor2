@@ -19,6 +19,7 @@ export default defineConfig({
       "/dashboard": "http://127.0.0.1:8000",
       "/chat": "http://127.0.0.1:8000",
       "/health": "http://127.0.0.1:8000",
+      "/seismic": "http://127.0.0.1:8000",
     },
   },
 });
