@@ -12,6 +12,9 @@ backend/.env
 backend/data/processed/*.parquet
 backend/data/processed/*.meta.json
 backend/data/models/*.joblib
+backend/data/seismic_processed/*.npz
+backend/data/seismic_processed/*.parquet
+backend/data/seismic_processed/*.meta.json
 
 # Node / frontend
 frontend/node_modules/

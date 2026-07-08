@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from "react-router-dom";
 import DashboardPage from "./pages/DashboardPage";
 import WellDetailPage from "./pages/WellDetailPage";
+import SeismicPage from "./pages/SeismicPage";
 
 /**
  * App shell: light-themed top nav + routed pages. Every page below renders
@@ -37,6 +38,18 @@ export default function App() {
               >
                 Dashboard
               </NavLink>
+              <NavLink
+                to="/seismic"
+                className={({ isActive }) =>
+                  `px-3.5 py-1.5 rounded-full text-sm font-medium transition-all ${
+                    isActive
+                      ? "bg-accent text-white shadow-card"
+                      : "text-ink-muted hover:bg-surface-sunken"
+                  }`
+                }
+              >
+                Seismic
+              </NavLink>
             </nav>
           </div>
 
@@ -61,6 +74,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/wells/:wellId" element={<WellDetailPage />} />
+          <Route path="/seismic" element={<SeismicPage />} />
         </Routes>
       </main>
     </div>

@@ -17,7 +17,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()  # picks up backend/.env (ANTHROPIC_API_KEY, etc.)
 
-from app.routers import chat, dashboard, wells  # noqa: E402 (import after load_dotenv)
+from app.routers import (  # noqa: E402 (import after load_dotenv)
+    chat,
+    dashboard,
+    seismic,
+    wells,
+)
 
 app = FastAPI(
     title="RawReservoirClassifier",
@@ -45,6 +50,7 @@ app.add_middleware(
 
 app.include_router(wells.router)
 app.include_router(dashboard.router)
+app.include_router(seismic.router)
 app.include_router(chat.router)
 
 

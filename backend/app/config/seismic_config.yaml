@@ -1,0 +1,54 @@
+# =============================================================================
+# seismic_config.yaml
+# -----------------------------------------------------------------------------
+# Tunable constants for app/seismic_attributes.py, mirroring the structure of
+# petrophysics_config.yaml: a field-wide `defaults` block plus optional
+# per-dataset overrides.
+#
+# *** IMPORTANT CAVEAT ***
+# VSH/PHIE/SWE are properties that are properly derived from wireline logs
+# (see petrophysics.py). The "seismic proxy" versions here are rough,
+# UNCALIBRATED amplitude-based heuristics -- they let you eyeball lateral
+# trends away from well control, but they are NOT a substitute for log-
+# derived values and MUST be calibrated against a real well tie (seismic-
+# to-well correlation) before being used for any interpretation decision.
+# This is the same spirit as the VVOLC heuristic in petrophysics_config.yaml.
+# =============================================================================
+
+defaults:
+  attributes:
+    # Percentile window used to normalize RMS amplitude / envelope across a
+    # dataset before turning them into 0-1 proxies. Clips outliers outside
+    # this window rather than letting a single spurious spike blow out the
+    # normalization for the whole line.
+    normalize_low_percentile: 2
+    normalize_high_percentile: 98
+
+  vsh_proxy:
+    # Heuristic: higher local reflectivity/envelope amplitude is treated as
+    # a rough lithology-contrast indicator. This is NOT a measured shale
+    # volume -- it only flags where reflectivity is changing a lot, which
+    # can indicate bedding/lithology boundaries in some settings.
+    enabled: true
+
+  phie_proxy:
+    # Heuristic: acoustic impedance tends to anti-correlate with porosity
+    # in clean elastic sands (lower impedance -> higher porosity). Since
+    # true impedance requires inversion (not available from raw amplitude
+    # alone), RMS amplitude is used as a rough, INVERTED stand-in for
+    # relative impedance trends.
+    enabled: true
+
+  swe_proxy:
+    # "Bright spot" heuristic: anomalously high-amplitude events can (in
+    # some settings, e.g. Class 3 AVO sands) indicate hydrocarbon presence.
+    # Traces with envelope amplitude above this percentile are flagged as
+    # a "low water saturation" candidate. This is a first-pass screening
+    # heuristic only and produces many false positives (tuning effects,
+    # lithology contrasts, multiples, etc.) -- always confirm with well
+    # control and, ideally, real AVO/inversion analysis.
+    bright_spot_percentile: 90
+
+# Per-dataset overrides, keyed by dataset_id (derived from the SEG-Y
+# filename, e.g. "LINE_001"). Same override pattern as petrophysics_config.yaml.
+datasets: {}

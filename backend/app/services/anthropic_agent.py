@@ -5,9 +5,9 @@ Wires the Anthropic Messages API into a petrophysics assistant with
 tool/function-calling access to real backend data (section 5 of the brief).
 
 The model is never allowed to "make up" a numeric answer -- every tool
-below returns real computed values pulled from the processed wells via
-well_service, so the system prompt instructs Claude to always ground
-numeric claims in tool results.
+below returns real computed values pulled from the processed wells (via
+well_service) or seismic datasets (via seismic_service), so the system
+prompt instructs Claude to always ground numeric claims in tool results.
 
 Model selection: defaults to `claude-sonnet-5` (current recommended
 general-purpose model at time of writing -- confirmed via Anthropic's
@@ -23,14 +23,15 @@ from typing import Any, AsyncIterator
 
 from anthropic import AsyncAnthropic
 
-from app.services import well_service
+from app.services import seismic_service, well_service
 
 DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 
-SYSTEM_PROMPT = """You are a petrophysics assistant embedded in a well log interpretation \
-platform. You help geoscientists and engineers understand computed petrophysical curves \
-(VSH, PHIT, PHIE, SWE, PERM_TIXIER, CORE_PERM_PRED, VVOLC, ZONES) across a set of wells \
-(Z-02 through Z-08).
+SYSTEM_PROMPT = """You are a petrophysics assistant embedded in a well log and seismic \
+interpretation platform. You help geoscientists and engineers understand computed \
+petrophysical curves (VSH, PHIT, PHIE, SWE, PERM_TIXIER, CORE_PERM_PRED, VVOLC, ZONES) \
+across a set of wells (Z-02 through Z-08), as well as seismic attribute data derived from \
+uploaded SEG-Y datasets.
 
 Rules you must follow:
 1. ALWAYS ground numeric answers in tool results. Never estimate, guess, or recall a number \
@@ -44,12 +45,17 @@ Rules you must follow:
    (irreducible water saturation), matrix density, Archie a/m/n exponents, and the VSH/PHIE/SWE \
    zone cutoffs. These are configurable defaults, not measured constants, and can materially \
    change the interpretation.
-4. Several curves are explicitly heuristic/proxy calculations, not direct measurements: \
+4. Several well curves are explicitly heuristic/proxy calculations, not direct measurements: \
    VVOLC (density-neutron crossplot heuristic, uncalibrated against cuttings/core), \
    CORE_PERM_PRED (a regression trained on PERM_TIXIER as a proxy target, not real core plugs), \
    and DPTM (sonic-integration approximation pending real checkshot/VSP data). Mention this \
    caveat when discussing those curves.
-5. Be concise. Use units (m, API, ohm.m, g/cc, v/v, mD) when quoting values.
+5. The seismic VSH_SEISMIC_PROXY, PHIE_SEISMIC_PROXY, and SWE_SEISMIC_PROXY attributes are \
+   UNCALIBRATED, amplitude-based heuristics -- NOT measured shale volume, porosity, or water \
+   saturation. They require a real well tie before being used for interpretation. ALWAYS state \
+   this caveat explicitly whenever you report or discuss any seismic proxy value, and never \
+   conflate them with the log-derived VSH/PHIE/SWE curves from wells.
+6. Be concise. Use units (m, API, ohm.m, g/cc, v/v, mD, ms, Hz) when quoting values.
 """
 
 TOOLS = [
@@ -121,13 +127,38 @@ TOOLS = [
             "required": ["well_ids", "metric"],
         },
     },
+    {
+        "name": "list_seismic_datasets",
+        "description": (
+            "List all processed seismic (SEG-Y) datasets with summary stats, including the "
+            "uncalibrated VSH/PHIE/SWE seismic proxies. Use this to discover what seismic data "
+            "is available before calling get_seismic_summary."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_seismic_summary",
+        "description": (
+            "Get summary statistics for one seismic dataset: trace/sample counts, sample interval, "
+            "duration, average RMS amplitude, and the average uncalibrated VSH/PHIE/SWE seismic "
+            "proxies. Always caveat these proxies as uncalibrated amplitude heuristics, not "
+            "measured rock properties, when reporting them."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "dataset_id": {"type": "string", "description": "e.g. 'LINE_001'"}
+            },
+            "required": ["dataset_id"],
+        },
+    },
 ]
 
 
 # -----------------------------------------------------------------------------
-# Tool implementations -- these call into well_service, which is the same
-# service layer the REST routers use, so the agent and the UI never
-# disagree about the underlying numbers.
+# Tool implementations -- these call into well_service / seismic_service,
+# the same service layers the REST routers use, so the agent and the UI
+# never disagree about the underlying numbers.
 # -----------------------------------------------------------------------------
 def _tool_get_well_summary(well_id: str) -> dict[str, Any]:
     summary = well_service.get_well_summary(well_id)
@@ -184,11 +215,23 @@ def _tool_compare_wells(well_ids: list[str], metric: str) -> dict[str, Any]:
     return {"metric": metric, "values": results}
 
 
+def _tool_list_seismic_datasets() -> dict[str, Any]:
+    summaries = seismic_service.list_seismic_summaries()
+    return {"datasets": [s.model_dump() for s in summaries]}
+
+
+def _tool_get_seismic_summary(dataset_id: str) -> dict[str, Any]:
+    summary = seismic_service.get_seismic_summary(dataset_id)
+    return summary.model_dump()
+
+
 TOOL_DISPATCH = {
     "get_well_summary": _tool_get_well_summary,
     "get_curve_values": _tool_get_curve_values,
     "get_zone_breakdown": _tool_get_zone_breakdown,
     "compare_wells": _tool_compare_wells,
+    "list_seismic_datasets": _tool_list_seismic_datasets,
+    "get_seismic_summary": _tool_get_seismic_summary,
 }
 
 
@@ -199,6 +242,8 @@ def _run_tool(name: str, tool_input: dict[str, Any]) -> Any:
     try:
         return fn(**tool_input)
     except well_service.WellNotFoundError as exc:
+        return {"error": str(exc)}
+    except seismic_service.SeismicDatasetNotFoundError as exc:
         return {"error": str(exc)}
     except Exception as exc:  # noqa: BLE001 -- surface tool errors to the model, not a 500
         return {"error": f"Tool '{name}' failed: {exc}"}

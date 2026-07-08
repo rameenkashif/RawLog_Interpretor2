@@ -5,6 +5,7 @@ import WellsBarChart from "@/components/WellsBarChart";
 import NetPayChart from "@/components/NetPayChart";
 import WellTable from "@/components/WellTable";
 import UploadWells from "@/components/UploadWells";
+import SeismicDashboardModule from "@/components/SeismicDashboardModule";
 import ChatPanel from "@/components/ChatPanel";
 
 /** Multi-well dashboard (section 6): field-wide summary, comparison charts, wells table, upload, chat. */
@@ -76,9 +77,17 @@ export default function DashboardPage() {
               <h2 className="text-sm font-semibold text-ink mb-2">All Wells</h2>
               <WellTable wells={data.wells} />
             </div>
-            <div className="xl:col-span-1">
-              <h2 className="text-sm font-semibold text-ink mb-2">Add Data</h2>
-              <UploadWells />
+            <div className="xl:col-span-1 space-y-4">
+              <div>
+                <h2 className="text-sm font-semibold text-ink mb-2">
+                  Add Data
+                </h2>
+                <UploadWells />
+              </div>
+              <SeismicDashboardModule
+                nDatasets={data.n_seismic_datasets}
+                datasets={data.seismic_datasets}
+              />
             </div>
           </div>
         </div>

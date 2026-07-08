@@ -1,0 +1,3 @@
+Processed seismic datasets (.npz trace matrix + .attrs.parquet + .meta.json)
+are written here by the app. Contents are gitignored (regenerable from raw
+SEG-Y files) -- this file just keeps the empty folder tracked in git.

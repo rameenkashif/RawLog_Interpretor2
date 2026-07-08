@@ -72,6 +72,51 @@ export interface DashboardSummary {
   avg_phie: number | null;
   avg_swe: number | null;
   wells: WellSummary[];
+  n_seismic_datasets: number;
+  seismic_datasets: SeismicSummary[];
+}
+
+// -----------------------------------------------------------------------------
+// Seismic (SEG-Y)
+// -----------------------------------------------------------------------------
+export interface SeismicSummary {
+  dataset_id: string;
+  source_filename: string;
+  n_traces: number;
+  n_samples: number;
+  sample_interval_ms: number;
+  duration_ms: number;
+  avg_rms_amplitude: number | null;
+  /** Uncalibrated amplitude-based lithology-contrast proxy -- NOT a measured shale volume. */
+  avg_vsh_proxy: number | null;
+  /** Uncalibrated amplitude-based porosity-trend proxy -- NOT a measured porosity. */
+  avg_phie_proxy: number | null;
+  /** Uncalibrated bright-spot hydrocarbon-indicator proxy -- NOT a measured water saturation. */
+  avg_swe_proxy: number | null;
+}
+
+export interface SeismicUploadResponse {
+  uploaded: SeismicSummary[];
+  errors: string[];
+}
+
+export interface SeismicSectionResponse {
+  dataset_id: string;
+  trace_indices: number[];
+  twt_axis_ms: number[];
+  /** Shape (trace_indices.length, twt_axis_ms.length) */
+  amplitude: number[][];
+}
+
+export interface SeismicAttributesResponse {
+  dataset_id: string;
+  trace_index: number[];
+  rms_amplitude: number[];
+  avg_envelope: number[];
+  dominant_freq_hz: number[];
+  vsh_seismic_proxy: number[];
+  phie_seismic_proxy: number[];
+  swe_seismic_proxy: number[];
 }
 
 export interface ChatMessage {
@@ -81,7 +126,12 @@ export interface ChatMessage {
 
 export type ChatStreamEvent =
   | { type: "text_delta"; text: string }
-  | { type: "tool_call"; name: string; input: Record<string, unknown>; output: unknown }
+  | {
+      type: "tool_call";
+      name: string;
+      input: Record<string, unknown>;
+      output: unknown;
+    }
   | { type: "done" }
   | { type: "error"; message: string };
 

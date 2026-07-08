@@ -10,6 +10,10 @@ import type {
   ChatStreamEvent,
   CrossplotResponse,
   DashboardSummary,
+  SeismicAttributesResponse,
+  SeismicSectionResponse,
+  SeismicSummary,
+  SeismicUploadResponse,
   WellCurvesResponse,
   WellSummary,
   WellUploadResponse,
@@ -36,8 +40,12 @@ export async function listWells(): Promise<WellSummary[]> {
   return data;
 }
 
-export async function getWellCurves(wellId: string): Promise<WellCurvesResponse> {
-  const { data } = await http.get<WellCurvesResponse>(`/wells/${wellId}/curves`);
+export async function getWellCurves(
+  wellId: string,
+): Promise<WellCurvesResponse> {
+  const { data } = await http.get<WellCurvesResponse>(
+    `/wells/${wellId}/curves`,
+  );
   return data;
 }
 
@@ -50,11 +58,14 @@ export async function getCrossplot(
   wellId: string,
   x: string,
   y: string,
-  color?: string | null
+  color?: string | null,
 ): Promise<CrossplotResponse> {
-  const { data } = await http.get<CrossplotResponse>(`/wells/${wellId}/crossplot`, {
-    params: { x, y, color: color || undefined },
-  });
+  const { data } = await http.get<CrossplotResponse>(
+    `/wells/${wellId}/crossplot`,
+    {
+      params: { x, y, color: color || undefined },
+    },
+  );
   return data;
 }
 
@@ -67,6 +78,51 @@ export function getExportUrl(wellId: string, format: "csv" | "las"): string {
   return `${BASE_URL}/wells/${wellId}/export?format=${format}`;
 }
 
+// -----------------------------------------------------------------------------
+// Seismic (SEG-Y)
+// -----------------------------------------------------------------------------
+export async function uploadSeismic(
+  files: File[],
+): Promise<SeismicUploadResponse> {
+  const form = new FormData();
+  files.forEach((f) => form.append("files", f));
+  const { data } = await http.post<SeismicUploadResponse>(
+    "/seismic/upload",
+    form,
+    {
+      headers: { "Content-Type": "multipart/form-data" },
+    },
+  );
+  return data;
+}
+
+export async function listSeismic(): Promise<SeismicSummary[]> {
+  const { data } = await http.get<SeismicSummary[]>("/seismic");
+  return data;
+}
+
+export async function getSeismicSection(
+  datasetId: string,
+): Promise<SeismicSectionResponse> {
+  const { data } = await http.get<SeismicSectionResponse>(
+    `/seismic/${datasetId}/section`,
+  );
+  return data;
+}
+
+export async function getSeismicAttributes(
+  datasetId: string,
+): Promise<SeismicAttributesResponse> {
+  const { data } = await http.get<SeismicAttributesResponse>(
+    `/seismic/${datasetId}/attributes`,
+  );
+  return data;
+}
+
+export function getSeismicExportUrl(datasetId: string): string {
+  return `${BASE_URL}/seismic/${datasetId}/export`;
+}
+
 /**
  * Streams the /chat SSE endpoint, invoking `onEvent` for each parsed event
  * as it arrives. Returns a function that aborts the stream early if called.
@@ -76,7 +132,7 @@ export function streamChat(
   wellId: string | null,
   conversationHistory: { role: string; content: string }[],
   onEvent: (event: ChatStreamEvent) => void,
-  onError: (err: Error) => void
+  onError: (err: Error) => void,
 ): () => void {
   const controller = new AbortController();
 
@@ -94,7 +150,9 @@ export function streamChat(
       });
 
       if (!response.ok || !response.body) {
-        throw new Error(`Chat request failed: ${response.status} ${response.statusText}`);
+        throw new Error(
+          `Chat request failed: ${response.status} ${response.statusText}`,
+        );
       }
 
       const reader = response.body.getReader();

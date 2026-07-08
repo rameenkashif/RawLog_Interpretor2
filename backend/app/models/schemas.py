@@ -88,6 +88,61 @@ class CrossplotResponse(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Seismic (SEG-Y)
+# -----------------------------------------------------------------------------
+class SeismicSummary(BaseModel):
+    dataset_id: str
+    source_filename: str
+    n_traces: int
+    n_samples: int
+    sample_interval_ms: float
+    duration_ms: float
+    avg_rms_amplitude: float | None = None
+    avg_vsh_proxy: float | None = Field(
+        None,
+        description="Amplitude-based lithology-contrast proxy -- NOT a measured shale volume. See caveat in seismic_attributes.py.",
+    )
+    avg_phie_proxy: float | None = Field(
+        None,
+        description="Amplitude-based porosity-trend proxy -- NOT a measured porosity. See caveat in seismic_attributes.py.",
+    )
+    avg_swe_proxy: float | None = Field(
+        None,
+        description="Bright-spot-based hydrocarbon-indicator proxy -- NOT a measured water saturation. See caveat in seismic_attributes.py.",
+    )
+
+
+class SeismicUploadResponse(BaseModel):
+    uploaded: list[SeismicSummary]
+    errors: list[str] = Field(default_factory=list)
+
+
+class SeismicSectionResponse(BaseModel):
+    """Raw amplitude section for display, subsampled to keep the payload small."""
+
+    dataset_id: str
+    trace_indices: list[int]
+    twt_axis_ms: list[float]
+    amplitude: list[list[float]] = Field(
+        ...,
+        description="Shape (len(trace_indices), len(twt_axis_ms)), row-major by trace",
+    )
+
+
+class SeismicAttributesResponse(BaseModel):
+    """Per-trace computed seismic attributes, including the heuristic VSH/PHIE/SWE proxies."""
+
+    dataset_id: str
+    trace_index: list[int]
+    rms_amplitude: list[float]
+    avg_envelope: list[float]
+    dominant_freq_hz: list[float]
+    vsh_seismic_proxy: list[float]
+    phie_seismic_proxy: list[float]
+    swe_seismic_proxy: list[float]
+
+
+# -----------------------------------------------------------------------------
 # Dashboard
 # -----------------------------------------------------------------------------
 class DashboardSummary(BaseModel):
@@ -97,6 +152,8 @@ class DashboardSummary(BaseModel):
     avg_phie: float | None
     avg_swe: float | None
     wells: list[WellSummary]
+    n_seismic_datasets: int = 0
+    seismic_datasets: list[SeismicSummary] = Field(default_factory=list)
 
 
 # -----------------------------------------------------------------------------

@@ -296,3 +296,17 @@ tune them without touching code. Key notes for future sessions:
   (network restrictions), so dependencies have NOT been installed or test-run locally.
   Install and run them in CI/CD or on a machine with network access before relying on this
   code -- see README.md "Getting Started" for exact commands.
+- The app was renamed from "PetroInterp" to **"RawReservoirClassifier"** partway through
+  (see `frontend/src/App.tsx`, `frontend/index.html`, `backend/main.py`).
+- **Seismic module added** (post-initial-build, user request): raw SEG-Y upload/parsing via
+  `segyio` (`backend/app/segy_loader.py`), a seismic attribute engine
+  (`backend/app/seismic_attributes.py`) computing RMS amplitude, envelope, and dominant
+  frequency, plus explicitly-flagged **uncalibrated heuristic** VSH/PHIE/SWE seismic proxies
+  (amplitude-based, NOT measured rock properties -- see README.md "Seismic module caveats").
+  Mirrors the well pipeline's architecture exactly: its own repository
+  (`seismic_repository.py`), service layer (`seismic_service.py`), router (`routers/seismic.py`),
+  config file (`config/seismic_config.yaml`), unit tests (`tests/test_seismic_attributes.py`),
+  and bulk-load script (`scripts/bulk_load_seismic.py`). Frontend: a dedicated `/seismic` page
+  (raw amplitude heatmap + attribute trend charts) plus a compact summary module on the
+  dashboard, both linked via a new "Seismic" nav item and 2 new Anthropic agent tools
+  (`list_seismic_datasets`, `get_seismic_summary`).
