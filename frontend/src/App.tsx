@@ -2,6 +2,7 @@ import { NavLink, Route, Routes } from "react-router-dom";
 import DashboardPage from "./pages/DashboardPage";
 import WellDetailPage from "./pages/WellDetailPage";
 import SeismicPage from "./pages/SeismicPage";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 /**
  * App shell: light-themed top nav + routed pages. Every page below renders
@@ -71,11 +72,13 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-[1600px] px-6 py-6">
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/wells/:wellId" element={<WellDetailPage />} />
-          <Route path="/seismic" element={<SeismicPage />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/wells/:wellId" element={<WellDetailPage />} />
+            <Route path="/seismic" element={<SeismicPage />} />
+          </Routes>
+        </ErrorBoundary>
       </main>
     </div>
   );

@@ -9,6 +9,7 @@ FastAPI application entry point. Run with:
 
 from __future__ import annotations
 
+import logging
 import os
 
 from dotenv import load_dotenv
@@ -17,12 +18,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()  # picks up backend/.env (ANTHROPIC_API_KEY, etc.)
 
-from app.routers import (  # noqa: E402 (import after load_dotenv)
-    chat,
-    dashboard,
-    seismic,
-    wells,
-)
+logger = logging.getLogger("uvicorn.error")
+
+from app.routers import chat, dashboard, wells  # noqa: E402 (import after load_dotenv)
 
 app = FastAPI(
     title="RawReservoirClassifier",
@@ -50,8 +48,27 @@ app.add_middleware(
 
 app.include_router(wells.router)
 app.include_router(dashboard.router)
-app.include_router(seismic.router)
 app.include_router(chat.router)
+
+# The seismic module depends on extra packages (segyio, scipy) that ship in
+# requirements.txt but may not yet be installed in every environment (e.g.
+# right after pulling this feature without re-running `pip install -r
+# requirements.txt`). Importing it defensively here means a missing/broken
+# seismic dependency only disables the seismic endpoints -- it can never
+# take down wells/dashboard/chat, which used to all fail together if this
+# import raised at module load time.
+try:
+    from app.routers import seismic
+
+    app.include_router(seismic.router)
+except Exception as exc:  # noqa: BLE001
+    logger.warning(
+        "Seismic module failed to load and its endpoints will be unavailable "
+        "(GET/POST /seismic/*). This is usually caused by a missing dependency -- "
+        "run `pip install -r requirements.txt` (needs segyio + scipy) and restart. "
+        "Underlying error: %s",
+        exc,
+    )
 
 
 @app.get("/health")
