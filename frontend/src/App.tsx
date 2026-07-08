@@ -41,16 +41,16 @@ export default function App() {
           </div>
 
           {/* Partner/vendor logos, top-right, horizontal: GeoGraphix first, then LMKR. */}
-          <div className="flex items-center gap-4 shrink-0 pl-4 border-l border-border">
+          <div className="flex items-center gap-2 shrink-0 pl-4 border-l border-border">
             <img
               src="/logos/geographix-logo.png"
               alt="GeoGraphix"
-              className="h-9 w-auto object-contain"
+              className="h-20 w-auto object-contain"
             />
             <img
               src="/logos/lmkr-logo.png"
               alt="LMKR"
-              className="h-9 w-auto object-contain"
+              className="h-24 w-auto object-contain"
             />
           </div>
         </div>
