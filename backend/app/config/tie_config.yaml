@@ -1,0 +1,12 @@
+wavelet_freq_hz: 30.0
+dt_unit: "us_per_ft"
+max_tie_search_radius_m: 1000
+
+well_coordinate_overrides:
+  Z-02_RAW: { trace_index: 5000 }
+  Z-03_RAW: { trace_index: 15000 }
+  Z-04_RAW: { trace_index: 25000 }
+  Z-05_RAW: { trace_index: 35000 }
+  Z-06_RAW: { trace_index: 45000 }
+  Z-07_RAW: { trace_index: 30000 }
+  Z-08_RAW: { trace_index: 55000 }

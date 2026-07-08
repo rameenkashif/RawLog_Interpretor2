@@ -24,3 +24,5 @@ frontend/.vite/
 # Editor/OS
 .DS_Store
 Thumbs.db
+backend/data/seismic_raw/*.segy
+backend/data/seismic_raw/*.sgy

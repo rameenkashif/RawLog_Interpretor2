@@ -5,6 +5,7 @@ import { getSeismicAttributes, getSeismicExportUrl, getSeismicSection, listSeism
 import SeismicUpload from "@/components/SeismicUpload";
 import SeismicSection from "@/components/SeismicSection";
 import SeismicAttributesChart from "@/components/SeismicAttributesChart";
+import WellSeismicTie from "@/components/WellSeismicTie";
 
 function fmtPct(v: number | null): string {
   return v === null ? "—" : `${(v * 100).toFixed(1)}%`;
@@ -110,8 +111,9 @@ export default function SeismicPage() {
 
       {selectedId && (
         <div className="flex justify-end">
-          <a
-            href={getSeismicExportUrl(selectedId)}
+          
+            <a
+              href={getSeismicExportUrl(selectedId)}
             className="text-xs font-semibold px-3.5 py-1.5 rounded-full border border-accent/30 bg-accent-soft text-accent-strong hover:bg-accent hover:text-white transition-colors"
           >
             Export Attributes CSV
@@ -140,6 +142,11 @@ export default function SeismicPage() {
           <SeismicAttributesChart attributes={attributesQuery.data} />
         </section>
       )}
+
+      <section>
+        <h2 className="text-sm font-semibold text-ink mb-2">Well-to-Seismic Tie</h2>
+        <WellSeismicTie />
+      </section>
     </div>
   );
 }

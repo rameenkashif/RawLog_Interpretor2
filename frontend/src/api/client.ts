@@ -15,6 +15,7 @@ import type {
   SeismicSummary,
   SeismicUploadResponse,
   WellCurvesResponse,
+  WellSeismicTieResponse,
   WellSummary,
   WellUploadResponse,
   WellZonesResponse,
@@ -121,6 +122,19 @@ export async function getSeismicAttributes(
 
 export function getSeismicExportUrl(datasetId: string): string {
   return `${BASE_URL}/seismic/${datasetId}/export`;
+}
+
+// -----------------------------------------------------------------------------
+// Well-to-Seismic Tie
+// -----------------------------------------------------------------------------
+export async function getWellSeismicTie(
+  wellId: string,
+  seismicDatasetId: string,
+): Promise<WellSeismicTieResponse> {
+  const { data } = await http.get<WellSeismicTieResponse>(`/tie/${wellId}`, {
+    params: { seismic_dataset_id: seismicDatasetId },
+  });
+  return data;
 }
 
 /**

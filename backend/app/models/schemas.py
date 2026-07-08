@@ -176,7 +176,19 @@ class ChatResponse(BaseModel):
         default_factory=list,
         description="Record of tool calls the agent made, for transparency",
     )
-
+    
+class WellSeismicTieResponse(BaseModel):
+    well_id: str
+    dataset_id: str
+    trace_index: int
+    distance_m: float | None = None
+    twt_ms: list[float]
+    synthetic: list[float]
+    shifted_synthetic: list[float]
+    real_trace: list[float]
+    best_shift_ms: float
+    correlation: float
+    geometry_warning: str | None = None
 
 # -----------------------------------------------------------------------------
 # Errors

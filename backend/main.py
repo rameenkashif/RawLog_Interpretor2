@@ -15,7 +15,7 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from app.routers import tie
 load_dotenv()  # picks up backend/.env (ANTHROPIC_API_KEY, etc.)
 
 logger = logging.getLogger("uvicorn.error")
@@ -49,6 +49,7 @@ app.add_middleware(
 app.include_router(wells.router)
 app.include_router(dashboard.router)
 app.include_router(chat.router)
+app.include_router(tie.router)
 
 # The seismic module depends on extra packages (segyio, scipy) that ship in
 # requirements.txt but may not yet be installed in every environment (e.g.

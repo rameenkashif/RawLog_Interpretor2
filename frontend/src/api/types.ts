@@ -135,6 +135,20 @@ export type ChatStreamEvent =
   | { type: "done" }
   | { type: "error"; message: string };
 
+export interface WellSeismicTieResponse {
+  well_id: string;
+  dataset_id: string;
+  trace_index: number;
+  distance_m: number | null;
+  twt_ms: number[];
+  synthetic: number[];
+  shifted_synthetic: number[];
+  real_trace: number[];
+  best_shift_ms: number;
+  correlation: number;
+  geometry_warning: string | null;
+}
+
 export const CURVE_NAMES = [
   "DEPT",
   "GR",

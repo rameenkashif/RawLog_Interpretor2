@@ -20,6 +20,7 @@ export default defineConfig({
       "/chat": "http://127.0.0.1:8000",
       "/health": "http://127.0.0.1:8000",
       "/seismic": "http://127.0.0.1:8000",
+      "/tie": "http://127.0.0.1:8000",
     },
   },
 });
