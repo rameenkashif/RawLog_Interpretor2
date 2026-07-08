@@ -17,10 +17,10 @@ export default function App() {
           <div className="flex items-center gap-8">
             <div className="flex items-center gap-2.5">
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-brand-gradient text-white font-bold text-sm shadow-card">
-                PI
+                RC
               </span>
               <span className="font-bold text-lg tracking-tight text-ink">
-                Petro<span className="text-accent">Interp</span>
+                RawReservoir<span className="text-accent">Classifier</span>
               </span>
             </div>
             <nav className="flex gap-1">
@@ -45,12 +45,12 @@ export default function App() {
             <img
               src="/logos/geographix-logo.png"
               alt="GeoGraphix"
-              className="h-7 w-auto object-contain"
+              className="h-9 w-auto object-contain"
             />
             <img
               src="/logos/lmkr-logo.png"
               alt="LMKR"
-              className="h-7 w-auto object-contain"
+              className="h-9 w-auto object-contain"
             />
           </div>
         </div>

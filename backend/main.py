@@ -20,7 +20,8 @@ load_dotenv()  # picks up backend/.env (ANTHROPIC_API_KEY, etc.)
 from app.routers import chat, dashboard, wells  # noqa: E402 (import after load_dotenv)
 
 app = FastAPI(
-    title="Multi-Well Petrophysical Interpretation Platform",
+    title="RawReservoirClassifier",
+    summary="Multi-Well Petrophysical Interpretation Platform",
     description=(
         "Reads raw LAS well logs, computes standard petrophysical interpretation "
         "curves, and exposes an Anthropic Claude-powered petrophysics assistant."
