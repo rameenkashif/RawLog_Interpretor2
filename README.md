@@ -1,10 +1,12 @@
-# Multi-Well Petrophysical Interpretation Platform
+# Multi-Well Petrophysical Interpretation Platform (RawReservoirClassifier)
 
 A full-stack application that reads raw LAS well logs (DEPT, GR, RESISTIVITY, RHOB, NPHI, DT),
 computes standard petrophysical interpretation curves (VSH, PHIT, PHIE, SWE, PERM_TIXIER,
-CORE_PERM_PRED, VVOLC, ZONES, ...), exposes an Anthropic Claude-powered petrophysics
-assistant, and presents everything through a light-themed dashboard with cross-well and
-single-well views, log tracks, and crossplots.
+CORE_PERM_PRED, VVOLC, ZONES, ...), parses raw SEG-Y seismic data and derives seismic
+attributes (including heuristic VSH/PHIE/SWE seismic proxies), exposes an Anthropic
+Claude-powered petrophysics assistant, and presents everything through a light-themed
+dashboard with cross-well views, single-well log tracks/crossplots, and a dedicated seismic
+module.
 
 > **Status:** Code-complete per `AGENT_BRIEF.md`. Dependencies have **not** been installed or
 > run locally in this environment (no network access for `pip`/`npm`). Install and validate
@@ -18,29 +20,39 @@ single-well views, log tracks, and crossplots.
 ```
 backend/
   app/
-    config/petrophysics_config.yaml   <- every tunable constant lives here
-    config_loader.py                  <- merges field defaults + per-well overrides
+    config/petrophysics_config.yaml   <- every tunable petrophysics constant lives here
+    config/seismic_config.yaml        <- every tunable seismic-attribute constant lives here
+    config_loader.py                  <- merges field/dataset defaults + per-well/per-dataset overrides
     las_loader.py                     <- raw LAS -> validated DataFrame + metadata
-    petrophysics.py                   <- every calculation in section 3, one function each
-    repository.py                     <- storage layer (Parquet/JSON today, swappable for Postgres)
+    segy_loader.py                    <- raw SEG-Y -> validated amplitude matrix + metadata
+    petrophysics.py                   <- every log-derived calculation in section 3, one function each
+    seismic_attributes.py             <- seismic attribute + heuristic VSH/PHIE/SWE proxy calculations
+    repository.py                     <- well storage layer (Parquet/JSON today, swappable for Postgres)
+    seismic_repository.py             <- seismic storage layer (.npz + Parquet/JSON, same pattern)
     models/schemas.py                 <- Pydantic request/response models
     routers/
       wells.py                        <- upload/list/curves/zones/crossplot/export
-      dashboard.py                    <- field-wide summary
+      seismic.py                      <- SEG-Y upload/list/section/attributes/export
+      dashboard.py                    <- field-wide summary (wells + seismic)
       chat.py                         <- SSE-streaming Anthropic agent endpoint
     services/
-      well_service.py                 <- application service layer (routers call this)
+      well_service.py                 <- application service layer for wells (routers call this)
+      seismic_service.py              <- application service layer for seismic (routers call this)
       anthropic_agent.py              <- Claude Messages API + tool-calling agent loop
   scripts/
     bulk_load_wells.py                <- CLI to process backend/data/raw/*.las
+    bulk_load_seismic.py              <- CLI to process backend/data/seismic_raw/*.sgy
     train_core_perm_model.py          <- trains the CORE_PERM_PRED proxy model
   data/
     raw/                              <- put Z-02.las ... Z-08.las here
     processed/                        <- Parquet + JSON cache (gitignored, regenerable)
+    seismic_raw/                      <- put raw .sgy/.segy files here
+    seismic_processed/                <- .npz + Parquet + JSON cache (gitignored, regenerable)
     models/                           <- trained sklearn models (gitignored, regenerable)
   tests/
     conftest.py                       <- synthetic 3-zone well fixture
-    test_petrophysics.py              <- unit tests for every formula in section 3
+    test_petrophysics.py              <- unit tests for every well formula in section 3
+    test_seismic_attributes.py        <- unit tests for every seismic attribute/proxy calculation
   main.py
   requirements.txt
   .env.example
@@ -89,6 +101,12 @@ Load real well data (place `Z-02.las` ... `Z-08.las` in `backend/data/raw/` firs
 
 ```bash
 python scripts/bulk_load_wells.py
+```
+
+Load real seismic data (place `.sgy`/`.segy` files in `backend/data/seismic_raw/` first):
+
+```bash
+python scripts/bulk_load_seismic.py
 ```
 
 Train the `CORE_PERM_PRED` proxy model (optional -- only needed once wells are loaded; see
@@ -195,6 +213,38 @@ chat assistant's system prompt whenever it's discussed:
   values in `petrophysics_config.yaml` before using SWE/PERM_TIXIER for anything beyond
   exploratory QC.
 
+### Seismic module caveats (read before trusting seismic proxy results)
+
+The seismic module (`backend/app/seismic_attributes.py`, config in
+`backend/app/config/seismic_config.yaml`) computes standard signal-processing attributes
+(RMS amplitude, instantaneous envelope via Hilbert transform, dominant frequency) directly
+from raw SEG-Y trace amplitudes -- these are well-defined and not heuristic.
+
+However, the **VSH_SEISMIC_PROXY, PHIE_SEISMIC_PROXY, and SWE_SEISMIC_PROXY** attributes are
+an entirely different category: they are simple, **uncalibrated, amplitude-based heuristics**,
+not measured rock properties. Properly deriving shale volume, porosity, or water saturation
+from seismic data requires inversion to acoustic/elastic impedance calibrated against a real
+well tie, plus formation-specific rock-physics relationships -- none of which raw post-stack
+amplitude alone can provide. Specifically:
+
+- **VSH_SEISMIC_PROXY** = normalized average envelope amplitude. Rationale: stronger
+  reflectivity often marks lithology/bedding contrasts, but this does not distinguish shale
+  from any other lithology contrast.
+- **PHIE_SEISMIC_PROXY** = `1 - normalized RMS amplitude`. Rationale: in clean elastic sands,
+  impedance tends to anti-correlate with porosity, and RMS amplitude is used here only as a
+  rough, uninverted stand-in for relative impedance trends.
+- **SWE_SEISMIC_PROXY** = a "bright spot" heuristic -- traces with envelope amplitude above
+  the 90th percentile (configurable) are treated as candidate hydrocarbon indicators. This
+  produces many false positives (tuning effects, lithology contrasts, multiples all also
+  produce bright amplitudes) and is a first-pass screening aid only.
+
+These proxies exist so lateral trends can be eyeballed on the dashboard away from well
+control. They are flagged everywhere they appear (API responses, frontend UI, and the chat
+assistant's system prompt) and must be calibrated against a real seismic-to-well tie before
+being used for any interpretation decision. All thresholds/percentiles live in
+`backend/app/config/seismic_config.yaml`, with the same field-wide-defaults +
+per-dataset-override pattern as `petrophysics_config.yaml`.
+
 ---
 
 ## 6. Backend API reference
@@ -209,6 +259,11 @@ chat assistant's system prompt whenever it's discussed:
 | GET | `/dashboard/summary` | Field-wide aggregated stats + per-well summaries |
 | POST | `/chat` | Anthropic agent, streams Server-Sent Events |
 | GET | `/wells/{well_id}/export?format=csv\|las` | Download interpreted curves |
+| POST | `/seismic/upload` | Upload one or more raw `.sgy`/`.segy` files (multipart form, field name `files`) |
+| GET | `/seismic` | List all processed seismic datasets with summary stats |
+| GET | `/seismic/{dataset_id}/section` | Subsampled raw amplitude section (trace x two-way-time) for display |
+| GET | `/seismic/{dataset_id}/attributes` | Per-trace RMS amplitude, envelope, dominant frequency, and VSH/PHIE/SWE seismic proxies |
+| GET | `/seismic/{dataset_id}/export` | Download per-trace computed seismic attributes as CSV |
 | GET | `/health` | Liveness check |
 
 Interactive OpenAPI docs are available at `http://localhost:8000/docs` once the backend is
@@ -245,10 +300,13 @@ data: {"type": "done"}
   any code changes.
 - Tools exposed to Claude (all backed by real computed data, never hallucinated):
   `get_well_summary(well_id)`, `get_curve_values(well_id, curve_name, depth_min?, depth_max?)`,
-  `get_zone_breakdown(well_id)`, `compare_wells(well_ids, metric)`.
-- System prompt instructs Claude to ground every numeric claim in a tool result and to flag
+  `get_zone_breakdown(well_id)`, `compare_wells(well_ids, metric)`,
+  `list_seismic_datasets()`, `get_seismic_summary(dataset_id)`.
+- System prompt instructs Claude to ground every numeric claim in a tool result, to flag
   when an answer depends on a tunable assumption (Rw, Swirr, matrix density, Archie
-  exponents, zone cutoffs) that should be reviewed by an SME.
+  exponents, zone cutoffs) that should be reviewed by an SME, and to always caveat the
+  seismic VSH/PHIE/SWE proxies as uncalibrated amplitude heuristics rather than measured
+  rock properties whenever they come up.
 - Requires `ANTHROPIC_API_KEY` in `backend/.env` (see `backend/.env.example`).
 
 ---
@@ -267,6 +325,11 @@ data: {"type": "done"}
   PERM_TIXIER, VSH vs Depth, PHIE vs Depth -- plus free-form curve/color pickers), CSV/LAS
   export buttons, and a well-scoped chat panel. PNG export of any chart uses Plotly's
   built-in camera icon in each chart's mode bar.
+- **Seismic module** (`/seismic`, plus a compact summary card on the dashboard): SEG-Y
+  upload, dataset picker, raw amplitude section (Plotly heatmap, trace index vs two-way
+  time), and computed attribute trends (RMS amplitude, envelope, dominant frequency, and
+  the heuristic VSH/PHIE/SWE seismic proxies -- always shown with an on-screen "uncalibrated
+  heuristic" caveat), plus a CSV export of the per-trace attributes.
 
 ---
 
@@ -282,3 +345,10 @@ data: {"type": "done"}
 - `CORE_PERM_PRED` is a proxy model (see section 5) until real core plug data is supplied.
 - TVD/deviation survey and DPTM/checkshot integration are documented placeholders pending
   real survey/VSP data (see section 5).
+- The seismic VSH/PHIE/SWE proxies are uncalibrated amplitude heuristics (see "Seismic module
+  caveats" in section 5) -- calibrate against a real well tie before using them for anything
+  beyond lateral trend screening.
+- The seismic section viewer subsamples large SEG-Y volumes to at most 400 traces x 800
+  samples per response (`MAX_SECTION_TRACES` / `MAX_SECTION_SAMPLES` in
+  `seismic_service.py`) to keep browser payloads reasonable -- full-resolution display of
+  very large 3D surveys would need a tiled/windowed viewer instead.

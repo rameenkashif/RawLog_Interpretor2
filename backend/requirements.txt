@@ -1,6 +1,8 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.6
 lasio>=0.31
+segyio>=1.9.12
+scipy>=1.14.0
 numpy>=2.1.0
 pandas>=2.2.3
 scikit-learn>=1.5.2

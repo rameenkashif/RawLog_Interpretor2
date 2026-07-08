@@ -18,7 +18,7 @@ import pandas as pd
 
 from app import petrophysics as pp
 from app.config_loader import get_well_config
-from app.las_loader import LasValidationError, LoadedWell, WellMetadata, load_las_file
+from app.las_loader import LoadedWell, WellMetadata, load_las_file
 from app.models.schemas import (
     CrossplotPoint,
     CrossplotResponse,
@@ -246,6 +246,17 @@ def get_dashboard_summary(repo: WellRepository | None = None) -> DashboardSummar
         clean = [v for v in values if v is not None]
         return float(np.mean(clean)) if clean else None
 
+    # Seismic datasets are optional -- imported lazily here (rather than at
+    # module load time) to keep well_service usable even if the seismic
+    # module/dependencies (segyio, scipy) aren't installed in a given
+    # deployment.
+    try:
+        from app.services import seismic_service
+
+        seismic_summaries = seismic_service.list_seismic_summaries()
+    except Exception:
+        seismic_summaries = []
+
     return DashboardSummary(
         n_wells=len(summaries),
         total_footage=sum(s.footage_logged for s in summaries),
@@ -253,6 +264,8 @@ def get_dashboard_summary(repo: WellRepository | None = None) -> DashboardSummar
         avg_phie=safe_avg([s.avg_phie for s in summaries]),
         avg_swe=safe_avg([s.avg_swe for s in summaries]),
         wells=summaries,
+        n_seismic_datasets=len(seismic_summaries),
+        seismic_datasets=seismic_summaries,
     )
 
 
