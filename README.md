@@ -276,9 +276,10 @@ vs. shifted synthetic) in the Seismic page's "Well-to-seismic tie" panel.
   config file caps how far the coordinate-based search is allowed to look before raising an
   error instead of silently tying to a distant trace.
 
-Z-02 through Z-08's raw LAS files ship with `XWELL`/`YWELL` coordinates (a synthetic field
-grid), so once a SEG-Y dataset with real trace coordinates is uploaded, the tie automatically
-uses the coordinate-based path with no config changes needed.
+Z-02 through Z-08's raw LAS files ship with `XWELL`/`YWELL` coordinates, so once a SEG-Y
+dataset with real trace coordinates is uploaded, the tie automatically uses the
+coordinate-based path with no config changes needed -- see the CRS caveat below for what
+these coordinates currently are and aren't.
 
 ### Seismic Visualization (direct SEG-Y interpretation)
 
@@ -316,12 +317,24 @@ parsing is used for those.
 **Coordinate reference system (CRS) check on well ties:** a well tie only proceeds if the
 well's LAS coordinates fall within (a generous buffer around) the seismic survey's own
 coordinate extent. If they don't, `get_well_tie` raises a clear error explaining that this is
-almost always a CRS mismatch (e.g. a placeholder/local grid vs. the survey's real projected
-CRS) rather than silently picking a distant, meaningless "nearest" trace. **This currently
-fires for all of Z-02..Z-08**, since their `XWELL`/`YWELL` values are a synthetic placeholder
-grid (see "Well-to-seismic tie" above), not real coordinates in the same CRS as any real SEG-Y
-survey -- replace them with real, correctly-projected coordinates before expecting a
-successful well tie against real seismic data.
+almost always a CRS mismatch (e.g. two different projections/grids, not just a units issue)
+rather than silently picking a distant, meaningless "nearest" trace.
+
+**Current state of Z-02..Z-08's coordinates, and why they aren't final:** the field's well
+database (GeoGraphix export) gives real surface X/Y for each well, but those values (X ~
+1.20-1.21M, Y ~9.68-9.70M) are in a visibly different coordinate system than `origional.segy`'s
+trace coordinates (X ~363k-371k, Y ~2.95M-2.96M) -- not just a constant offset (a real
+projection/CRS difference, confirmed by the two datasets' coordinate *ranges* not scaling the
+same way, which a simple false-origin shift would preserve). Converting between them correctly
+needs the source and target CRS/projection definitions (e.g. via `pyproj`), which aren't
+available yet. Until then, `XWELL`/`YWELL` hold **placeholder coordinates inside
+`origional.segy`'s real survey footprint**, rescaled from the real well database so the wells'
+*relative* positions roughly match the real field layout -- close enough for the well-tie
+feature to run end-to-end and return a real nearest trace, but the absolute location and the
+resulting tie should not be trusted as geophysically correct until the real well coordinates
+are converted into the SEG-Y's CRS. Swap in the converted real coordinates in
+`backend/data/raw/Z-0X_raw.las`'s `~Well` section (see `las_loader.py` for the accepted
+mnemonics) once the CRS is known, and re-run `bulk_load_wells.py`.
 
 ---
 

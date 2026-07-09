@@ -322,3 +322,24 @@ tune them without touching code. Key notes for future sessions:
   to the pre-existing manually configured `trace_index` (`tie_config.yaml`,
   `tie_method="manual_override"`) when either side lacks coordinates. See README.md
   "Well-to-seismic tie" for details.
+- **Seismic Visualization added** (post-well-tie-feature, user request): reads the raw SEG-Y
+  volume directly (`backend/app/services/seismic_processor.py`, `SegyVolume`) rather than the
+  upload pipeline, since inline/crossline sectioning needs geometry that pipeline never
+  stores. This file's inline/crossline live at non-standard trace header bytes 9-12/13-16 (not
+  segyio's `INLINE_3D`/`CROSSLINE_3D`), read explicitly and cross-checked at open time. New
+  `/api/seismic/*` router (`routers/seismic_viz.py`, kept separate from the existing
+  `routers/seismic.py` to avoid colliding with it) serves inline/crossline sections, time
+  slices, an amplitude spectrum, and a well tie (reusing `well_seismic_tie.py` +
+  `well_service.py`). Frontend: 5 new components under `components/Seismic/`
+  (`SeismicPanel.tsx` tabs the other 4), wired into the bottom of `/seismic`.
+- **Real well coordinates from the well database, rescaled into the SEG-Y's footprint**
+  (post-Seismic-Visualization, user request): the user supplied real X/Y for Z-02..Z-08 from a
+  GeoGraphix export, but those coordinates are in a visibly different CRS/projection than
+  `origional.segy`'s trace coordinates (confirmed by the two datasets' coordinate ranges not
+  scaling proportionally -- not just a constant offset). Without the source/target CRS
+  definitions to do a real conversion, `XWELL`/`YWELL` in the 7 LAS files were set to
+  placeholder coordinates *inside* the real survey's footprint, linearly rescaled from the
+  real well database so relative field geometry is preserved -- functional for exercising the
+  well-tie feature end-to-end, but not geophysically correct until the real CRS conversion is
+  done. See README.md "Current state of Z-02..Z-08's coordinates" for how to replace them once
+  the CRS is known.

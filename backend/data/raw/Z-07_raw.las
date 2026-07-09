@@ -9,8 +9,8 @@ STEP.m    0.15240 : STEP
 NULL.    -9999.25 : NULL VALUE
 COMP.             : COMPANY
 WELL.        Z-07 : 
-XWELL.m    512650.00 : SURFACE X COORDINATE (EASTING, FIELD LOCAL GRID)
-YWELL.m   6542990.00 : SURFACE Y COORDINATE (NORTHING, FIELD LOCAL GRID)
+XWELL.m    368949.32 : SURFACE X COORDINATE -- PLACEHOLDER inside the real origional.segy survey extent (363124-370654), rescaled from the real well-database
+YWELL.m   2952997.41 : SURFACE Y COORDINATE -- PLACEHOLDER inside the real origional.segy survey extent (2949830-2957150); position preserves the field's real
 FLD .             : 
 LOC .             : LOCATION
 PROV.             : PROVINCE

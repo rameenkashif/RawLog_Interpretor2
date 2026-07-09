@@ -13,6 +13,7 @@ exercise the real byte-offset parsing without needing the real ~90 MB file.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,17 @@ segyio = pytest.importorskip("segyio")
 from app.repository import FileWellRepository
 from app.services import seismic_processor as sp
 from app.services import well_service
+
+
+def _set_las_coordinate(las_text: str, mnemonic: str, value: float) -> str:
+    """Overwrite an XWELL/YWELL header value in raw LAS text, regardless of
+    what value/comment is currently there -- regex on the mnemonic rather
+    than an exact-string match on the old value, so this doesn't silently
+    no-op if the checked-in LAS file's placeholder coordinates change."""
+    pattern = re.compile(rf"({re.escape(mnemonic)}\.m\s+)[-\d.]+")
+    new_text, n = pattern.subn(rf"\g<1>{value:.2f}", las_text, count=1)
+    assert n == 1, f"Expected exactly one {mnemonic}.m line to replace, found {n}"
+    return new_text
 
 RAW_LAS_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
 Z02_PATH = RAW_LAS_DIR / "Z-02_raw.las"
@@ -179,8 +191,8 @@ class TestWellTie:
         # survey's coordinate extent before loading, simulating a well
         # whose coordinates really are in the same CRS as the seismic.
         las_text = Z02_PATH.read_text()
-        las_text = las_text.replace("XWELL.m    512340.00", "XWELL.m    366840.00")
-        las_text = las_text.replace("YWELL.m   6543210.00", "YWELL.m   2950275.00")
+        las_text = _set_las_coordinate(las_text, "XWELL", 366840.0)
+        las_text = _set_las_coordinate(las_text, "YWELL", 2950275.0)
         result = well_service.process_and_store_las_bytes(
             las_text.encode(), "Z-02_raw.las", repo=well_repo
         )
@@ -202,8 +214,8 @@ class TestWellTie:
             lambda well_id, repo=None, _f=well_service.get_well_curves: _f(well_id, repo=well_repo),
         )
         las_text = Z02_PATH.read_text()
-        las_text = las_text.replace("XWELL.m    512340.00", "XWELL.m    366840.00")
-        las_text = las_text.replace("YWELL.m   6543210.00", "YWELL.m   2950275.00")
+        las_text = _set_las_coordinate(las_text, "XWELL", 366840.0)
+        las_text = _set_las_coordinate(las_text, "YWELL", 2950275.0)
         result = well_service.process_and_store_las_bytes(
             las_text.encode(), "Z-02_raw.las", repo=well_repo
         )
