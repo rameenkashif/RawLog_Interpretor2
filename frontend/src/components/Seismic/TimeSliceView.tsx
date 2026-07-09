@@ -19,7 +19,12 @@ const AXIS_STYLE = {
  * diverging red/blue colormap convention as the section views.
  */
 export default function TimeSliceView({ surveyInfo }: { surveyInfo: SurveyInfoResponse }) {
-  const [timeMs, setTimeMs] = useState(surveyInfo.twt_start_ms);
+  // Some surveys are exported as a windowed/extracted subvolume rather than
+  // a raw full cube -- each trace only carries real amplitude around its
+  // own horizon pick, so no single absolute time has every trace "on" at
+  // once. best_time_ms is the sample with the fewest zero-padded traces,
+  // a better default than the start of the recorded window.
+  const [timeMs, setTimeMs] = useState(surveyInfo.best_time_ms);
 
   const query = useQuery({
     queryKey: ["seismic-viz-timeslice", timeMs],
@@ -54,7 +59,8 @@ export default function TimeSliceView({ surveyInfo }: { surveyInfo: SurveyInfoRe
           className="w-24 text-xs border border-border-strong rounded-lg px-2 py-1"
         />
         <span className="text-ink-faint font-normal">
-          ({surveyInfo.twt_start_ms}-{surveyInfo.twt_end_ms} ms, step {surveyInfo.sample_interval_ms} ms)
+          ({surveyInfo.twt_start_ms}-{surveyInfo.twt_end_ms} ms, step {surveyInfo.sample_interval_ms} ms,
+          best coverage at {surveyInfo.best_time_ms} ms)
         </span>
         {query.data && (
           <span className="text-ink-faint font-normal">
@@ -88,8 +94,13 @@ function buildFigure(
   inlineAxis: number[],
   amplitude: number[][], // (n_inlines, n_crosslines)
 ): { data: Data[]; layout: Partial<Layout> } {
+  // Backend already masks exact-zero (padding/no-data outside a trace's
+  // own live window) as NaN in get_time_slice, but mask defensively here
+  // too so a zero never renders as a flat mid-colorscale "gray" cell.
+  const z = amplitude.map((row) => row.map((value) => (value === 0 ? NaN : value)));
+
   let maxAbs = 1e-6;
-  for (const row of amplitude) {
+  for (const row of z) {
     for (const value of row) {
       if (Number.isFinite(value)) {
         const abs = Math.abs(value);
@@ -102,7 +113,7 @@ function buildFigure(
     type: "heatmap",
     x: crosslineAxis,
     y: inlineAxis,
-    z: amplitude,
+    z,
     zmid: 0,
     zmin: -maxAbs,
     zmax: maxAbs,

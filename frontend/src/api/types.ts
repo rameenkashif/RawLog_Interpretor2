@@ -168,6 +168,7 @@ export interface SurveyInfoResponse {
   crossline_max: number;
   n_inlines: number;
   n_crosslines: number;
+  best_time_ms: number;
 }
 
 export interface InlineSectionResponse {

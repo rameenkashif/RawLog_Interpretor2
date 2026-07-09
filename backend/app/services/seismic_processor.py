@@ -136,6 +136,7 @@ class SurveyInfo:
     crossline_max: int
     n_inlines: int
     n_crosslines: int
+    best_time_ms: float
 
 
 class SegyVolume:
@@ -210,6 +211,18 @@ class SegyVolume:
         )
         self._grid_trace_idx[il_pos, xl_pos] = np.arange(self.n_traces)
 
+        # Some surveys are exported as a windowed/extracted subvolume rather
+        # than a raw full cube -- each trace only carries real amplitude in
+        # a window around its own horizon pick, and everything outside that
+        # window is zero-padded to keep a uniform time axis across traces.
+        # No single absolute time_ms then has every trace "on" at once,
+        # so pick the sample with the fewest exact-zero traces as the
+        # best default for the Time Slice view (see get_time_slice, which
+        # also masks exact zero as NaN so padding renders as transparent
+        # "no data" instead of a flat mid-colorscale blob).
+        zero_frac_per_sample = np.mean(self._traces == 0.0, axis=0)
+        self._best_time_sample_idx = int(np.argmin(zero_frac_per_sample))
+
         # Spectral decomposition is compute-heavier than the flat FFT above,
         # so full (inline, method) results are cached in memory -- repeated
         # frontend requests for the same inline (e.g. a user scrubbing a
@@ -254,6 +267,7 @@ class SegyVolume:
             crossline_max=self.crossline_max,
             n_inlines=len(self._inlines_sorted),
             n_crosslines=len(self._crosslines_sorted),
+            best_time_ms=float(self.twt_axis_ms[self._best_time_sample_idx]),
         )
 
     def get_trace(self, index: int) -> np.ndarray:
@@ -305,6 +319,13 @@ class SegyVolume:
         grid = np.full(self._grid_trace_idx.shape, np.nan, dtype=float)
         valid = self._grid_trace_idx >= 0
         grid[valid] = self._traces[self._grid_trace_idx[valid], sample_idx]
+
+        # Exact zero at this sample is padding, not a real amplitude
+        # reading -- see the best_time_ms comment in __init__. Masking it
+        # to NaN (same as an out-of-grid cell) renders it as transparent
+        # "no data" instead of a flat mid-colorscale blob that visually
+        # competes with real structure.
+        grid[grid == 0.0] = np.nan
 
         return {
             "time_ms": actual_time_ms,

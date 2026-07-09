@@ -96,6 +96,38 @@ def _write_synthetic_segy(
                 i += 1
 
 
+def _write_windowed_synthetic_segy(path: Path) -> None:
+    """Half the traces are zero-padded at the shallow end (samples 0-1),
+    half at the deep end (samples 4-5) -- mimics a horizon-windowed
+    extraction subvolume where no single absolute time has full coverage,
+    but the middle samples (2-3, where both halves have real data) do.
+    Used to test best_time_ms and get_time_slice's exact-zero-as-NaN
+    masking (see seismic_processor.SegyVolume._best_time_sample_idx)."""
+    spec = segyio.spec()
+    spec.format = 5
+    spec.samples = np.arange(N_SAMPLES) * INTERVAL_MS + DELAY_MS
+    spec.tracecount = len(INLINES) * len(CROSSLINES)
+
+    shallow_padded = np.array([0.0, 0.0, 1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+    deep_padded = np.array([1.0, 2.0, 3.0, 4.0, 0.0, 0.0], dtype=np.float32)
+
+    i = 0
+    with segyio.create(str(path), spec) as f:
+        f.bin[segyio.BinField.Interval] = INTERVAL_MS * 1000
+        for il in INLINES:
+            for xl in CROSSLINES:
+                f.header[i] = {
+                    segyio.TraceField.FieldRecord: il,
+                    segyio.TraceField.TraceNumber: xl,
+                    segyio.TraceField.SourceX: int(363000.0 + il * 10),
+                    segyio.TraceField.SourceY: int(2949800.0 + xl * 10),
+                    segyio.TraceField.DelayRecordingTime: DELAY_MS,
+                    segyio.TraceField.TRACE_SAMPLE_INTERVAL: INTERVAL_MS * 1000,
+                }
+                f.trace[i] = shallow_padded if i < 10 else deep_padded
+                i += 1
+
+
 @pytest.fixture
 def volume(tmp_path) -> sp.SegyVolume:
     path = tmp_path / "test_survey.sgy"
@@ -113,6 +145,9 @@ class TestGeometry:
         assert info.n_inlines == 5 and info.n_crosslines == 4
         assert info.twt_start_ms == 2030.0
         assert info.sample_interval_ms == 2.0
+        # No zero-padded samples in this fixture's waveform, so every
+        # sample is equally "fully covered" and argmin picks the first.
+        assert info.best_time_ms == 2030.0
 
     def test_inline_section_known_trace_count(self, volume):
         section = volume.get_inline_section(384)
@@ -152,6 +187,36 @@ class TestTimeSlice:
     def test_value_past_end_clamps_to_last_sample(self, volume):
         ts = volume.get_time_slice(9999.0)
         assert ts["time_ms"] == 2040.0  # DELAY_MS + (N_SAMPLES-1)*INTERVAL_MS
+
+
+class TestWindowedCoverage:
+    """Some real surveys are exported as a horizon-windowed extraction
+    rather than a raw full cube -- each trace is only "live" in a window
+    around its own horizon pick, zero-padded outside it. No single
+    absolute time then has every trace on at once. See best_time_ms and
+    get_time_slice's exact-zero-as-NaN masking in seismic_processor.py."""
+
+    def test_best_time_ms_picks_fullest_overlap_sample(self, tmp_path):
+        path = tmp_path / "windowed.sgy"
+        _write_windowed_synthetic_segy(path)
+        volume = sp.SegyVolume(path)
+        info = volume.survey_info()
+        # Sample index 2 (2034 ms) is the only one where neither the
+        # shallow-padded nor deep-padded half is zero.
+        assert info.best_time_ms == 2034.0
+
+    def test_get_time_slice_masks_padding_as_nan(self, tmp_path):
+        path = tmp_path / "windowed.sgy"
+        _write_windowed_synthetic_segy(path)
+        volume = sp.SegyVolume(path)
+
+        shallow = volume.get_time_slice(2030.0)  # sample 0: 10/20 traces padded
+        flat = [v for row in shallow["amplitude"] for v in row]
+        assert sum(1 for v in flat if v != v) == 10  # NaN != NaN
+
+        full = volume.get_time_slice(2034.0)  # sample 2: fully covered
+        flat_full = [v for row in full["amplitude"] for v in row]
+        assert all(v == v for v in flat_full)
 
 
 class TestAmplitudeSpectrum:

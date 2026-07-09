@@ -236,6 +236,7 @@ class SurveyInfoResponse(BaseModel):
     crossline_max: int
     n_inlines: int
     n_crosslines: int
+    best_time_ms: float
 
 
 class InlineSectionResponse(BaseModel):
