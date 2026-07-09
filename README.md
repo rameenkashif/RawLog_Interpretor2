@@ -245,6 +245,41 @@ being used for any interpretation decision. All thresholds/percentiles live in
 `backend/app/config/seismic_config.yaml`, with the same field-wide-defaults +
 per-dataset-override pattern as `petrophysics_config.yaml`.
 
+### Well-to-seismic tie
+
+`backend/app/well_seismic_tie.py` implements a real geophysical tie (not the amplitude
+heuristic above): it integrates the sonic (DT) log into a depth-time relationship, derives
+acoustic impedance from DT + RHOB, builds a reflectivity series, convolves it with a Ricker
+wavelet to produce a synthetic seismogram, then cross-correlates that synthetic against a real
+seismic trace to find the best-fit time shift and correlation coefficient. `GET
+/tie/{well_id}?seismic_dataset_id=...` runs this and the frontend plots the result (real trace
+vs. shifted synthetic) in the Seismic page's "Well-to-seismic tie" panel.
+
+**Picking which seismic trace to tie against:**
+
+- **Coordinate-based (preferred):** each LAS file's `~Well` section can carry surface
+  coordinates (`XWELL`/`YWELL`, or the aliases `XCOORD`/`YCOORD`, `SURX`/`SURY`, `X`/`Y` --
+  see `las_loader.py`), and each SEG-Y file's trace headers can carry per-trace coordinates
+  (`CDP_X`/`CDP_Y`, falling back to `SourceX`/`SourceY`, with the SEG-Y coordinate scalar
+  applied -- see `segy_loader.py`). When both are present, `tie_service.py` calls
+  `find_nearest_trace_index()` to do a real Euclidean nearest-trace search and reports the
+  actual `distance_m`. The response's `tie_method` field is `"nearest_trace"` in this case.
+  Well and seismic coordinates are assumed to share the same CRS/units (e.g. both UTM metres)
+  -- this is not verified, so a mismatched CRS would silently return a wrong-but-plausible
+  trace; sanity-check `distance_m` against the survey's known extent.
+- **Manual fallback:** if either side is missing coordinates (older LAS files without a
+  location header, or a SEG-Y export with blank/non-standard geometry bytes), the tie falls
+  back to a manually configured `trace_index` per well in
+  `backend/app/config/tie_config.yaml` (`well_coordinate_overrides`). `tie_method` is
+  `"manual_override"` and the response carries a `geometry_warning` explaining that this is
+  not a spatial match, with `distance_m` left `null`. `max_tie_search_radius_m` in the same
+  config file caps how far the coordinate-based search is allowed to look before raising an
+  error instead of silently tying to a distant trace.
+
+Z-02 through Z-08's raw LAS files ship with `XWELL`/`YWELL` coordinates (a synthetic field
+grid), so once a SEG-Y dataset with real trace coordinates is uploaded, the tie automatically
+uses the coordinate-based path with no config changes needed.
+
 ---
 
 ## 6. Backend API reference
@@ -264,6 +299,7 @@ per-dataset-override pattern as `petrophysics_config.yaml`.
 | GET | `/seismic/{dataset_id}/section` | Subsampled raw amplitude section (trace x two-way-time) for display |
 | GET | `/seismic/{dataset_id}/attributes` | Per-trace RMS amplitude, envelope, dominant frequency, and VSH/PHIE/SWE seismic proxies |
 | GET | `/seismic/{dataset_id}/export` | Download per-trace computed seismic attributes as CSV |
+| GET | `/tie/{well_id}?seismic_dataset_id=...` | Well-to-seismic tie: sonic/density synthetic seismogram cross-correlated against the nearest real seismic trace |
 | GET | `/health` | Liveness check |
 
 Interactive OpenAPI docs are available at `http://localhost:8000/docs` once the backend is

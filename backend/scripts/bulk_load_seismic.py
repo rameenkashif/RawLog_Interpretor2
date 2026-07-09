@@ -60,7 +60,12 @@ def main() -> None:
             loaded.traces, loaded.metadata.sample_interval_ms, config
         )
         repo.save_dataset(
-            loaded.metadata, loaded.traces, loaded.twt_axis_ms, attributes
+            loaded.metadata,
+            loaded.traces,
+            loaded.twt_axis_ms,
+            loaded.trace_x,
+            loaded.trace_y,
+            attributes,
         )
         n_loaded += 1
         print(

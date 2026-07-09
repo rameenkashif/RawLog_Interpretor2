@@ -31,13 +31,15 @@ class SeismicRepository(ABC):
         metadata: SegyMetadata,
         traces: np.ndarray,
         twt_axis_ms: np.ndarray,
+        trace_x: np.ndarray,
+        trace_y: np.ndarray,
         attributes: pd.DataFrame,
     ) -> None: ...
 
     @abstractmethod
     def get_dataset(
         self, dataset_id: str
-    ) -> tuple[SegyMetadata, np.ndarray, np.ndarray, pd.DataFrame] | None: ...
+    ) -> tuple[SegyMetadata, np.ndarray, np.ndarray, np.ndarray, np.ndarray, pd.DataFrame] | None: ...
 
     @abstractmethod
     def list_datasets(self) -> list[SegyMetadata]: ...
@@ -70,12 +72,16 @@ class FileSeismicRepository(SeismicRepository):
         metadata: SegyMetadata,
         traces: np.ndarray,
         twt_axis_ms: np.ndarray,
+        trace_x: np.ndarray,
+        trace_y: np.ndarray,
         attributes: pd.DataFrame,
     ) -> None:
         np.savez_compressed(
             self._traces_path(metadata.dataset_id),
             traces=traces,
             twt_axis_ms=twt_axis_ms,
+            trace_x=trace_x,
+            trace_y=trace_y,
         )
         attributes.to_parquet(self._attrs_path(metadata.dataset_id), index=False)
         with open(self._meta_path(metadata.dataset_id), "w", encoding="utf-8") as f:
@@ -83,7 +89,7 @@ class FileSeismicRepository(SeismicRepository):
 
     def get_dataset(
         self, dataset_id: str
-    ) -> tuple[SegyMetadata, np.ndarray, np.ndarray, pd.DataFrame] | None:
+    ) -> tuple[SegyMetadata, np.ndarray, np.ndarray, np.ndarray, np.ndarray, pd.DataFrame] | None:
         traces_path = self._traces_path(dataset_id)
         attrs_path = self._attrs_path(dataset_id)
         meta_path = self._meta_path(dataset_id)
@@ -96,7 +102,15 @@ class FileSeismicRepository(SeismicRepository):
             meta_dict = json.load(f)
         metadata = SegyMetadata(**meta_dict)
 
-        return metadata, npz["traces"], npz["twt_axis_ms"], attributes
+        n_traces = npz["traces"].shape[0]
+        # Older cached datasets (processed before per-trace coordinates were
+        # added) won't have trace_x/trace_y in their .npz -- fall back to NaN
+        # rather than erroring, same as segy_loader does when a raw file has
+        # no coordinate headers.
+        trace_x = npz["trace_x"] if "trace_x" in npz.files else np.full(n_traces, np.nan)
+        trace_y = npz["trace_y"] if "trace_y" in npz.files else np.full(n_traces, np.nan)
+
+        return metadata, npz["traces"], npz["twt_axis_ms"], trace_x, trace_y, attributes
 
     def list_datasets(self) -> list[SegyMetadata]:
         metas = []
