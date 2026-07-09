@@ -205,6 +205,78 @@ class WellSeismicTieResponse(BaseModel):
     geometry_warning: str | None = None
 
 # -----------------------------------------------------------------------------
+# Seismic Visualization (direct SEG-Y inline/crossline/time-slice/spectrum)
+# -----------------------------------------------------------------------------
+class SurveyInfoResponse(BaseModel):
+    source_filename: str
+    n_traces: int
+    n_samples: int
+    sample_interval_ms: float
+    twt_start_ms: float
+    twt_end_ms: float
+    inline_min: int
+    inline_max: int
+    crossline_min: int
+    crossline_max: int
+    n_inlines: int
+    n_crosslines: int
+
+
+class InlineSectionResponse(BaseModel):
+    inline_number: int
+    crossline_axis: list[int]
+    twt_axis_ms: list[float]
+    amplitude: list[list[float]] = Field(
+        ..., description="Shape (n_samples, n_traces_in_line), row-major by sample"
+    )
+
+
+class CrosslineSectionResponse(BaseModel):
+    crossline_number: int
+    inline_axis: list[int]
+    twt_axis_ms: list[float]
+    amplitude: list[list[float]] = Field(
+        ..., description="Shape (n_samples, n_traces_in_line), row-major by sample"
+    )
+
+
+class TimeSliceResponse(BaseModel):
+    time_ms: float = Field(..., description="Actual sample time used (nearest-neighbor to requested_time_ms)")
+    requested_time_ms: float
+    inline_axis: list[int]
+    crossline_axis: list[int]
+    amplitude: list[list[float]] = Field(
+        ..., description="Shape (n_inlines, n_crosslines); NaN for any gap in the grid"
+    )
+
+
+class WellTieVizResponse(BaseModel):
+    well_id: str
+    wavelet_freq_hz: float
+    twt_ms: list[float]
+    synthetic: list[float]
+    real_trace: list[float]
+    nearest_inline: int
+    nearest_crossline: int
+    distance_m: float
+    note: str = Field(
+        ..., description="Simplifications/caveats in this tie (e.g. sonic-only depth-time conversion)"
+    )
+
+
+class AmplitudeSpectrumResponse(BaseModel):
+    inline_number: int | None
+    n_traces_sampled: int
+    freq_hz: list[float]
+    amplitude: list[float]
+    dominant_freq_hz: float
+    bandwidth_hz: float
+    snr_proxy: float | None = Field(
+        None, description="Uncalibrated QC proxy: mean in-band amplitude / mean out-of-band amplitude"
+    )
+
+
+# -----------------------------------------------------------------------------
 # Errors
 # -----------------------------------------------------------------------------
 class ErrorResponse(BaseModel):

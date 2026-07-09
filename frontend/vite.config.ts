@@ -21,6 +21,7 @@ export default defineConfig({
       "/health": "http://127.0.0.1:8000",
       "/seismic": "http://127.0.0.1:8000",
       "/tie": "http://127.0.0.1:8000",
+      "/api": "http://127.0.0.1:8000",
     },
   },
 });

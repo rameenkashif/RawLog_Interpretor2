@@ -7,16 +7,22 @@
 
 import axios from "axios";
 import type {
+  AmplitudeSpectrumResponse,
   ChatStreamEvent,
+  CrosslineSectionResponse,
   CrossplotResponse,
   DashboardSummary,
+  InlineSectionResponse,
   SeismicAttributesResponse,
   SeismicSectionResponse,
   SeismicSummary,
   SeismicUploadResponse,
+  SurveyInfoResponse,
+  TimeSliceResponse,
   WellCurvesResponse,
   WellSeismicTieResponse,
   WellSummary,
+  WellTieVizResponse,
   WellUploadResponse,
   WellZonesResponse,
 } from "./types";
@@ -134,6 +140,60 @@ export async function getWellSeismicTie(
   const { data } = await http.get<WellSeismicTieResponse>(`/tie/${wellId}`, {
     params: { seismic_dataset_id: seismicDatasetId },
   });
+  return data;
+}
+
+// -----------------------------------------------------------------------------
+// Seismic Visualization (direct SEG-Y inline/crossline/time-slice/spectrum)
+// -----------------------------------------------------------------------------
+export async function getSurveyInfo(): Promise<SurveyInfoResponse> {
+  const { data } = await http.get<SurveyInfoResponse>("/api/seismic/survey-info");
+  return data;
+}
+
+export async function getInlineSection(
+  inlineNumber: number,
+): Promise<InlineSectionResponse> {
+  const { data } = await http.get<InlineSectionResponse>(
+    `/api/seismic/inline/${inlineNumber}`,
+  );
+  return data;
+}
+
+export async function getCrosslineSection(
+  crosslineNumber: number,
+): Promise<CrosslineSectionResponse> {
+  const { data } = await http.get<CrosslineSectionResponse>(
+    `/api/seismic/crossline/${crosslineNumber}`,
+  );
+  return data;
+}
+
+export async function getTimeSlice(timeMs: number): Promise<TimeSliceResponse> {
+  const { data } = await http.get<TimeSliceResponse>("/api/seismic/timeslice", {
+    params: { time_ms: timeMs },
+  });
+  return data;
+}
+
+export async function getWellTieViz(
+  wellId: string,
+  waveletFreqHz?: number,
+): Promise<WellTieVizResponse> {
+  const { data } = await http.get<WellTieVizResponse>(
+    `/api/seismic/well-tie/${wellId}`,
+    { params: { wavelet_freq_hz: waveletFreqHz } },
+  );
+  return data;
+}
+
+export async function getAmplitudeSpectrum(
+  inlineNumber?: number | null,
+): Promise<AmplitudeSpectrumResponse> {
+  const { data } = await http.get<AmplitudeSpectrumResponse>(
+    "/api/seismic/spectrum",
+    { params: { inline_number: inlineNumber ?? undefined } },
+  );
   return data;
 }
 

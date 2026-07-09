@@ -280,6 +280,49 @@ Z-02 through Z-08's raw LAS files ship with `XWELL`/`YWELL` coordinates (a synth
 grid), so once a SEG-Y dataset with real trace coordinates is uploaded, the tie automatically
 uses the coordinate-based path with no config changes needed.
 
+### Seismic Visualization (direct SEG-Y interpretation)
+
+`backend/app/services/seismic_processor.py` reads a raw SEG-Y volume from
+`backend/data/seismic_raw/` directly (via `segyio`, memory-mapped and fully loaded into memory
+once behind a process-wide singleton -- see `get_segy_volume()`) rather than going through the
+upload/attribute pipeline above, because it needs inline/crossline geometry that pipeline never
+stores. It serves four interpretation displays, exposed at `/api/seismic/*` and rendered in the
+frontend's **Seismic Visualization** panel (bottom of the `/seismic` page):
+
+- **Inline / crossline sections** -- amplitude vs. position x two-way-time, either direction.
+- **Time slices** -- a map-view amplitude cut across the full inline x crossline grid at a
+  chosen two-way time (nearest-sample lookup; a requested time outside the survey's range
+  clamps to the nearest edge sample).
+- **Well tie** -- reuses `well_seismic_tie.py`'s synthetic-seismogram pipeline (impedance,
+  reflectivity, Ricker wavelet convolution) and `well_service.py`'s LAS loading, but ties
+  against this volume's own traces via a real nearest-trace coordinate search rather than the
+  upload pipeline's dataset. The Ricker wavelet's dominant frequency is adjustable per request
+  (`wavelet_freq_hz`, default 25 Hz). Returns a `note` field flagging that the depth-time
+  conversion is sonic-integration-only (no checkshot/VSP), and a clear 422 naming the missing
+  curve if a well has no usable DT or RHOB log.
+- **Amplitude spectrum** -- average FFT magnitude spectrum (whole volume via a systematic
+  trace sample, or one inline), plus dominant frequency, -3dB bandwidth, and an uncalibrated
+  S/N proxy.
+
+**Non-standard trace header layout:** this SEG-Y file stores inline number at trace header
+bytes 9-12 and crossline number at bytes 13-16 -- NOT the bytes segyio's usual
+`INLINE_3D`/`CROSSLINE_3D` constants point at (189/193), which would silently read the wrong
+values for this file. `SegyVolume` reads the correct bytes explicitly and cross-checks them
+against a raw `struct.unpack` of trace 0's header at open time, so a segyio behavior change
+would fail loudly rather than silently mis-read the geometry. SourceX/SourceY and the sample
+interval/delay recording time *are* the standard SEG-Y rev1 locations, so segyio's normal
+parsing is used for those.
+
+**Coordinate reference system (CRS) check on well ties:** a well tie only proceeds if the
+well's LAS coordinates fall within (a generous buffer around) the seismic survey's own
+coordinate extent. If they don't, `get_well_tie` raises a clear error explaining that this is
+almost always a CRS mismatch (e.g. a placeholder/local grid vs. the survey's real projected
+CRS) rather than silently picking a distant, meaningless "nearest" trace. **This currently
+fires for all of Z-02..Z-08**, since their `XWELL`/`YWELL` values are a synthetic placeholder
+grid (see "Well-to-seismic tie" above), not real coordinates in the same CRS as any real SEG-Y
+survey -- replace them with real, correctly-projected coordinates before expecting a
+successful well tie against real seismic data.
+
 ---
 
 ## 6. Backend API reference
@@ -300,6 +343,12 @@ uses the coordinate-based path with no config changes needed.
 | GET | `/seismic/{dataset_id}/attributes` | Per-trace RMS amplitude, envelope, dominant frequency, and VSH/PHIE/SWE seismic proxies |
 | GET | `/seismic/{dataset_id}/export` | Download per-trace computed seismic attributes as CSV |
 | GET | `/tie/{well_id}?seismic_dataset_id=...` | Well-to-seismic tie: sonic/density synthetic seismogram cross-correlated against the nearest real seismic trace |
+| GET | `/api/seismic/survey-info` | Geometry summary of the raw SEG-Y volume (inline/crossline range, sample interval, time range, trace count) |
+| GET | `/api/seismic/inline/{inline_number}` | Inline section: amplitude vs. crossline x two-way-time |
+| GET | `/api/seismic/crossline/{crossline_number}` | Crossline section: amplitude vs. inline x two-way-time |
+| GET | `/api/seismic/timeslice?time_ms=...` | Map-view amplitude time slice (inline x crossline grid) at the nearest sample to the requested time |
+| GET | `/api/seismic/well-tie/{well_id}?wavelet_freq_hz=25` | Well tie computed directly against the raw SEG-Y volume (see "Seismic Visualization" below) |
+| GET | `/api/seismic/spectrum?inline_number=...` | Average amplitude spectrum (whole volume or one inline) + dominant frequency/bandwidth/S-N-proxy stats |
 | GET | `/health` | Liveness check |
 
 Interactive OpenAPI docs are available at `http://localhost:8000/docs` once the backend is

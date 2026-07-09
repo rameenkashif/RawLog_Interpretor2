@@ -152,6 +152,68 @@ export interface WellSeismicTieResponse {
   geometry_warning: string | null;
 }
 
+// -----------------------------------------------------------------------------
+// Seismic Visualization (direct SEG-Y inline/crossline/time-slice/spectrum)
+// -----------------------------------------------------------------------------
+export interface SurveyInfoResponse {
+  source_filename: string;
+  n_traces: number;
+  n_samples: number;
+  sample_interval_ms: number;
+  twt_start_ms: number;
+  twt_end_ms: number;
+  inline_min: number;
+  inline_max: number;
+  crossline_min: number;
+  crossline_max: number;
+  n_inlines: number;
+  n_crosslines: number;
+}
+
+export interface InlineSectionResponse {
+  inline_number: number;
+  crossline_axis: number[];
+  twt_axis_ms: number[];
+  amplitude: number[][]; // shape (n_samples, n_traces_in_line)
+}
+
+export interface CrosslineSectionResponse {
+  crossline_number: number;
+  inline_axis: number[];
+  twt_axis_ms: number[];
+  amplitude: number[][]; // shape (n_samples, n_traces_in_line)
+}
+
+export interface TimeSliceResponse {
+  time_ms: number;
+  requested_time_ms: number;
+  inline_axis: number[];
+  crossline_axis: number[];
+  amplitude: number[][]; // shape (n_inlines, n_crosslines)
+}
+
+export interface WellTieVizResponse {
+  well_id: string;
+  wavelet_freq_hz: number;
+  twt_ms: number[];
+  synthetic: number[];
+  real_trace: number[];
+  nearest_inline: number;
+  nearest_crossline: number;
+  distance_m: number;
+  note: string;
+}
+
+export interface AmplitudeSpectrumResponse {
+  inline_number: number | null;
+  n_traces_sampled: number;
+  freq_hz: number[];
+  amplitude: number[];
+  dominant_freq_hz: number;
+  bandwidth_hz: number;
+  snr_proxy: number | null;
+}
+
 export const CURVE_NAMES = [
   "DEPT",
   "GR",

@@ -71,6 +71,25 @@ except Exception as exc:  # noqa: BLE001
         exc,
     )
 
+# Seismic Visualization (inline/crossline sections, time slices, well ties,
+# amplitude spectra read directly off the raw SEG-Y volume) shares the same
+# segyio dependency and gets the same defensive import treatment. It's also
+# independent of the routers above -- a missing backend/data/seismic_raw/
+# file only 404s its own endpoints per-request (SegyFileNotFoundError), not
+# at import time.
+try:
+    from app.routers import seismic_viz
+
+    app.include_router(seismic_viz.router)
+except Exception as exc:  # noqa: BLE001
+    logger.warning(
+        "Seismic Visualization module failed to load and its endpoints will be "
+        "unavailable (GET /api/seismic/*). This is usually caused by a missing "
+        "dependency -- run `pip install -r requirements.txt` (needs segyio) and "
+        "restart. Underlying error: %s",
+        exc,
+    )
+
 
 @app.get("/health")
 async def health() -> dict[str, str]:

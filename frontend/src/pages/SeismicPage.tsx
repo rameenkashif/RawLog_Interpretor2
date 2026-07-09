@@ -6,6 +6,7 @@ import SeismicUpload from "@/components/SeismicUpload";
 import SeismicSection from "@/components/SeismicSection";
 import SeismicAttributesChart from "@/components/SeismicAttributesChart";
 import WellSeismicTie from "@/components/WellSeismicTie";
+import SeismicPanel from "@/components/Seismic/SeismicPanel";
 
 function fmtPct(v: number | null): string {
   return v === null ? "—" : `${(v * 100).toFixed(1)}%`;
@@ -146,6 +147,10 @@ export default function SeismicPage() {
       <section>
         <h2 className="text-sm font-semibold text-ink mb-2">Well-to-Seismic Tie</h2>
         <WellSeismicTie />
+      </section>
+
+      <section className="border-t border-border pt-6">
+        <SeismicPanel />
       </section>
     </div>
   );
