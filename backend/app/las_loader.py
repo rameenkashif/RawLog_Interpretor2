@@ -44,6 +44,8 @@ class WellMetadata:
     n_samples: int
     null_counts: dict[str, int] = field(default_factory=dict)
     missing_curves: list[str] = field(default_factory=list)
+    well_x: float | None = None
+    well_y: float | None = None
 
 
 @dataclass
@@ -78,6 +80,32 @@ def _resolve_curve_name(las: lasio.LASFile, canonical: str) -> str | None:
 def _well_id_from_filename(path: Path) -> str:
     """Derive a well ID from the filename, e.g. 'Z-02.las' -> 'Z-02'."""
     return path.stem.upper()
+
+
+# Surface coordinate mnemonics vary by vendor just like curve mnemonics do.
+# These are read from the ~Well section (single-value header items), not the
+# ~Curve section, since they describe the well's location, not a per-depth
+# log. Coordinates are assumed to be in a consistent, Euclidean (e.g. UTM
+# easting/northing in metres) CRS shared with any seismic data they'll be
+# compared against -- see well_seismic_tie.find_nearest_trace_index.
+_X_COORD_ALIASES = ["XWELL", "XCOORD", "SURFACE_X", "SURX", "X"]
+_Y_COORD_ALIASES = ["YWELL", "YCOORD", "SURFACE_Y", "SURY", "Y"]
+
+
+def _resolve_well_coordinate(las: lasio.LASFile, aliases: list[str]) -> float | None:
+    """Look up a well-location header item (~Well section) by mnemonic,
+    trying common aliases in order. Returns None if absent, blank, or
+    unparseable -- coordinates are optional metadata, not a required curve.
+    """
+    for alias in aliases:
+        item = las.well.get(alias)
+        if item is None or item.value in (None, ""):
+            continue
+        try:
+            return float(item.value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def load_las_file(
@@ -186,6 +214,9 @@ def load_las_file(
     well_name = las.well.get("WELL")
     well_name = well_name.value if well_name and well_name.value else well_id
 
+    well_x = _resolve_well_coordinate(las, _X_COORD_ALIASES)
+    well_y = _resolve_well_coordinate(las, _Y_COORD_ALIASES)
+
     metadata = WellMetadata(
         well_id=well_id,
         well_name=str(well_name),
@@ -196,6 +227,8 @@ def load_las_file(
         n_samples=len(df),
         null_counts=null_counts,
         missing_curves=[],
+        well_x=well_x,
+        well_y=well_y,
     )
 
     return LoadedWell(metadata=metadata, df=df)

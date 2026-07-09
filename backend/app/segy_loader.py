@@ -50,6 +50,59 @@ class LoadedSegy:
     metadata: SegyMetadata
     traces: np.ndarray  # shape (n_traces, n_samples), amplitude values
     twt_axis_ms: np.ndarray  # shape (n_samples,), two-way time in ms
+    trace_x: np.ndarray  # shape (n_traces,), surface X coordinate per trace (NaN if unavailable)
+    trace_y: np.ndarray  # shape (n_traces,), surface Y coordinate per trace (NaN if unavailable)
+
+
+def _apply_coord_scalar(raw: np.ndarray, scalar: np.ndarray) -> np.ndarray:
+    """SEG-Y coordinates are stored as integers with a separate multiplier
+    (SourceGroupScalar): positive values multiply, negative values divide
+    (by the absolute value), 0/absent means 1 (no scaling)."""
+    out = raw.astype(float).copy()
+    positive = scalar > 0
+    negative = scalar < 0
+    out[positive] *= scalar[positive]
+    out[negative] /= -scalar[negative]
+    return out
+
+
+def _extract_trace_coordinates(f, n_traces: int) -> tuple[np.ndarray, np.ndarray]:
+    """Best-effort extraction of per-trace surface coordinates from the
+    trace headers (CDP_X/CDP_Y, falling back to SourceX/SourceY), so wells
+    carrying their own surface coordinates (see las_loader.py) can be tied
+    to the nearest real trace by location instead of a manually configured
+    trace index -- see well_seismic_tie.find_nearest_trace_index.
+
+    Returns arrays of NaN if the file has no usable coordinate headers; this
+    is common for vendor exports/2D lines with blank or non-standard
+    geometry bytes, and is treated as "coordinates not available" rather
+    than an error.
+    """
+    try:
+        scalar_raw = np.array(f.attributes(segyio.TraceField.SourceGroupScalar)[:], dtype=float)
+        scalar = np.where(scalar_raw == 0, 1.0, scalar_raw)
+
+        cdp_x = _apply_coord_scalar(
+            np.array(f.attributes(segyio.TraceField.CDP_X)[:], dtype=float), scalar
+        )
+        cdp_y = _apply_coord_scalar(
+            np.array(f.attributes(segyio.TraceField.CDP_Y)[:], dtype=float), scalar
+        )
+        if np.any(cdp_x) or np.any(cdp_y):
+            return cdp_x, cdp_y
+
+        src_x = _apply_coord_scalar(
+            np.array(f.attributes(segyio.TraceField.SourceX)[:], dtype=float), scalar
+        )
+        src_y = _apply_coord_scalar(
+            np.array(f.attributes(segyio.TraceField.SourceY)[:], dtype=float), scalar
+        )
+        if np.any(src_x) or np.any(src_y):
+            return src_x, src_y
+    except Exception:  # pragma: no cover - segyio header quirks vary by vendor
+        pass
+
+    return np.full(n_traces, np.nan), np.full(n_traces, np.nan)
 
 
 def _dataset_id_from_filename(path: Path) -> str:
@@ -116,6 +169,7 @@ def load_segy_file(
             traces = segyio.tools.collect(f.trace[:]).astype(
                 float
             )  # (n_traces, n_samples)
+            trace_x, trace_y = _extract_trace_coordinates(f, n_traces)
 
     except SegyValidationError:
         raise
@@ -138,4 +192,6 @@ def load_segy_file(
         duration_ms=duration_ms,
     )
 
-    return LoadedSegy(metadata=metadata, traces=traces, twt_axis_ms=twt_axis_ms)
+    return LoadedSegy(
+        metadata=metadata, traces=traces, twt_axis_ms=twt_axis_ms, trace_x=trace_x, trace_y=trace_y
+    )

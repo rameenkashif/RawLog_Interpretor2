@@ -34,6 +34,12 @@ class WellSummary(BaseModel):
         description="Sum of step_depth over all samples classified as Pay (ZONES==1)",
     )
     null_counts: dict[str, int] = Field(default_factory=dict)
+    well_x: float | None = Field(
+        None, description="Surface X coordinate (easting, m) from the LAS header, if present"
+    )
+    well_y: float | None = Field(
+        None, description="Surface Y coordinate (northing, m) from the LAS header, if present"
+    )
 
 
 class WellUploadResponse(BaseModel):
@@ -182,6 +188,14 @@ class WellSeismicTieResponse(BaseModel):
     dataset_id: str
     trace_index: int
     distance_m: float | None = None
+    tie_method: str = Field(
+        "manual_override",
+        description=(
+            "'nearest_trace' if the trace was picked by real well/seismic "
+            "coordinates, 'manual_override' if a configured trace_index from "
+            "tie_config.yaml was used instead (no coordinates available)."
+        ),
+    )
     twt_ms: list[float]
     synthetic: list[float]
     shifted_synthetic: list[float]

@@ -53,7 +53,9 @@ def process_and_store_segy_bytes(
         loaded.traces, loaded.metadata.sample_interval_ms, config
     )
 
-    repo.save_dataset(loaded.metadata, loaded.traces, loaded.twt_axis_ms, attributes)
+    repo.save_dataset(
+        loaded.metadata, loaded.traces, loaded.twt_axis_ms, loaded.trace_x, loaded.trace_y, attributes
+    )
     return _build_seismic_summary(loaded.metadata, attributes)
 
 
@@ -86,7 +88,7 @@ def list_seismic_summaries(
         result = repo.get_dataset(metadata.dataset_id)
         if result is None:
             continue
-        _, _, _, attributes = result
+        _, _, _, _, _, attributes = result
         summaries.append(_build_seismic_summary(metadata, attributes))
     return summaries
 
@@ -102,7 +104,7 @@ def get_seismic_dataset(dataset_id: str, repo: SeismicRepository | None = None):
 def get_seismic_summary(
     dataset_id: str, repo: SeismicRepository | None = None
 ) -> SeismicSummary:
-    metadata, _, _, attributes = get_seismic_dataset(dataset_id, repo)
+    metadata, _, _, _, _, attributes = get_seismic_dataset(dataset_id, repo)
     return _build_seismic_summary(metadata, attributes)
 
 
@@ -115,7 +117,7 @@ def get_seismic_section(
     the response payload stays a reasonable size regardless of how large the
     underlying SEG-Y file is.
     """
-    metadata, traces, twt_axis_ms, _ = get_seismic_dataset(dataset_id, repo)
+    metadata, traces, twt_axis_ms, _, _, _ = get_seismic_dataset(dataset_id, repo)
 
     n_traces, n_samples = traces.shape
     trace_step = max(1, n_traces // MAX_SECTION_TRACES)
@@ -138,7 +140,7 @@ def get_seismic_section(
 def get_seismic_attribute_series(
     dataset_id: str, repo: SeismicRepository | None = None
 ) -> SeismicAttributesResponse:
-    _, _, _, attributes = get_seismic_dataset(dataset_id, repo)
+    _, _, _, _, _, attributes = get_seismic_dataset(dataset_id, repo)
 
     return SeismicAttributesResponse(
         dataset_id=dataset_id,
@@ -156,7 +158,7 @@ def export_seismic_attributes_csv(
     dataset_id: str, repo: SeismicRepository | None = None
 ) -> str:
     """Export the per-trace computed seismic attributes as CSV text."""
-    _, _, _, attributes = get_seismic_dataset(dataset_id, repo)
+    _, _, _, _, _, attributes = get_seismic_dataset(dataset_id, repo)
     buf = io.StringIO()
     attributes.to_csv(buf, index=False)
     return buf.getvalue()

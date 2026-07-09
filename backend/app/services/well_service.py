@@ -118,6 +118,8 @@ def _build_well_summary(metadata: WellMetadata, df: pd.DataFrame) -> WellSummary
         avg_swe=safe_mean("SWE"),
         net_pay_thickness=net_pay_thickness,
         null_counts=metadata.null_counts,
+        well_x=metadata.well_x,
+        well_y=metadata.well_y,
     )
 
 

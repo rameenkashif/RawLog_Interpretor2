@@ -60,7 +60,16 @@ export default function WellSeismicTie() {
             </div>
           )}
 
-          <div className="flex gap-4 text-xs font-semibold text-ink-muted">
+          <div className="flex flex-wrap gap-4 text-xs font-semibold text-ink-muted">
+            <span
+              className={
+                tieQuery.data.tie_method === "nearest_trace" ? "text-green-600" : "text-orange-600"
+              }
+            >
+              {tieQuery.data.tie_method === "nearest_trace"
+                ? "Nearest-trace (coordinate-based)"
+                : "Manual trace override"}
+            </span>
             <span>Trace index: {tieQuery.data.trace_index}</span>
             {tieQuery.data.distance_m !== null && (
               <span>Distance: {tieQuery.data.distance_m.toFixed(0)} m</span>

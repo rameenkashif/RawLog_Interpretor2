@@ -310,3 +310,15 @@ tune them without touching code. Key notes for future sessions:
   (raw amplitude heatmap + attribute trend charts) plus a compact summary module on the
   dashboard, both linked via a new "Seismic" nav item and 2 new Anthropic agent tools
   (`list_seismic_datasets`, `get_seismic_summary`).
+- **Well/seismic surface coordinates added** (post-well-tie-feature, user request): the raw
+  `Z-02_raw.las` .. `Z-08_raw.las` files now carry `XWELL`/`YWELL` surface coordinates in
+  their `~Well` header section (`las_loader.py` resolves those or common aliases into
+  `WellMetadata.well_x/well_y`, exposed on `WellSummary`). `segy_loader.py` now extracts
+  per-trace coordinates from SEG-Y trace headers (`CDP_X`/`CDP_Y`, falling back to
+  `SourceX`/`SourceY`, with the coordinate scalar applied) into `LoadedSegy.trace_x/trace_y`,
+  persisted by `seismic_repository.py`. `tie_service.py` now prefers a real Euclidean
+  nearest-trace match (`well_seismic_tie.find_nearest_trace_index`) whenever both sides have
+  coordinates, reporting the true `distance_m` and `tie_method="nearest_trace"`; it falls back
+  to the pre-existing manually configured `trace_index` (`tie_config.yaml`,
+  `tie_method="manual_override"`) when either side lacks coordinates. See README.md
+  "Well-to-seismic tie" for details.

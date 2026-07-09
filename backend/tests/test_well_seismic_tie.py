@@ -1,10 +1,13 @@
 import numpy as np
+import pytest
 
 from app.well_seismic_tie import (
+    TieError,
     acoustic_impedance,
     build_synthetic,
     cross_correlate_and_shift,
     depth_to_twt,
+    find_nearest_trace_index,
     reflectivity_series,
     ricker_wavelet,
 )
@@ -65,3 +68,32 @@ def test_build_synthetic_end_to_end_smoke():
     )
     assert len(result.synthetic) == len(twt_axis)
     assert np.isfinite(result.synthetic).any()
+
+
+class TestFindNearestTraceIndex:
+    def test_picks_closest_trace(self):
+        trace_x = np.array([0.0, 100.0, 200.0, 300.0])
+        trace_y = np.array([0.0, 0.0, 0.0, 0.0])
+        idx, dist = find_nearest_trace_index(210.0, 5.0, trace_x, trace_y)
+        assert idx == 2
+        assert dist == pytest.approx(np.hypot(10.0, 5.0))
+
+    def test_exact_match_gives_zero_distance(self):
+        trace_x = np.array([500340.0, 512340.0, 520000.0])
+        trace_y = np.array([6540000.0, 6543210.0, 6550000.0])
+        idx, dist = find_nearest_trace_index(512340.0, 6543210.0, trace_x, trace_y)
+        assert idx == 1
+        assert dist == pytest.approx(0.0)
+
+    def test_raises_when_outside_max_radius(self):
+        trace_x = np.array([0.0, 10000.0])
+        trace_y = np.array([0.0, 0.0])
+        with pytest.raises(TieError):
+            find_nearest_trace_index(5000.0, 5000.0, trace_x, trace_y, max_radius_m=100.0)
+
+    def test_within_max_radius_succeeds(self):
+        trace_x = np.array([0.0, 50.0])
+        trace_y = np.array([0.0, 0.0])
+        idx, dist = find_nearest_trace_index(40.0, 0.0, trace_x, trace_y, max_radius_m=100.0)
+        assert idx == 1
+        assert dist == pytest.approx(10.0)

@@ -20,6 +20,8 @@ export interface WellSummary {
   avg_swe: number | null;
   net_pay_thickness: number | null;
   null_counts: Record<string, number>;
+  well_x: number | null;
+  well_y: number | null;
 }
 
 export interface WellUploadResponse {
@@ -140,6 +142,7 @@ export interface WellSeismicTieResponse {
   dataset_id: string;
   trace_index: number;
   distance_m: number | null;
+  tie_method: "nearest_trace" | "manual_override";
   twt_ms: number[];
   synthetic: number[];
   shifted_synthetic: number[];
