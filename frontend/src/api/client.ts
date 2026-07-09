@@ -12,7 +12,10 @@ import type {
   CrosslineSectionResponse,
   CrossplotResponse,
   DashboardSummary,
+  DensityMethod,
   InlineSectionResponse,
+  NearestTraceResponse,
+  SaveTiePointsRequest,
   SeismicAttributesResponse,
   SeismicSectionResponse,
   SeismicSummary,
@@ -22,7 +25,10 @@ import type {
   SpectralMethod,
   SpectralTraceResponse,
   SurveyInfoResponse,
+  SyntheticSeismogramResponse,
+  TiePointsResponse,
   TimeSliceResponse,
+  WaveletMethod,
   WellCurvesResponse,
   WellSeismicTieResponse,
   WellSummary,
@@ -236,6 +242,61 @@ export async function getSpectralDecompositionTrace(
     { params: { inline_number: inlineNumber, crossline_number: crosslineNumber, method } },
   );
   return data;
+}
+
+// -----------------------------------------------------------------------------
+// Synthetic Seismogram module
+// -----------------------------------------------------------------------------
+export async function generateSyntheticSeismogram(
+  wellId: string,
+  opts: { waveletMethod?: WaveletMethod; waveletFreqHz?: number; densityMethod?: DensityMethod; applySavedTie?: boolean } = {},
+): Promise<SyntheticSeismogramResponse> {
+  const { data } = await http.get<SyntheticSeismogramResponse>(
+    `/api/synthetic/${wellId}/generate`,
+    {
+      params: {
+        wavelet_method: opts.waveletMethod,
+        wavelet_freq_hz: opts.waveletFreqHz,
+        density_method: opts.densityMethod,
+        apply_saved_tie: opts.applySavedTie,
+      },
+    },
+  );
+  return data;
+}
+
+export async function getSyntheticNearestTrace(wellId: string): Promise<NearestTraceResponse> {
+  const { data } = await http.get<NearestTraceResponse>(`/api/synthetic/${wellId}/nearest-trace`);
+  return data;
+}
+
+export async function getSyntheticTiePoints(wellId: string): Promise<TiePointsResponse | null> {
+  const { data } = await http.get<TiePointsResponse | null>(`/api/synthetic/${wellId}/tie`);
+  return data;
+}
+
+export async function saveSyntheticTiePoints(
+  wellId: string,
+  body: SaveTiePointsRequest,
+): Promise<TiePointsResponse> {
+  const { data } = await http.put<TiePointsResponse>(`/api/synthetic/${wellId}/tie`, body);
+  return data;
+}
+
+export async function deleteSyntheticTiePoints(wellId: string): Promise<{ well_id: string; deleted: boolean }> {
+  const { data } = await http.delete<{ well_id: string; deleted: boolean }>(`/api/synthetic/${wellId}/tie`);
+  return data;
+}
+
+export function getSyntheticExportUrl(
+  wellId: string,
+  opts: { waveletMethod?: WaveletMethod; waveletFreqHz?: number; densityMethod?: DensityMethod } = {},
+): string {
+  const params = new URLSearchParams();
+  if (opts.waveletMethod) params.set("wavelet_method", opts.waveletMethod);
+  if (opts.waveletFreqHz) params.set("wavelet_freq_hz", String(opts.waveletFreqHz));
+  if (opts.densityMethod) params.set("density_method", opts.densityMethod);
+  return `${BASE_URL}/api/synthetic/${wellId}/export?${params.toString()}`;
 }
 
 /**

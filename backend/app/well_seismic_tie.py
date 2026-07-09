@@ -8,6 +8,12 @@ it against the nearest real seismic trace.
 This is NOT the amplitude-heuristic proxy in seismic_attributes.py — this is
 the standard geophysical technique (Ricker wavelet synthetic + sonic-based
 depth-time conversion), used because no checkshot survey is available.
+
+Also provides the supporting calculations for the synthetic-seismogram
+module: density estimation when RHOB is unavailable (Gardner's equation,
+locally calibrated, plus a rock-physics alternative), a soft washout/hole-
+quality QC proxy (no CALI curve is available), and wavelet extraction
+(statistical, from a real trace, alongside the Ricker generator above).
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.optimize import curve_fit
 from scipy.signal import correlate
 
 
@@ -37,6 +44,7 @@ def depth_to_twt(
     depth_m: np.ndarray,
     dt_log: np.ndarray,
     dt_unit: str = "us_per_ft",
+    t0_ms: float = 0.0,
 ) -> np.ndarray:
     """
     Integrate the sonic (DT) log to build a depth -> two-way-time relationship,
@@ -44,6 +52,19 @@ def depth_to_twt(
 
     dt_unit: "us_per_ft" (standard imperial sonic units, most common even when
     depth curves are stored in meters) or "us_per_m".
+
+    t0_ms: starting two-way time, added to the whole cumulative curve.
+    IMPORTANT: sonic integration only measures travel time *within the
+    logged interval* -- it has no way to know the two-way time from the
+    surface down to the top of the log (that's exactly what a checkshot
+    provides, and none exists here), so the curve returned with t0_ms=0
+    always starts at 0 ms. A real seismic survey's recorded time axis
+    almost never starts at 0 ms (it starts at some recording delay, e.g.
+    2000+ ms for a deep target) -- resampling a 0-anchored synthetic onto
+    that axis has NO overlap and silently produces an all-zero synthetic.
+    Callers tying against a real seismic volume should pass the volume's
+    own first sample time as a sane (arbitrary, but non-degenerate) default
+    anchor, refinable via manual stretch/squeeze (see apply_stretch_squeeze).
     """
     if len(depth_m) < 2:
         raise TieError("Not enough depth samples to integrate sonic log.")
@@ -61,7 +82,7 @@ def depth_to_twt(
 
     two_way_us = 2.0 * one_way_us
     cum_us = np.concatenate([[0.0], np.cumsum(two_way_us)])
-    return cum_us / 1000.0  # -> ms
+    return t0_ms + cum_us / 1000.0  # -> ms
 
 
 def acoustic_impedance(dt_log: np.ndarray, rhob: np.ndarray, dt_unit: str = "us_per_ft") -> np.ndarray:
@@ -85,13 +106,179 @@ def reflectivity_series(ai: np.ndarray) -> np.ndarray:
 
 
 def ricker_wavelet(freq_hz: float, dt_s: float, length_s: float = 0.128) -> tuple[np.ndarray, np.ndarray]:
-    """Standard zero-phase Ricker wavelet, used since no statistical wavelet
-    extraction is implemented (would require a longer real seismic window
-    plus spectral analysis — a documented future enhancement)."""
+    """Standard zero-phase Ricker wavelet -- a fallback/comparison option
+    alongside extract_statistical_wavelet() below when a real seismic trace
+    at the well location is available to extract from."""
     t = np.arange(-length_s / 2, length_s / 2, dt_s)
     a = (np.pi * freq_hz * t) ** 2
     w = (1.0 - 2.0 * a) * np.exp(-a)
     return t, w
+
+
+def extract_statistical_wavelet(
+    trace: np.ndarray, dt_ms: float, length_ms: float = 128.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Statistical (zero-phase) wavelet extraction from a real seismic trace
+    segment: take the trace's own average amplitude spectrum, assume zero
+    phase, and inverse-transform -- the standard "statistical" approach (as
+    opposed to deterministic extraction, which needs a trusted reflectivity
+    series to solve for phase too). A reasonable default alongside the
+    Ricker generator above when a real trace near the well is available.
+
+    Returns (t_ms, wavelet) -- t_ms centered at zero, same convention as
+    ricker_wavelet(), wavelet normalized to unit peak amplitude.
+    """
+    trace = np.nan_to_num(np.asarray(trace, dtype=float))
+    if len(trace) < 8:
+        raise TieError("Trace too short for statistical wavelet extraction (need >= 8 samples).")
+
+    spectrum = np.fft.rfft(trace * np.hanning(len(trace)))
+    amplitude = np.abs(spectrum)
+    # Zero-phase: inverse-transform the amplitude spectrum alone (phase
+    # discarded), then center it at zero lag like ricker_wavelet() does.
+    wavelet_full = np.fft.fftshift(np.fft.irfft(amplitude, n=len(trace)))
+
+    n_samples = max(3, int(round(length_ms / dt_ms)))
+    center = len(wavelet_full) // 2
+    half = n_samples // 2
+    wavelet = wavelet_full[max(0, center - half) : center + half + 1]
+
+    peak = np.max(np.abs(wavelet))
+    if peak > 0:
+        wavelet = wavelet / peak
+
+    t_ms = (np.arange(len(wavelet)) - len(wavelet) // 2) * dt_ms
+    return t_ms, wavelet
+
+
+def wavelet_spectra(wavelet: np.ndarray, dt_ms: float) -> dict:
+    """Amplitude and (unwrapped, degrees) phase spectrum of a wavelet, so a
+    geophysicist can QC an extracted or Ricker wavelet's phase behavior
+    before trusting the synthetic it produces."""
+    n = len(wavelet)
+    spectrum = np.fft.rfft(wavelet)
+    freq_hz = np.fft.rfftfreq(n, d=dt_ms / 1000.0)
+    amplitude = np.abs(spectrum)
+    phase_deg = np.degrees(np.unwrap(np.angle(spectrum)))
+    return {"freq_hz": freq_hz, "amplitude": amplitude, "phase_deg": phase_deg}
+
+
+# ---- Density estimation (when RHOB is unavailable) --------------------------
+def gardner_density(velocity_m_s: np.ndarray, a: float = 0.31, b: float = 0.25) -> np.ndarray:
+    """Gardner's equation: rho = a * V^b (metric form -- V in m/s, rho in
+    g/cc). Fallback density estimate for a well with no RHOB curve. Defaults
+    (a=0.31, b=0.25) are generic textbook constants -- prefer
+    calibrate_gardner_coefficients() against a well with real RHOB in the
+    same field instead of these where possible."""
+    return a * np.power(velocity_m_s, b)
+
+
+def calibrate_gardner_coefficients(
+    velocity_m_s: np.ndarray, rhob: np.ndarray, a0: float = 0.31, b0: float = 0.25
+) -> tuple[float, float]:
+    """Fit Gardner's a, b coefficients to a well's own real velocity (from
+    DT) vs. RHOB via scipy.optimize.curve_fit, so a future density-less well
+    in the same field uses field-calibrated coefficients rather than generic
+    textbook constants. Requires at least 20 valid samples; raises TieError
+    if there isn't enough data or the fit doesn't converge."""
+    velocity_m_s = np.asarray(velocity_m_s, dtype=float)
+    rhob = np.asarray(rhob, dtype=float)
+    valid = np.isfinite(velocity_m_s) & np.isfinite(rhob) & (velocity_m_s > 0) & (rhob > 0)
+    velocity_m_s, rhob = velocity_m_s[valid], rhob[valid]
+    if valid.sum() < 20:
+        raise TieError(
+            f"Only {int(valid.sum())} valid velocity/RHOB sample pairs -- need at least 20 "
+            "to calibrate Gardner's coefficients."
+        )
+    try:
+        (a, b), _ = curve_fit(gardner_density, velocity_m_s, rhob, p0=[a0, b0], maxfev=5000)
+    except RuntimeError as exc:
+        raise TieError(f"Gardner coefficient calibration did not converge: {exc}") from exc
+    return float(a), float(b)
+
+
+def rock_physics_density(
+    vsh: np.ndarray,
+    phie: np.ndarray,
+    rho_matrix: float = 2.65,
+    rho_shale: float = 2.75,
+    rho_fluid: float = 1.0,
+) -> np.ndarray:
+    """Alternative density estimate from existing VSH/PHIE outputs, as a
+    comparison against Gardner's equation or real RHOB: blends a sand-matrix
+    and shale-matrix density by VSH (Vsh-derived mineralogy), then dilutes
+    by pore fluid via PHIE --
+        rho = (rho_matrix*(1-VSH) + rho_shale*VSH) * (1-PHIE) + rho_fluid*PHIE
+    """
+    vsh = np.asarray(vsh, dtype=float)
+    phie = np.asarray(phie, dtype=float)
+    rho_matrix_eff = rho_matrix * (1.0 - vsh) + rho_shale * vsh
+    return rho_matrix_eff * (1.0 - phie) + rho_fluid * phie
+
+
+# ---- Washout / hole-quality QC proxy (no CALI available) --------------------
+def washout_qc_flag(
+    nphi: np.ndarray,
+    rhob: np.ndarray,
+    dt_log: np.ndarray,
+    rhob_matrix: float = 2.65,
+    rhob_fluid: float = 1.0,
+    crossover_threshold: float = 0.15,
+    dt_zscore_threshold: float = 3.0,
+    dt_rolling_window: int = 21,
+) -> np.ndarray:
+    """Soft QC proxy flagging depth intervals as "possible washout /
+    unreliable interval" -- NOT a real caliper substitute (no CALI curve is
+    available in these wells), just a heuristic. Flags a depth if EITHER:
+
+    - NPHI-RHOB crossover: density porosity ((rhob_matrix-RHOB)/(rhob_matrix
+      -rhob_fluid)) disagrees with NPHI by more than crossover_threshold --
+      an enlarged/washed-out hole typically makes the neutron tool read
+      spuriously high porosity while the density tool (sensitive to
+      standoff) reads erratically.
+    - DT spikes: DT deviates from a local rolling median by more than
+      dt_zscore_threshold rolling standard deviations -- washouts often show
+      up as erratic sonic cycle-skipping.
+
+    Returns a boolean array, same length as the inputs.
+    """
+    nphi = np.asarray(nphi, dtype=float)
+    rhob = np.asarray(rhob, dtype=float)
+    dt_log = np.asarray(dt_log, dtype=float)
+
+    phid = (rhob_matrix - rhob) / (rhob_matrix - rhob_fluid)
+    with np.errstate(invalid="ignore"):
+        crossover_flag = np.abs(phid - nphi) > crossover_threshold
+
+    window = dt_rolling_window if dt_rolling_window % 2 == 1 else dt_rolling_window + 1
+    if len(dt_log) < window:
+        dt_spike_flag = np.zeros(len(dt_log), dtype=bool)
+    else:
+        half = window // 2
+        padded = np.pad(dt_log, (half, half), mode="edge")
+        windows = np.lib.stride_tricks.sliding_window_view(padded, window)
+        with np.errstate(invalid="ignore"):
+            rolling_median = np.nanmedian(windows, axis=1)
+            rolling_std = np.nanstd(windows, axis=1)
+        # Floor the rolling std at a fraction of the whole trace's std --
+        # edge-replication padding (and any genuinely flat sub-interval)
+        # can otherwise make a locally near-zero std amplify a tiny, benign
+        # deviation into a huge z-score. Also never flag the first/last
+        # half-window of samples: their rolling window is built partly from
+        # padded (not real) values, so a "spike" there is at least as
+        # likely to be a padding artifact as a real washout.
+        global_std = np.nanstd(dt_log)
+        std_floor = 0.1 * global_std if global_std > 0 else 1e-6
+        rolling_std = np.maximum(rolling_std, std_floor)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            dt_zscore = np.abs(dt_log - rolling_median) / rolling_std
+        dt_spike_flag = np.nan_to_num(dt_zscore, nan=0.0) > dt_zscore_threshold
+        dt_spike_flag[:half] = False
+        dt_spike_flag[len(dt_spike_flag) - half :] = False
+
+    flag = crossover_flag | dt_spike_flag
+    valid = np.isfinite(nphi) & np.isfinite(rhob) & np.isfinite(dt_log)
+    return flag & valid
 
 
 def build_synthetic(
@@ -102,16 +289,30 @@ def build_synthetic(
     seismic_twt_axis_ms: np.ndarray,
     wavelet_freq_hz: float = 30.0,
     dt_unit: str = "us_per_ft",
+    t0_ms: float | None = None,
 ) -> SyntheticResult:
     """Full pipeline: sonic integration -> impedance -> reflectivity ->
-    convolve with Ricker wavelet -> resample onto the seismic's own time axis."""
+    convolve with Ricker wavelet -> resample onto the seismic's own time axis.
+
+    t0_ms: starting two-way time for the sonic-integrated curve (see
+    depth_to_twt's docstring for why this matters). Defaults to
+    seismic_twt_axis_ms[0] -- without an anchor, the well's own integrated
+    curve starts at 0 ms and, resampled onto a real seismic survey's
+    non-zero-delay time axis, has NO overlap and silently produces an
+    all-zero synthetic (correlation 0). Anchoring to the seismic axis's own
+    start is an arbitrary but non-degenerate default; refine it with manual
+    stretch/squeeze (apply_stretch_squeeze) once a real tie is available.
+    """
     valid = np.isfinite(depth_m) & np.isfinite(dt_log) & np.isfinite(rhob) & (dt_log > 0) & (rhob > 0)
     depth_m, dt_log, rhob = depth_m[valid], dt_log[valid], rhob[valid]
 
     if len(depth_m) < 10:
         raise TieError("Too few valid DT/RHOB samples after removing nulls/invalid values.")
 
-    twt_ms = depth_to_twt(depth_m, dt_log, dt_unit=dt_unit)
+    if t0_ms is None:
+        t0_ms = float(seismic_twt_axis_ms[0]) if len(seismic_twt_axis_ms) else 0.0
+
+    twt_ms = depth_to_twt(depth_m, dt_log, dt_unit=dt_unit, t0_ms=t0_ms)
     ai = acoustic_impedance(dt_log, rhob, dt_unit=dt_unit)
     refl = reflectivity_series(ai)
     refl_twt_ms = (twt_ms[1:] + twt_ms[:-1]) / 2.0  # midpoints, matches refl length
@@ -161,6 +362,26 @@ def find_nearest_trace_index(
             f"Nearest trace is {dist:.0f} m away, outside max_tie_search_radius_m={max_radius_m}."
         )
     return idx, dist
+
+
+def apply_stretch_squeeze(
+    depth_m: np.ndarray, twt_ms: np.ndarray, tie_points: list[tuple[float, float]]
+) -> np.ndarray:
+    """Apply manual stretch/squeeze correction to a depth-derived TWT curve:
+    tie_points is a list of (md_m, time_shift_ms) control points a user has
+    picked to nudge the sonic-integration time-depth relationship (no real
+    checkshot exists to calibrate it otherwise). The shift is interpolated
+    piecewise-linearly by depth and added to twt_ms; outside the control
+    points' MD range, the shift holds constant at the nearest endpoint
+    (np.interp's default behavior) rather than extrapolating.
+    """
+    if not tie_points:
+        return twt_ms
+    pts = sorted(tie_points, key=lambda p: p[0])
+    mds = np.array([p[0] for p in pts], dtype=float)
+    shifts = np.array([p[1] for p in pts], dtype=float)
+    shift_at_depth = np.interp(depth_m, mds, shifts)
+    return twt_ms + shift_at_depth
 
 
 def cross_correlate_and_shift(synthetic: np.ndarray, real: np.ndarray, dt_ms: float) -> dict:

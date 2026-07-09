@@ -16,6 +16,10 @@ backend/data/seismic_processed/*.npz
 backend/data/seismic_processed/*.parquet
 backend/data/seismic_processed/*.meta.json
 
+# Manual well-tie stretch/squeeze control points (user-adjustable state, one
+# file per well -- regenerable via the UI, not source data)
+backend/data/synthetic_processed/*.json
+
 # Node / frontend
 frontend/node_modules/
 frontend/dist/

@@ -355,3 +355,26 @@ tune them without touching code. Key notes for future sessions:
   reusing `SeismicSectionView`'s Plotly heatmap pattern with a debounced frequency slider and
   STFT/CWT toggle. See README.md "Seismic Visualization" for the window/wavelet parameter
   tradeoffs.
+- **Real well header data + Synthetic Seismogram module added** (user-supplied LAS files +
+  spec). The user's new LAS files (replacing the old `Z-0X_raw.las` -- same raw log curves,
+  byte-for-byte identical, just now with real `X`/`Y`/`KB`/`TD` header fields) resolved the
+  earlier CRS-mismatch placeholder noted above: those fields are labeled `.m` but are actually
+  in **feet** (confirmed via `TD/STOP` ratio ≈3.3-3.5 for all 7 wells, and `X`/`Y`×0.3048
+  landing inside `origional.segy`'s real extent for all 7) -- not a different CRS as previously
+  assumed. `las_loader._standardize_well_header()` now detects and corrects this per well
+  (not hardcoded), so the existing well-tie features work against real coordinates.
+  New **Synthetic Seismogram module** (`/api/synthetic/*`, `/synthetic` page) reuses
+  `well_seismic_tie.py` + `seismic_processor.SegyVolume` rather than rebuilding a third tie
+  pipeline, adding: selectable density (real RHOB / locally-calibrated Gardner /
+  rock-physics), selectable wavelet (statistical extraction from the nearest real trace /
+  Ricker) with amplitude+phase spectra, a washout QC proxy (`washout_qc_flag`, no CALI
+  available), and persisted manual stretch/squeeze (`synthetic_tie_repository.py`,
+  `apply_stretch_squeeze`). **Caught and fixed a real, previously-latent bug in the process**:
+  `well_seismic_tie.build_synthetic()`'s sonic-integrated time-depth curve always started at 0
+  ms and had zero overlap with any real (non-zero-delay) seismic time axis, silently producing
+  an all-zero synthetic (correlation 0) whenever tied against a realistic survey -- undetected
+  because the only existing test asserted `isfinite(...)`, trivially true for zero. Now
+  auto-anchors to the seismic volume's own first sample time by default (`t0_ms` parameter),
+  fixing this for `build_synthetic`'s other two callers (`tie_service.py`,
+  `seismic_processor.get_well_tie`) as well, not just the new module. See README.md "Synthetic
+  Seismogram module" for full details.

@@ -2,6 +2,7 @@ import { NavLink, Route, Routes } from "react-router-dom";
 import DashboardPage from "./pages/DashboardPage";
 import WellDetailPage from "./pages/WellDetailPage";
 import SeismicPage from "./pages/SeismicPage";
+import SyntheticSeismogramPage from "./pages/SyntheticSeismogramPage";
 import ErrorBoundary from "./components/ErrorBoundary";
 
 /**
@@ -51,6 +52,18 @@ export default function App() {
               >
                 Seismic
               </NavLink>
+              <NavLink
+                to="/synthetic"
+                className={({ isActive }) =>
+                  `px-3.5 py-1.5 rounded-full text-sm font-medium transition-all ${
+                    isActive
+                      ? "bg-accent text-white shadow-card"
+                      : "text-ink-muted hover:bg-surface-sunken"
+                  }`
+                }
+              >
+                Synthetic Seismogram
+              </NavLink>
             </nav>
           </div>
 
@@ -77,6 +90,7 @@ export default function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/wells/:wellId" element={<WellDetailPage />} />
             <Route path="/seismic" element={<SeismicPage />} />
+            <Route path="/synthetic" element={<SyntheticSeismogramPage />} />
           </Routes>
         </ErrorBoundary>
       </main>

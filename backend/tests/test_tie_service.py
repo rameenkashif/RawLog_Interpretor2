@@ -6,10 +6,12 @@ prefer a real spatial nearest-trace match when both the well (LAS header)
 and the seismic dataset (trace headers) carry coordinates, otherwise fall
 back to the manually configured trace_index in tie_config.yaml.
 
-Uses real LAS bytes (Z-02_raw.las, which has XWELL/YWELL coordinates) and a
-synthetic SEG-Y file written with segyio so the whole pipeline (loaders ->
-repositories -> tie_service) is exercised, without touching the shared
-backend/data/processed or backend/data/seismic_processed caches.
+Uses real LAS bytes (Z-02_raw.las, whose X/Y/KB/TD header fields are
+unit-standardized from feet to meters on load -- see test_las_loader.py's
+TestUnitStandardization) and a synthetic SEG-Y file written with segyio so
+the whole pipeline (loaders -> repositories -> tie_service) is exercised,
+without touching the shared backend/data/processed or
+backend/data/seismic_processed caches.
 """
 
 from __future__ import annotations

@@ -268,3 +268,87 @@ export const CURVE_NAMES = [
 ] as const;
 
 export type CurveName = (typeof CURVE_NAMES)[number];
+
+// -----------------------------------------------------------------------------
+// Synthetic Seismogram module
+// -----------------------------------------------------------------------------
+export type DensityMethod = "rhob" | "gardner" | "rock_physics";
+export type WaveletMethod = "statistical" | "ricker";
+
+export interface WellHeaderQc {
+  well_x: number | null;
+  well_y: number | null;
+  kb_m: number | null;
+  td_m: number | null;
+  coordinate_unit_detected: "feet" | "meters" | null;
+  unit_conversion_applied: boolean;
+  td_stop_ratio: number | null;
+}
+
+export interface GardnerCoefficients {
+  a: number;
+  b: number;
+  calibrated: boolean;
+}
+
+export interface TiePointModel {
+  md_m: number;
+  time_shift_ms: number;
+}
+
+export interface SyntheticSeismogramResponse {
+  well_id: string;
+  well_header: WellHeaderQc;
+  vertical_assumption_note: string;
+  time_depth_note: string;
+  density_method: DensityMethod;
+  density_note: string;
+  gardner_coefficients: GardnerCoefficients | null;
+  nearest_inline: number;
+  nearest_crossline: number;
+  distance_m: number;
+  depth_m: number[];
+  twt_ms: number[];
+  acoustic_impedance: number[];
+  reflectivity_depth_m: number[];
+  reflectivity: number[];
+  reflectivity_twt_ms: number[];
+  washout_depth_m: number[];
+  washout_flag: boolean[];
+  wavelet_method: WaveletMethod;
+  wavelet_freq_hz: number;
+  wavelet_t_ms: number[];
+  wavelet_amplitude: number[];
+  wavelet_spectrum_freq_hz: number[];
+  wavelet_spectrum_amplitude: number[];
+  wavelet_spectrum_phase_deg: number[];
+  seismic_twt_ms: number[];
+  synthetic: number[];
+  shifted_synthetic: number[];
+  real_trace: number[];
+  best_shift_ms: number;
+  correlation: number;
+  applied_tie_points: TiePointModel[];
+}
+
+export interface SaveTiePointsRequest {
+  points: TiePointModel[];
+  wavelet_method: WaveletMethod;
+  wavelet_freq_hz: number;
+}
+
+export interface TiePointsResponse {
+  well_id: string;
+  points: TiePointModel[];
+  wavelet_method: WaveletMethod;
+  wavelet_freq_hz: number;
+  segy_filename: string | null;
+}
+
+export interface NearestTraceResponse {
+  well_id: string;
+  trace_index: number;
+  inline: number;
+  crossline: number;
+  distance_m: number;
+}

@@ -72,3 +72,59 @@ class TestWellCoordinates:
         loaded = load_las_file(path)
         assert loaded.metadata.well_x is None
         assert loaded.metadata.well_y is None
+
+
+class TestUnitStandardization:
+    """STOP is fixed at 101.0 m by _write_las's minimal well section."""
+
+    def test_feet_detected_and_converted(self):
+        # TD=330 ft / STOP=101 m -> ratio 3.267, squarely in the feet range.
+        path = _write_las(
+            "X   .m 1000000.0 :\nY   .m 2000000.0 :\nKB  .m 150.0 :\nTD  .m 330.0 :\n"
+        )
+        loaded = load_las_file(path)
+        m = loaded.metadata
+        assert m.coordinate_unit_detected == "feet"
+        assert m.unit_conversion_applied is True
+        assert m.well_x == pytest.approx(1000000.0 * 0.3048)
+        assert m.well_y == pytest.approx(2000000.0 * 0.3048)
+        assert m.kb_m == pytest.approx(150.0 * 0.3048)
+        assert m.td_m == pytest.approx(330.0 * 0.3048)
+        assert m.td_stop_ratio == pytest.approx(330.0 / 101.0)
+
+    def test_already_meters_not_converted(self):
+        # TD=105 m / STOP=101 m -> ratio ~1.04, not feet-like.
+        path = _write_las("X   .m 500.0 :\nY   .m 600.0 :\nKB  .m 40.0 :\nTD  .m 105.0 :\n")
+        loaded = load_las_file(path)
+        m = loaded.metadata
+        assert m.coordinate_unit_detected == "meters"
+        assert m.unit_conversion_applied is False
+        assert m.well_x == pytest.approx(500.0)
+        assert m.well_y == pytest.approx(600.0)
+        assert m.kb_m == pytest.approx(40.0)
+        assert m.td_m == pytest.approx(105.0)
+
+    def test_missing_td_leaves_unvalidated(self):
+        path = _write_las("X   .m 500.0 :\nY   .m 600.0 :\n")
+        loaded = load_las_file(path)
+        m = loaded.metadata
+        assert m.coordinate_unit_detected is None
+        assert m.unit_conversion_applied is False
+        assert m.td_stop_ratio is None
+        # No TD/KB to validate against -- X/Y pass through unconverted.
+        assert m.well_x == pytest.approx(500.0)
+
+    def test_real_z02_well_detected_as_feet(self):
+        """End-to-end check against the actual shipped LAS file."""
+        real_path = (
+            Path(__file__).resolve().parents[1] / "data" / "raw" / "Z-02_raw.las"
+        )
+        loaded = load_las_file(real_path)
+        m = loaded.metadata
+        assert m.coordinate_unit_detected == "feet"
+        assert m.unit_conversion_applied is True
+        # Converted X/Y must land inside the real SEG-Y survey's known extent
+        # (X: 363124-370654, Y: 2949830-2957150) -- this is the whole point
+        # of the conversion, so assert it rather than just the raw math.
+        assert 363124.0 <= m.well_x <= 370654.0
+        assert 2949830.0 <= m.well_y <= 2957150.0

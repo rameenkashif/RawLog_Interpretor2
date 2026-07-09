@@ -21,20 +21,31 @@ import pytest
 
 segyio = pytest.importorskip("segyio")
 
+from app.las_loader import FT_TO_M
 from app.repository import FileWellRepository
 from app.services import seismic_processor as sp
 from app.services import well_service
 
 
 def _set_las_coordinate(las_text: str, mnemonic: str, value: float) -> str:
-    """Overwrite an XWELL/YWELL header value in raw LAS text, regardless of
-    what value/comment is currently there -- regex on the mnemonic rather
-    than an exact-string match on the old value, so this doesn't silently
-    no-op if the checked-in LAS file's placeholder coordinates change."""
-    pattern = re.compile(rf"({re.escape(mnemonic)}\.m\s+)[-\d.]+")
-    new_text, n = pattern.subn(rf"\g<1>{value:.2f}", las_text, count=1)
-    assert n == 1, f"Expected exactly one {mnemonic}.m line to replace, found {n}"
+    """Overwrite a ~Well section header value (e.g. X, Y, KB, TD) in raw LAS
+    text, regardless of what value/whitespace/unit is currently there --
+    regex on the mnemonic plus its (variable-width) unit field rather than
+    an exact-string match on the old value, so this doesn't silently no-op
+    if the checked-in LAS file's coordinates change."""
+    pattern = re.compile(rf"^{re.escape(mnemonic)}\s*\.\S*\s+[-\d.]+", re.MULTILINE)
+    new_text, n = pattern.subn(f"{mnemonic}.m {value:.2f}", las_text, count=1)
+    assert n == 1, f"Expected exactly one {mnemonic} header line to replace, found {n}"
     return new_text
+
+
+def _set_las_coordinate_meters(las_text: str, mnemonic: str, meters: float) -> str:
+    """Like _set_las_coordinate, but for the real Z-02 file's X/Y specifically:
+    that file's X/Y/KB/TD are stored in feet (mislabeled '.m') and get
+    auto-converted to meters by las_loader's unit standardization (detected
+    via its TD/STOP ratio -- see test_las_loader.py), so this injects the
+    feet-equivalent of the desired final meters value."""
+    return _set_las_coordinate(las_text, mnemonic, meters / FT_TO_M)
 
 RAW_LAS_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
 Z02_PATH = RAW_LAS_DIR / "Z-02_raw.las"
@@ -178,10 +189,12 @@ class TestWellTie:
         return well_service.process_and_store_las_bytes(las_bytes, "Z-02_raw.las", repo=well_repo)
 
     def test_well_far_outside_survey_raises_crs_mismatch(self, volume, loaded_well):
-        # Z-02's LAS coordinates are a placeholder "field local grid" far
-        # from this synthetic survey's SourceX/Y range -- get_well_tie must
-        # flag this as a likely CRS mismatch rather than silently tying to
-        # whatever the nearest (very distant) trace happens to be.
+        # Z-02's real (unit-standardized) coordinates are ~700m past this
+        # synthetic test survey's narrow SourceX/Y range (by construction --
+        # see INLINES/CROSSLINES/source_x_base/source_y_base above) --
+        # get_well_tie must flag this as a likely CRS mismatch rather than
+        # silently tying to whatever the nearest (very distant) trace
+        # happens to be.
         with pytest.raises(sp.CrsMismatchError):
             volume.get_well_tie(loaded_well.well_id)
 
@@ -194,12 +207,12 @@ class TestWellTie:
             well_service, "get_well_curves",
             lambda well_id, repo=None, _f=well_service.get_well_curves: _f(well_id, repo=well_repo),
         )
-        # Patch the LAS bytes' XWELL/YWELL to land inside this synthetic
-        # survey's coordinate extent before loading, simulating a well
-        # whose coordinates really are in the same CRS as the seismic.
+        # Patch the LAS bytes' X/Y to land inside this synthetic survey's
+        # coordinate extent before loading, simulating a well whose
+        # coordinates really are in the same CRS as the seismic.
         las_text = Z02_PATH.read_text()
-        las_text = _set_las_coordinate(las_text, "XWELL", 366840.0)
-        las_text = _set_las_coordinate(las_text, "YWELL", 2950275.0)
+        las_text = _set_las_coordinate_meters(las_text, "X", 366840.0)
+        las_text = _set_las_coordinate_meters(las_text, "Y", 2950275.0)
         result = well_service.process_and_store_las_bytes(
             las_text.encode(), "Z-02_raw.las", repo=well_repo
         )
@@ -221,8 +234,8 @@ class TestWellTie:
             lambda well_id, repo=None, _f=well_service.get_well_curves: _f(well_id, repo=well_repo),
         )
         las_text = Z02_PATH.read_text()
-        las_text = _set_las_coordinate(las_text, "XWELL", 366840.0)
-        las_text = _set_las_coordinate(las_text, "YWELL", 2950275.0)
+        las_text = _set_las_coordinate_meters(las_text, "X", 366840.0)
+        las_text = _set_las_coordinate_meters(las_text, "Y", 2950275.0)
         result = well_service.process_and_store_las_bytes(
             las_text.encode(), "Z-02_raw.las", repo=well_repo
         )

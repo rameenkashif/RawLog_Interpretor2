@@ -350,21 +350,92 @@ coordinate extent. If they don't, `get_well_tie` raises a clear error explaining
 almost always a CRS mismatch (e.g. two different projections/grids, not just a units issue)
 rather than silently picking a distant, meaningless "nearest" trace.
 
-**Current state of Z-02..Z-08's coordinates, and why they aren't final:** the field's well
-database (GeoGraphix export) gives real surface X/Y for each well, but those values (X ~
-1.20-1.21M, Y ~9.68-9.70M) are in a visibly different coordinate system than `origional.segy`'s
-trace coordinates (X ~363k-371k, Y ~2.95M-2.96M) -- not just a constant offset (a real
-projection/CRS difference, confirmed by the two datasets' coordinate *ranges* not scaling the
-same way, which a simple false-origin shift would preserve). Converting between them correctly
-needs the source and target CRS/projection definitions (e.g. via `pyproj`), which aren't
-available yet. Until then, `XWELL`/`YWELL` hold **placeholder coordinates inside
-`origional.segy`'s real survey footprint**, rescaled from the real well database so the wells'
-*relative* positions roughly match the real field layout -- close enough for the well-tie
-feature to run end-to-end and return a real nearest trace, but the absolute location and the
-resulting tie should not be trusted as geophysically correct until the real well coordinates
-are converted into the SEG-Y's CRS. Swap in the converted real coordinates in
-`backend/data/raw/Z-0X_raw.las`'s `~Well` section (see `las_loader.py` for the accepted
-mnemonics) once the CRS is known, and re-run `bulk_load_wells.py`.
+**Current state of Z-02..Z-08's coordinates (resolved):** the field's well database
+(GeoGraphix export) provides real surface `X`/`Y`/`KB`/`TD` for each well, shipped directly in
+`backend/data/raw/Z-0X_raw.las`'s `~Well` section. Those fields are labeled `.m` in the LAS
+header but are actually in **feet** -- confirmed by inspection (see "Unit standardization"
+below) and by the fact that `X`/`Y` converted via ×0.3048 land squarely inside
+`origional.segy`'s real survey extent (X ~363k-371k, Y ~2.95M-2.96M) for all 7 wells. This is
+not a CRS/projection mismatch; it's a unit-labeling error in the source export.
+`las_loader.py`'s `_standardize_well_header()` detects and corrects this automatically per
+well (see below), so the well-tie features now work against real, correctly-converted
+coordinates -- no more placeholder/rescaled values.
+
+### Synthetic Seismogram module
+
+A third well-tie surface, at `/api/synthetic/*` and the frontend's **Synthetic Seismogram**
+page (`/synthetic`). Reuses the same computational core as "Well-to-seismic tie" and "Seismic
+Visualization" above (`well_seismic_tie.py`, `seismic_processor.SegyVolume`) rather than
+duplicating it, and adds the pieces those two don't have: unit-standardization QC reporting,
+selectable density estimation, selectable/inspectable wavelets, a washout QC proxy, and
+persisted manual stretch/squeeze.
+
+**Unit standardization (`las_loader._standardize_well_header`):** `X`, `Y`, `KB` (Kelly
+Bushing elevation), and `TD` (total depth) in the raw LAS files are labeled `.m` but are
+actually in **feet** (see above). This is detected per well, not hardcoded: the `TD/STOP`
+ratio is computed (`STOP` -- the curve data's own stop depth -- is always genuinely in
+meters), and a ratio in the range ~2.8-4.2 (bracketing the feet-to-meters factor 3.28084 with
+margin for TD normally sitting a bit deeper than the logged interval's STOP) means all four
+fields are feet and get converted via ×0.3048; otherwise they're left as-is. `WellSummary`
+exposes `coordinate_unit_detected` ("feet"/"meters"/`null` if unvalidated),
+`unit_conversion_applied`, and `td_stop_ratio` so this is visible, not silent.
+
+**Density estimation** (`well_seismic_tie.py`), selectable per request:
+- `rhob` (default) -- the well's real RHOB curve.
+- `gardner` -- Gardner's equation (`rho = a * V^b`), with coefficients **locally calibrated**
+  against the well's own real RHOB via `scipy.optimize.curve_fit` when at least 20 valid
+  samples exist, falling back to generic textbook constants (`a=0.31, b=0.25`) otherwise --
+  the response's `gardner_coefficients.calibrated` flag says which happened.
+- `rock_physics` -- an alternative estimate from the well's own VSH/PHIE outputs (matrix/shale/
+  fluid density mixing model), for comparison against Gardner or real RHOB.
+
+**Wavelet**, selectable per request:
+- `statistical` (default) -- extracted from the real trace nearest the well: the trace's own
+  average amplitude spectrum, assumed zero-phase, inverse-transformed and windowed.
+- `ricker` -- the standard zero-phase Ricker generator (adjustable dominant frequency), same as
+  the other two tie features use.
+
+Both the wavelet's time-domain amplitude and its amplitude/phase spectra are returned, so a
+mis-behaved phase (e.g. from a noisy statistical extraction) is visible before trusting the
+resulting synthetic.
+
+**Washout / hole-quality QC proxy** (`well_seismic_tie.washout_qc_flag`): no CALI curve exists
+for these wells, so depth samples are flagged as "possible washout / unreliable interval" if
+either (a) density porosity and NPHI disagree by more than a threshold (an enlarged/washed-out
+hole reads erratically on both tools), or (b) DT deviates from a local rolling median by more
+than a z-score threshold (washouts often cause sonic cycle-skipping). This is a soft heuristic,
+explicitly labeled as such -- not a real caliper substitute.
+
+**Depth-time anchoring (important limitation, fixed post-launch):** sonic integration
+(`depth_to_twt`) only measures travel time *within the logged interval* -- it has no way to
+know the two-way time from the surface down to the top of the log (that's exactly what a
+checkshot provides, and none exists here), so on its own the curve always starts at 0 ms. A
+real seismic survey's recorded time axis almost never starts at 0 ms (`origional.segy` starts
+at 2030 ms). Early in this module's development, the synthetic was resampled onto the real
+seismic axis with **no anchoring**, so it had zero time overlap and silently came out all-zero
+(`correlation: 0.0`) whenever tied against a survey with a non-zero recording delay -- exactly
+the real production case, though it went unnoticed because the existing test for this only
+checked `isfinite(...)`, which is trivially true for zero. `depth_to_twt`/`build_synthetic`
+now accept a `t0_ms` anchor and default it to the seismic volume's own first sample time
+(`seismic_twt_axis_ms[0]`) when not given -- an arbitrary but non-degenerate starting point,
+refined from there via manual stretch/squeeze. This fix applies to `well_seismic_tie.
+build_synthetic()` itself, so it also fixes the same latent issue in "Well-to-seismic tie" and
+"Seismic Visualization"'s well-tie endpoints above, not just this module.
+
+**Manual stretch/squeeze:** since no real checkshot exists, a user can nudge the time-depth
+curve with MD → time-shift control points (piecewise-linear interpolation between points,
+held constant beyond the outermost ones -- `well_seismic_tie.apply_stretch_squeeze`).
+Persisted per well in `backend/data/synthetic_processed/{well_id}.tie.json`
+(`synthetic_tie_repository.py`, gitignored -- user-adjustable state, not source data) via
+`PUT`/`GET`/`DELETE /api/synthetic/{well_id}/tie`, so adjustments survive across sessions
+instead of recomputing from scratch. The frontend exposes this as an editable control-point
+table (add/edit/remove MD+shift pairs, apply & save, clear) rather than true drag-on-chart
+interaction -- functionally equivalent without the custom drag-handling a chart-based picker
+would need.
+
+**Vertical assumption:** no deviation survey exists in any of Z-02..Z-08's LAS files, so
+MD = TVD for all of them (same placeholder as `petrophysics.compute_md_tvd`) -- surfaced as a
+static badge, not buried.
 
 ---
 
@@ -394,6 +465,10 @@ mnemonics) once the CRS is known, and re-run `bulk_load_wells.py`.
 | GET | `/api/seismic/spectrum?inline_number=...` | Average amplitude spectrum (whole volume or one inline) + dominant frequency/bandwidth/S-N-proxy stats |
 | GET | `/api/seismic/spectral-decomp/inline/{inline_number}?method=stft\|cwt&frequency_hz=...` | Spectral decomposition: full time x freq x position volume if `frequency_hz` omitted, or a single frequency's energy across the section if given (fast path for a slider) |
 | GET | `/api/seismic/spectral-decomp/trace?inline_number=...&crossline_number=...&method=stft\|cwt` | Spectral decomposition (time x freq) for a single trace |
+| GET | `/api/synthetic/{well_id}/generate?wavelet_method=&wavelet_freq_hz=&density_method=` | Full synthetic seismogram + well tie (see "Synthetic Seismogram module" below) |
+| GET | `/api/synthetic/{well_id}/nearest-trace` | Lightweight nearest-trace lookup without generating the full synthetic |
+| GET / PUT / DELETE | `/api/synthetic/{well_id}/tie` | Get / save / clear a well's persisted manual stretch/squeeze control points |
+| GET | `/api/synthetic/{well_id}/export?...` | CSV export: synthetic vs. real trace + tie-quality/QC summary header |
 | GET | `/health` | Liveness check |
 
 Interactive OpenAPI docs are available at `http://localhost:8000/docs` once the backend is
@@ -459,7 +534,15 @@ data: {"type": "done"}
   upload, dataset picker, raw amplitude section (Plotly heatmap, trace index vs two-way
   time), and computed attribute trends (RMS amplitude, envelope, dominant frequency, and
   the heuristic VSH/PHIE/SWE seismic proxies -- always shown with an on-screen "uncalibrated
-  heuristic" caveat), plus a CSV export of the per-trace attributes.
+  heuristic" caveat), plus a CSV export of the per-trace attributes. The same page's bottom
+  "Seismic Visualization" panel (tabbed) adds inline/crossline sections, time slices, a
+  direct-SEG-Y well tie, amplitude spectrum, and spectral decomposition (STFT/CWT).
+- **Synthetic Seismogram module** (`/synthetic`): well selector (same pattern as the other
+  pages), density/wavelet method pickers, prominent QC badges (vertical assumption, no
+  checkshot, coordinate unit conversion status, washout interval count), acoustic
+  impedance + reflectivity depth tracks, wavelet time-domain + amplitude/phase spectra,
+  synthetic-vs-real trace overlay with correlation/shift stats, a washout interval list, an
+  editable manual stretch/squeeze control-point table (persisted per well), and CSV export.
 
 ---
 
@@ -482,3 +565,13 @@ data: {"type": "done"}
   samples per response (`MAX_SECTION_TRACES` / `MAX_SECTION_SAMPLES` in
   `seismic_service.py`) to keep browser payloads reasonable -- full-resolution display of
   very large 3D surveys would need a tiled/windowed viewer instead.
+- The Synthetic Seismogram module's depth-time anchoring (`t0_ms` defaulting to the seismic
+  volume's first sample time -- see "Synthetic Seismogram module" in section 5) is an
+  arbitrary, non-degenerate starting point, not a physically derived one -- a real tie still
+  needs the manual stretch/squeeze controls (or a real checkshot) to be trustworthy.
+- The Gardner and rock-physics density alternatives in the Synthetic Seismogram module are
+  comparison/fallback paths for when RHOB is unavailable, not independently validated against
+  core measurements -- prefer real RHOB (the default) for these wells, since all 7 have it.
+- Manual stretch/squeeze is a numeric control-point table, not true drag-on-chart interaction
+  -- functionally equivalent (add/edit/remove MD+shift pairs, persisted per well) but not as
+  fluid as dragging points directly on the tie plot.

@@ -35,10 +35,26 @@ class WellSummary(BaseModel):
     )
     null_counts: dict[str, int] = Field(default_factory=dict)
     well_x: float | None = Field(
-        None, description="Surface X coordinate (easting, m) from the LAS header, if present"
+        None, description="Surface X coordinate (easting, m), unit-standardized -- see coordinate_unit_detected"
     )
     well_y: float | None = Field(
-        None, description="Surface Y coordinate (northing, m) from the LAS header, if present"
+        None, description="Surface Y coordinate (northing, m), unit-standardized -- see coordinate_unit_detected"
+    )
+    kb_m: float | None = Field(None, description="Kelly Bushing elevation, meters (unit-standardized)")
+    td_m: float | None = Field(None, description="Total depth, meters (unit-standardized)")
+    coordinate_unit_detected: str | None = Field(
+        None,
+        description=(
+            "'feet' if X/Y/KB/TD were detected as feet (mislabeled '.m' in the LAS header) and "
+            "converted, 'meters' if they were already consistent with STOP's units, None if "
+            "unvalidated (TD or STOP missing)."
+        ),
+    )
+    unit_conversion_applied: bool = Field(
+        False, description="True if X/Y/KB/TD were converted from feet to meters on load"
+    )
+    td_stop_ratio: float | None = Field(
+        None, description="TD/STOP ratio used to detect feet-vs-meters (~3.28 indicates feet)"
     )
 
 
@@ -320,6 +336,91 @@ class SpectralTraceResponse(BaseModel):
     nyquist_hz: float
     typical_band_hz: list[float]
     energy: list[list[float]] = Field(..., description="Shape (n_time, n_freq)")
+
+
+# -----------------------------------------------------------------------------
+# Synthetic Seismogram module (/api/synthetic/*)
+# -----------------------------------------------------------------------------
+class WellHeaderQc(BaseModel):
+    well_x: float | None
+    well_y: float | None
+    kb_m: float | None
+    td_m: float | None
+    coordinate_unit_detected: str | None = Field(
+        None, description="'feet' if converted, 'meters' if already consistent, None if unvalidated"
+    )
+    unit_conversion_applied: bool
+    td_stop_ratio: float | None
+
+
+class GardnerCoefficients(BaseModel):
+    a: float
+    b: float
+    calibrated: bool = Field(..., description="True if fit against this field's real RHOB, False if generic defaults")
+
+
+class TiePointModel(BaseModel):
+    md_m: float
+    time_shift_ms: float
+
+
+class SyntheticSeismogramResponse(BaseModel):
+    well_id: str
+    well_header: WellHeaderQc
+    vertical_assumption_note: str
+    time_depth_note: str
+    density_method: str = Field(..., description="'rhob', 'gardner', or 'rock_physics'")
+    density_note: str
+    gardner_coefficients: GardnerCoefficients | None = None
+    nearest_inline: int
+    nearest_crossline: int
+    distance_m: float
+    depth_m: list[float]
+    twt_ms: list[float]
+    acoustic_impedance: list[float]
+    reflectivity_depth_m: list[float]
+    reflectivity: list[float]
+    reflectivity_twt_ms: list[float]
+    washout_depth_m: list[float]
+    washout_flag: list[bool] = Field(
+        ..., description="Soft QC proxy (NPHI-RHOB crossover / DT spikes) -- not a real caliper substitute"
+    )
+    wavelet_method: str = Field(..., description="'statistical' or 'ricker'")
+    wavelet_freq_hz: float
+    wavelet_t_ms: list[float]
+    wavelet_amplitude: list[float]
+    wavelet_spectrum_freq_hz: list[float]
+    wavelet_spectrum_amplitude: list[float]
+    wavelet_spectrum_phase_deg: list[float]
+    seismic_twt_ms: list[float]
+    synthetic: list[float]
+    shifted_synthetic: list[float]
+    real_trace: list[float]
+    best_shift_ms: float
+    correlation: float
+    applied_tie_points: list[TiePointModel]
+
+
+class SaveTiePointsRequest(BaseModel):
+    points: list[TiePointModel]
+    wavelet_method: str = "statistical"
+    wavelet_freq_hz: float = 25.0
+
+
+class TiePointsResponse(BaseModel):
+    well_id: str
+    points: list[TiePointModel]
+    wavelet_method: str
+    wavelet_freq_hz: float
+    segy_filename: str | None = None
+
+
+class NearestTraceResponse(BaseModel):
+    well_id: str
+    trace_index: int
+    inline: int
+    crossline: int
+    distance_m: float
 
 
 # -----------------------------------------------------------------------------

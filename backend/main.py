@@ -90,6 +90,23 @@ except Exception as exc:  # noqa: BLE001
         exc,
     )
 
+# Synthetic seismogram / well-tie module (unit-standardized well header QC,
+# selectable density/wavelet, washout QC, persisted manual stretch/squeeze)
+# -- reuses seismic_processor.SegyVolume, so it shares the same dependency
+# and gets the same defensive import treatment.
+try:
+    from app.routers import synthetic
+
+    app.include_router(synthetic.router)
+except Exception as exc:  # noqa: BLE001
+    logger.warning(
+        "Synthetic Seismogram module failed to load and its endpoints will be "
+        "unavailable (GET/PUT/DELETE /api/synthetic/*). This is usually caused by a "
+        "missing dependency -- run `pip install -r requirements.txt` (needs segyio) "
+        "and restart. Underlying error: %s",
+        exc,
+    )
+
 
 @app.get("/health")
 async def health() -> dict[str, str]:

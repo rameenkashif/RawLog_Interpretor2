@@ -256,6 +256,15 @@ class SegyVolume:
             n_crosslines=len(self._crosslines_sorted),
         )
 
+    def get_trace(self, index: int) -> np.ndarray:
+        """Raw amplitude of a single trace by its flat index -- a public
+        accessor so callers outside this module (e.g. the synthetic
+        seismogram service) don't need to reach into the private
+        self._traces matrix directly."""
+        if not (0 <= index < self.n_traces):
+            raise SegyVolumeError(f"Trace index {index} out of range [0, {self.n_traces}).")
+        return self._traces[index].astype(float)
+
     def get_inline_section(self, inline_number: int) -> dict:
         idx = self._inline_index.get(int(inline_number))
         if idx is None:
@@ -511,7 +520,7 @@ class SegyVolume:
         }
 
     # ---- well tie -------------------------------------------------------
-    def _check_crs_alignment(self, well_id: str, well_x: float, well_y: float) -> None:
+    def check_crs_alignment(self, well_id: str, well_x: float, well_y: float) -> None:
         x_min, x_max = float(self.source_x.min()), float(self.source_x.max())
         y_min, y_max = float(self.source_y.min()), float(self.source_y.max())
         # Generous buffer (20% of the survey's extent, floored at 500 m) so
@@ -547,7 +556,7 @@ class SegyVolume:
                 "locate it within the seismic survey."
             )
 
-        self._check_crs_alignment(well_id, well_summary.well_x, well_summary.well_y)
+        self.check_crs_alignment(well_id, well_summary.well_x, well_summary.well_y)
 
         curves_response = well_service.get_well_curves(well_id)
         rows = curves_response["data"]
@@ -588,7 +597,10 @@ class SegyVolume:
             "Depth-time relationship comes from integrating the sonic (DT) log only -- no "
             "checkshot/VSP survey is available for this well, so this is a simplification "
             "(accumulates sonic logging error with depth and ignores velocity anisotropy), "
-            "not a calibrated depth-time tie. See well_seismic_tie.depth_to_twt."
+            "not a calibrated depth-time tie. Anchored to this survey's own first sample time "
+            "as a non-degenerate starting point (arbitrary, not physically derived), since the "
+            "sonic-integrated curve alone has no absolute time reference. "
+            "See well_seismic_tie.depth_to_twt."
         )
 
         return {

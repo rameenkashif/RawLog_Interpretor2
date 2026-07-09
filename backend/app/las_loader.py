@@ -46,6 +46,11 @@ class WellMetadata:
     missing_curves: list[str] = field(default_factory=list)
     well_x: float | None = None
     well_y: float | None = None
+    kb_m: float | None = None
+    td_m: float | None = None
+    coordinate_unit_detected: str | None = None  # "feet", "meters", or None if unvalidated
+    unit_conversion_applied: bool = False
+    td_stop_ratio: float | None = None
 
 
 @dataclass
@@ -82,20 +87,35 @@ def _well_id_from_filename(path: Path) -> str:
     return path.stem.upper()
 
 
-# Surface coordinate mnemonics vary by vendor just like curve mnemonics do.
-# These are read from the ~Well section (single-value header items), not the
-# ~Curve section, since they describe the well's location, not a per-depth
-# log. Coordinates are assumed to be in a consistent, Euclidean (e.g. UTM
-# easting/northing in metres) CRS shared with any seismic data they'll be
-# compared against -- see well_seismic_tie.find_nearest_trace_index.
+# Surface coordinate / header mnemonics vary by vendor just like curve
+# mnemonics do. These are read from the ~Well section (single-value header
+# items), not the ~Curve section. Coordinates are assumed to be in a
+# consistent, Euclidean (e.g. UTM easting/northing) CRS shared with any
+# seismic data they'll be compared against -- see
+# well_seismic_tie.find_nearest_trace_index -- but see
+# _standardize_well_header() below: some vendor LAS exports label these
+# fields ".m" while actually storing feet, so the unit is validated, not
+# assumed, before that comparison is trusted.
 _X_COORD_ALIASES = ["XWELL", "XCOORD", "SURFACE_X", "SURX", "X"]
 _Y_COORD_ALIASES = ["YWELL", "YCOORD", "SURFACE_Y", "SURY", "Y"]
+_KB_ALIASES = ["KB", "KBELEV", "KELLY_BUSHING", "EKB"]
+_TD_ALIASES = ["TD", "TOTAL_DEPTH", "TDD", "TDL"]
+
+FT_TO_M = 0.3048
+# A well genuinely logged in feet will show a TD/STOP ratio close to the
+# feet-to-meters factor (3.28084), since TD (total driller's depth, usually
+# slightly deeper than the logged interval) divided by STOP (always in
+# meters -- the curve data itself) collapses to roughly that factor times
+# TD_m/STOP_m (typically ~1.0-1.15 for a real well). This range is wide
+# enough to catch that real-world spread without also matching a well that
+# is genuinely already in meters (which would show a ratio near 1).
+_FEET_RATIO_RANGE = (2.8, 4.2)
 
 
-def _resolve_well_coordinate(las: lasio.LASFile, aliases: list[str]) -> float | None:
-    """Look up a well-location header item (~Well section) by mnemonic,
-    trying common aliases in order. Returns None if absent, blank, or
-    unparseable -- coordinates are optional metadata, not a required curve.
+def _resolve_well_numeric(las: lasio.LASFile, aliases: list[str]) -> float | None:
+    """Look up a numeric ~Well section header item by mnemonic, trying
+    common aliases in order. Returns None if absent, blank, or unparseable
+    -- these are optional metadata, not required curves.
     """
     for alias in aliases:
         item = las.well.get(alias)
@@ -106,6 +126,53 @@ def _resolve_well_coordinate(las: lasio.LASFile, aliases: list[str]) -> float | 
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _standardize_well_header(
+    well_x: float | None, well_y: float | None, kb: float | None, td: float | None, stop_depth: float
+) -> dict:
+    """Detect and correct feet-labeled-as-meters header fields (X, Y, KB,
+    TD), confirmed to occur in some vendor LAS exports for this field:
+    those four fields are stored in feet despite the LAS header declaring
+    unit "m", while STRT/STOP/DEPT (the curve data) are genuinely in
+    meters. Detected per-well via the TD/STOP ratio -- NOT hardcoded --
+    since a future well's export may already be unit-consistent.
+
+    Returns a dict with (possibly converted) well_x/well_y/kb_m/td_m plus
+    QC fields (coordinate_unit_detected, unit_conversion_applied,
+    td_stop_ratio) so callers can report what was done, not just the
+    resulting numbers.
+    """
+    result = {
+        "well_x": well_x,
+        "well_y": well_y,
+        "kb_m": kb,
+        "td_m": td,
+        "coordinate_unit_detected": None,
+        "unit_conversion_applied": False,
+        "td_stop_ratio": None,
+    }
+
+    if td is None or not stop_depth:
+        # Can't validate without both TD and a non-zero STOP depth to
+        # compare against -- leave values as-is rather than guessing.
+        return result
+
+    ratio = td / stop_depth
+    result["td_stop_ratio"] = ratio
+
+    if _FEET_RATIO_RANGE[0] <= ratio <= _FEET_RATIO_RANGE[1]:
+        result["coordinate_unit_detected"] = "feet"
+        result["unit_conversion_applied"] = True
+        result["well_x"] = well_x * FT_TO_M if well_x is not None else None
+        result["well_y"] = well_y * FT_TO_M if well_y is not None else None
+        result["kb_m"] = kb * FT_TO_M if kb is not None else None
+        result["td_m"] = td * FT_TO_M
+    else:
+        result["coordinate_unit_detected"] = "meters"
+        # Already consistent with STOP's units -- no conversion needed.
+
+    return result
 
 
 def load_las_file(
@@ -214,8 +281,11 @@ def load_las_file(
     well_name = las.well.get("WELL")
     well_name = well_name.value if well_name and well_name.value else well_id
 
-    well_x = _resolve_well_coordinate(las, _X_COORD_ALIASES)
-    well_y = _resolve_well_coordinate(las, _Y_COORD_ALIASES)
+    well_x = _resolve_well_numeric(las, _X_COORD_ALIASES)
+    well_y = _resolve_well_numeric(las, _Y_COORD_ALIASES)
+    kb = _resolve_well_numeric(las, _KB_ALIASES)
+    td = _resolve_well_numeric(las, _TD_ALIASES)
+    standardized = _standardize_well_header(well_x, well_y, kb, td, stop_depth)
 
     metadata = WellMetadata(
         well_id=well_id,
@@ -227,8 +297,13 @@ def load_las_file(
         n_samples=len(df),
         null_counts=null_counts,
         missing_curves=[],
-        well_x=well_x,
-        well_y=well_y,
+        well_x=standardized["well_x"],
+        well_y=standardized["well_y"],
+        kb_m=standardized["kb_m"],
+        td_m=standardized["td_m"],
+        coordinate_unit_detected=standardized["coordinate_unit_detected"],
+        unit_conversion_applied=standardized["unit_conversion_applied"],
+        td_stop_ratio=standardized["td_stop_ratio"],
     )
 
     return LoadedWell(metadata=metadata, df=df)

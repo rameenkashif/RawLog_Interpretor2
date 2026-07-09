@@ -120,6 +120,11 @@ def _build_well_summary(metadata: WellMetadata, df: pd.DataFrame) -> WellSummary
         null_counts=metadata.null_counts,
         well_x=metadata.well_x,
         well_y=metadata.well_y,
+        kb_m=metadata.kb_m,
+        td_m=metadata.td_m,
+        coordinate_unit_detected=metadata.coordinate_unit_detected,
+        unit_conversion_applied=metadata.unit_conversion_applied,
+        td_stop_ratio=metadata.td_stop_ratio,
     )
 
 
