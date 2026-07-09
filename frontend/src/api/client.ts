@@ -17,6 +17,10 @@ import type {
   SeismicSectionResponse,
   SeismicSummary,
   SeismicUploadResponse,
+  SpectralDecompositionResponse,
+  SpectralFrequencySliceResponse,
+  SpectralMethod,
+  SpectralTraceResponse,
   SurveyInfoResponse,
   TimeSliceResponse,
   WellCurvesResponse,
@@ -193,6 +197,43 @@ export async function getAmplitudeSpectrum(
   const { data } = await http.get<AmplitudeSpectrumResponse>(
     "/api/seismic/spectrum",
     { params: { inline_number: inlineNumber ?? undefined } },
+  );
+  return data;
+}
+
+/** Full time x freq x position decomposition for an inline (heavier -- initial load/export). */
+export async function getSpectralDecompositionInline(
+  inlineNumber: number,
+  method: SpectralMethod,
+): Promise<SpectralDecompositionResponse> {
+  const { data } = await http.get<SpectralDecompositionResponse>(
+    `/api/seismic/spectral-decomp/inline/${inlineNumber}`,
+    { params: { method } },
+  );
+  return data;
+}
+
+/** Single-frequency energy slice across an inline -- the fast path for a frequency slider. */
+export async function getSpectralFrequencySlice(
+  inlineNumber: number,
+  method: SpectralMethod,
+  frequencyHz: number,
+): Promise<SpectralFrequencySliceResponse> {
+  const { data } = await http.get<SpectralFrequencySliceResponse>(
+    `/api/seismic/spectral-decomp/inline/${inlineNumber}`,
+    { params: { method, frequency_hz: frequencyHz } },
+  );
+  return data;
+}
+
+export async function getSpectralDecompositionTrace(
+  inlineNumber: number,
+  crosslineNumber: number,
+  method: SpectralMethod,
+): Promise<SpectralTraceResponse> {
+  const { data } = await http.get<SpectralTraceResponse>(
+    "/api/seismic/spectral-decomp/trace",
+    { params: { inline_number: inlineNumber, crossline_number: crosslineNumber, method } },
   );
   return data;
 }

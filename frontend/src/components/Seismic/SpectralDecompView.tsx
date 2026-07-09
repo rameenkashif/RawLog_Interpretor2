@@ -1,0 +1,192 @@
+import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import Plot from "react-plotly.js";
+import type { Data, Layout } from "plotly.js";
+import { AxiosError } from "axios";
+import { getSpectralFrequencySlice } from "@/api/client";
+import type { SpectralMethod, SurveyInfoResponse } from "@/api/types";
+import { colors } from "@/styles/tokens";
+
+const AXIS_STYLE = {
+  gridcolor: colors.gridLine,
+  linecolor: colors.borderStrong,
+  tickfont: { color: colors.inkMuted },
+};
+
+const DEFAULT_BAND_MIN_HZ = 5;
+const DEFAULT_BAND_MAX_HZ = 80;
+const SLIDER_DEBOUNCE_MS = 180;
+
+/**
+ * Spectral decomposition: energy at a single, user-selected frequency
+ * across an inline section, instead of a flat per-trace amplitude or a
+ * single averaged spectrum (see AmplitudeSpectrumView) -- this is what
+ * surfaces thin-bed tuning and stratigraphic features (channels, thin
+ * reservoir layers) that a plain amplitude section or flat spectrum can't
+ * show, since tuning shows up as brightening at specific frequencies at
+ * specific times, not as a change in overall amplitude.
+ *
+ * Reuses the same Plotly heatmap pattern as SeismicSectionView -- same
+ * data shape convention (time x position), just colored by energy at the
+ * selected frequency instead of raw amplitude. The frequency slider
+ * defaults to the typical useful seismic band (5-80 Hz) but can be
+ * dragged out to the full Nyquist range; dragging re-fetches the
+ * single-frequency slice (fast -- see seismic_processor.py's per-inline
+ * cache) debounced so it doesn't fire on every pixel of movement.
+ */
+export default function SpectralDecompView({ surveyInfo }: { surveyInfo: SurveyInfoResponse }) {
+  const [inlineNumber, setInlineNumber] = useState(surveyInfo.inline_min);
+  const [method, setMethod] = useState<SpectralMethod>("stft");
+  const [frequencyHz, setFrequencyHz] = useState(
+    Math.min(30, surveyInfo.sample_interval_ms > 0 ? 1000 / (2 * surveyInfo.sample_interval_ms) : 30),
+  );
+  const [debouncedFrequencyHz, setDebouncedFrequencyHz] = useState(frequencyHz);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedFrequencyHz(frequencyHz), SLIDER_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [frequencyHz]);
+
+  const nyquistHz = surveyInfo.sample_interval_ms > 0 ? 1000 / (2 * surveyInfo.sample_interval_ms) : 250;
+
+  const sliceQuery = useQuery({
+    queryKey: ["seismic-viz-spectral-slice", inlineNumber, method, debouncedFrequencyHz],
+    queryFn: () => getSpectralFrequencySlice(inlineNumber, method, debouncedFrequencyHz),
+  });
+
+  const figure = useMemo(() => {
+    if (!sliceQuery.data) return null;
+    return buildFigure(sliceQuery.data.crossline_axis, sliceQuery.data.time_ms, sliceQuery.data.amplitude);
+  }, [sliceQuery.data]);
+
+  return (
+    <div className="space-y-3">
+      <div className="border border-accent/30 bg-accent-soft/40 text-accent-strong text-xs rounded-xl px-4 py-2.5 leading-relaxed">
+        Energy at the selected frequency, across the section — thin layers tend to show up as
+        tuning/brightening at specific frequencies rather than as a change in overall amplitude.
+        Compare this against the plain amplitude section to spot features a flat view hides.
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex gap-1.5">
+          {(["stft", "cwt"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMethod(m)}
+              className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition-all uppercase ${
+                method === m
+                  ? "bg-brand-gradient text-white border-transparent shadow-card"
+                  : "bg-surface text-ink-muted border-border-strong hover:border-accent hover:text-accent"
+              }`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+
+        <label className="flex items-center gap-2 text-xs font-semibold text-ink-muted">
+          Inline
+          <input
+            type="number"
+            min={surveyInfo.inline_min}
+            max={surveyInfo.inline_max}
+            value={inlineNumber}
+            onChange={(e) => setInlineNumber(Number(e.target.value))}
+            className="w-20 text-xs border border-border-strong rounded-lg px-2 py-1"
+          />
+          <span className="text-ink-faint font-normal">
+            ({surveyInfo.inline_min}-{surveyInfo.inline_max})
+          </span>
+        </label>
+      </div>
+
+      <label className="flex flex-wrap items-center gap-3 text-xs font-semibold text-ink-muted">
+        Frequency (Hz)
+        <input
+          type="range"
+          min={0}
+          max={nyquistHz}
+          step={0.5}
+          value={frequencyHz}
+          onChange={(e) => setFrequencyHz(Number(e.target.value))}
+          className="w-56 accent-accent"
+        />
+        <input
+          type="number"
+          min={0}
+          max={nyquistHz}
+          step={0.5}
+          value={frequencyHz}
+          onChange={(e) => setFrequencyHz(Number(e.target.value))}
+          className="w-20 text-xs border border-border-strong rounded-lg px-2 py-1"
+        />
+        <span className="text-ink-faint font-normal">
+          typical band {DEFAULT_BAND_MIN_HZ}-{DEFAULT_BAND_MAX_HZ} Hz, Nyquist {nyquistHz.toFixed(0)} Hz
+        </span>
+        {sliceQuery.data && (
+          <span className="text-ink-faint font-normal">actual bin: {sliceQuery.data.frequency_hz.toFixed(1)} Hz</span>
+        )}
+      </label>
+
+      {sliceQuery.isLoading && <div className="h-[480px] rounded-xl bg-surface-sunken animate-pulse" />}
+      {sliceQuery.isError && (
+        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+          Failed to load spectral decomposition: {errorMessage(sliceQuery.error)}
+        </div>
+      )}
+      {figure && (
+        <div className="bg-surface border border-border rounded-xl p-2 shadow-card">
+          <Plot
+            data={figure.data}
+            layout={figure.layout}
+            style={{ width: "100%", height: "480px" }}
+            config={{ displaylogo: false, responsive: true }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof AxiosError) {
+    const detail = error.response?.data?.detail;
+    if (typeof detail === "string") return detail;
+  }
+  return error instanceof Error ? error.message : "Unknown error";
+}
+
+function buildFigure(
+  crosslineAxis: number[],
+  timeMs: number[],
+  energy: number[][], // (n_time, n_traces)
+): { data: Data[]; layout: Partial<Layout> } {
+  let maxVal = 1e-6;
+  for (const row of energy) {
+    for (const value of row) {
+      if (value > maxVal) maxVal = value;
+    }
+  }
+
+  const trace = {
+    type: "heatmap",
+    x: crosslineAxis,
+    y: timeMs,
+    z: energy,
+    zmin: 0,
+    zmax: maxVal,
+    colorscale: "Viridis",
+    colorbar: { title: { text: "Energy", font: { size: 10 } }, tickfont: { size: 9 } },
+  } as Data;
+
+  const layout: Partial<Layout> = {
+    paper_bgcolor: colors.surface,
+    plot_bgcolor: colors.surface,
+    font: { color: colors.ink, family: "Inter, system-ui, sans-serif" },
+    margin: { t: 20, r: 20, b: 40, l: 60 },
+    xaxis: { title: { text: "Crossline" }, ...AXIS_STYLE },
+    yaxis: { title: { text: "Two-Way Time (ms)" }, autorange: "reversed", ...AXIS_STYLE },
+  };
+
+  return { data: [trace], layout };
+}

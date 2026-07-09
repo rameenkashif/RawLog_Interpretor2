@@ -287,7 +287,7 @@ these coordinates currently are and aren't.
 `backend/data/seismic_raw/` directly (via `segyio`, memory-mapped and fully loaded into memory
 once behind a process-wide singleton -- see `get_segy_volume()`) rather than going through the
 upload/attribute pipeline above, because it needs inline/crossline geometry that pipeline never
-stores. It serves four interpretation displays, exposed at `/api/seismic/*` and rendered in the
+stores. It serves five interpretation displays, exposed at `/api/seismic/*` and rendered in the
 frontend's **Seismic Visualization** panel (bottom of the `/seismic` page):
 
 - **Inline / crossline sections** -- amplitude vs. position x two-way-time, either direction.
@@ -303,7 +303,37 @@ frontend's **Seismic Visualization** panel (bottom of the `/seismic` page):
   curve if a well has no usable DT or RHOB log.
 - **Amplitude spectrum** -- average FFT magnitude spectrum (whole volume via a systematic
   trace sample, or one inline), plus dominant frequency, -3dB bandwidth, and an uncalibrated
-  S/N proxy.
+  S/N proxy. A single flat spectrum per trace/section -- for how frequency content *varies
+  along the time axis* (tuning effects, thin beds), see spectral decomposition below.
+- **Spectral decomposition** -- frequency content as a function of time along each trace, not
+  a single flat spectrum, so thin-bed tuning and stratigraphic features (channels, thin
+  reservoir layers) that don't show up in a plain amplitude section or flat spectrum become
+  visible as brightening at specific frequencies at specific times. Two methods, selectable per
+  request:
+  - **STFT** (`method=stft`, default) -- `scipy.signal.stft` with a short window
+    (`STFT_WINDOW_SAMPLES` = 32 samples, ~64 ms at 2 ms sampling) and 75% overlap. This is a
+    deliberate tradeoff for this survey's short (~624 ms) traces: a short window gives useful
+    *time* resolution to localize tuning along the trace, at the cost of coarse *frequency*
+    resolution (~15.6 Hz/bin at 2 ms sampling) -- a longer window would sharpen frequency
+    resolution but blur exactly *when* a given frequency's energy occurs.
+  - **CWT** (`method=cwt`) -- Continuous Wavelet Transform with a complex Morlet wavelet.
+    `scipy.signal.cwt`/`morlet2` were removed in recent scipy releases (not available in this
+    project's scipy 1.17+), so the Morlet wavelet is hand-rolled in `seismic_processor.py`
+    (`_morlet_wavelet`) the same way `well_seismic_tie.ricker_wavelet()` already hand-rolls its
+    wavelet for the same reason. Runs at the trace's native sample resolution (no windowing
+    time-resolution loss, unlike STFT), evaluated at a fixed default frequency grid (5-100 Hz
+    in 5 Hz steps, `CWT_DEFAULT_FREQS_HZ`).
+  - Both methods respect the Nyquist limit (never return frequencies above `fs/2`) and flag the
+    typically-useful seismic band (5-80 Hz, `TYPICAL_USEFUL_BAND_HZ`) in the response so the
+    frontend can default-frame around it rather than the full 0-Nyquist range.
+  - `GET /api/seismic/spectral-decomp/inline/{n}` without `frequency_hz` returns the full
+    (time x freq x position) volume for an inline -- heavier, meant for an initial load or
+    export. The full per-(inline, method) decomposition is cached in memory
+    (`SegyVolume._spectral_cache`) the first time it's computed, so repeated single-frequency
+    slice requests (`frequency_hz=...`, what the frontend's frequency slider calls on every
+    drag) index into the cached array instead of recomputing the whole STFT/CWT each time.
+  - `GET /api/seismic/spectral-decomp/trace` returns the same shape for a single trace
+    (inline+crossline), for a trace-inspection or well-tie-adjacent view.
 
 **Non-standard trace header layout:** this SEG-Y file stores inline number at trace header
 bytes 9-12 and crossline number at bytes 13-16 -- NOT the bytes segyio's usual
@@ -362,6 +392,8 @@ mnemonics) once the CRS is known, and re-run `bulk_load_wells.py`.
 | GET | `/api/seismic/timeslice?time_ms=...` | Map-view amplitude time slice (inline x crossline grid) at the nearest sample to the requested time |
 | GET | `/api/seismic/well-tie/{well_id}?wavelet_freq_hz=25` | Well tie computed directly against the raw SEG-Y volume (see "Seismic Visualization" below) |
 | GET | `/api/seismic/spectrum?inline_number=...` | Average amplitude spectrum (whole volume or one inline) + dominant frequency/bandwidth/S-N-proxy stats |
+| GET | `/api/seismic/spectral-decomp/inline/{inline_number}?method=stft\|cwt&frequency_hz=...` | Spectral decomposition: full time x freq x position volume if `frequency_hz` omitted, or a single frequency's energy across the section if given (fast path for a slider) |
+| GET | `/api/seismic/spectral-decomp/trace?inline_number=...&crossline_number=...&method=stft\|cwt` | Spectral decomposition (time x freq) for a single trace |
 | GET | `/health` | Liveness check |
 
 Interactive OpenAPI docs are available at `http://localhost:8000/docs` once the backend is

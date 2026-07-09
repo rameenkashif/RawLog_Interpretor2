@@ -343,3 +343,15 @@ tune them without touching code. Key notes for future sessions:
   well-tie feature end-to-end, but not geophysically correct until the real CRS conversion is
   done. See README.md "Current state of Z-02..Z-08's coordinates" for how to replace them once
   the CRS is known.
+- **Spectral decomposition added** (post-Seismic-Visualization, user request): extends
+  `seismic_processor.SegyVolume` (not a new module -- builds on the existing class) with STFT
+  and hand-rolled complex-Morlet CWT time-frequency decomposition (`scipy.signal.cwt`/`morlet2`
+  are gone in this project's scipy 1.17+, so CWT is hand-rolled the same way
+  `well_seismic_tie.ricker_wavelet()` already is). Two new endpoints on the *same*
+  `routers/seismic_viz.py` router: `/api/seismic/spectral-decomp/inline/{n}` (full volume, or a
+  single-frequency section slice -- cached per (inline, method) so a frontend frequency slider
+  doesn't recompute the whole decomposition per drag) and `/api/seismic/spectral-decomp/trace`
+  (single trace). Frontend: new `SpectralDecompView.tsx` as a 5th `SeismicPanel.tsx` tab,
+  reusing `SeismicSectionView`'s Plotly heatmap pattern with a debounced frequency slider and
+  STFT/CWT toggle. See README.md "Seismic Visualization" for the window/wavelet parameter
+  tradeoffs.

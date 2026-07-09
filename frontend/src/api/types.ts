@@ -214,6 +214,40 @@ export interface AmplitudeSpectrumResponse {
   snr_proxy: number | null;
 }
 
+export type SpectralMethod = "stft" | "cwt";
+
+export interface SpectralDecompositionResponse {
+  inline_number: number;
+  method: SpectralMethod;
+  crossline_axis: number[];
+  time_ms: number[];
+  freq_hz: number[];
+  nyquist_hz: number;
+  typical_band_hz: [number, number];
+  energy: number[][][]; // shape (n_time, n_freq, n_traces_in_line)
+}
+
+export interface SpectralFrequencySliceResponse {
+  inline_number: number;
+  method: SpectralMethod;
+  requested_frequency_hz: number;
+  frequency_hz: number;
+  crossline_axis: number[];
+  time_ms: number[];
+  amplitude: number[][]; // shape (n_time, n_traces_in_line), same convention as InlineSectionResponse
+}
+
+export interface SpectralTraceResponse {
+  inline_number: number;
+  crossline_number: number;
+  method: SpectralMethod;
+  time_ms: number[];
+  freq_hz: number[];
+  nyquist_hz: number;
+  typical_band_hz: [number, number];
+  energy: number[][]; // shape (n_time, n_freq)
+}
+
 export const CURVE_NAMES = [
   "DEPT",
   "GR",

@@ -21,6 +21,9 @@ from app.models.schemas import (
     AmplitudeSpectrumResponse,
     CrosslineSectionResponse,
     InlineSectionResponse,
+    SpectralDecompositionResponse,
+    SpectralFrequencySliceResponse,
+    SpectralTraceResponse,
     SurveyInfoResponse,
     TimeSliceResponse,
     WellTieVizResponse,
@@ -96,5 +99,48 @@ async def spectrum(
     try:
         volume = sp.get_segy_volume()
         return AmplitudeSpectrumResponse(**volume.get_amplitude_spectrum(inline_number=inline_number))
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get(
+    "/spectral-decomp/inline/{inline_number}",
+    response_model=SpectralDecompositionResponse | SpectralFrequencySliceResponse,
+)
+async def spectral_decomp_inline(
+    inline_number: int,
+    method: str = Query("stft", description="'stft' or 'cwt'"),
+    frequency_hz: float | None = Query(
+        None,
+        description=(
+            "If given, return just this frequency's energy across the section (fast path for "
+            "a frontend slider). If omitted, return the full time x freq x position volume "
+            "(heavier -- initial load or export)."
+        ),
+    ),
+) -> SpectralDecompositionResponse | SpectralFrequencySliceResponse:
+    try:
+        volume = sp.get_segy_volume()
+        result = volume.get_spectral_decomposition_inline(
+            inline_number, method=method, frequency_hz=frequency_hz
+        )
+        if frequency_hz is None:
+            return SpectralDecompositionResponse(**result)
+        return SpectralFrequencySliceResponse(**result)
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/spectral-decomp/trace", response_model=SpectralTraceResponse)
+async def spectral_decomp_trace(
+    inline_number: int,
+    crossline_number: int,
+    method: str = Query("stft", description="'stft' or 'cwt'"),
+) -> SpectralTraceResponse:
+    try:
+        volume = sp.get_segy_volume()
+        return SpectralTraceResponse(
+            **volume.get_spectral_decomposition_trace(inline_number, crossline_number, method=method)
+        )
     except Exception as exc:  # noqa: BLE001
         _handle(exc)

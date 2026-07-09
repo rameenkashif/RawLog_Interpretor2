@@ -5,23 +5,25 @@ import SeismicSectionView from "./SeismicSectionView";
 import TimeSliceView from "./TimeSliceView";
 import WellTieView from "./WellTieView";
 import AmplitudeSpectrumView from "./AmplitudeSpectrumView";
+import SpectralDecompView from "./SpectralDecompView";
 
 const TABS = [
   { id: "section", label: "Inline / Crossline Section" },
   { id: "timeslice", label: "Time Slice" },
   { id: "welltie", label: "Well Tie" },
   { id: "spectrum", label: "Amplitude Spectrum" },
+  { id: "spectral", label: "Spectral Decomposition" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
 
 /**
- * "Seismic Visualization" feature: tabbed container for the four
- * interpretation displays computed directly from the raw SEG-Y volume
+ * "Seismic Visualization" feature: tabbed container for the interpretation
+ * displays computed directly from the raw SEG-Y volume
  * (app/services/seismic_processor.py) -- inline/crossline sections, time
- * slices, well ties, and amplitude spectra. survey-info is fetched once
- * here and passed down so each tab's sliders are bounded by the actual
- * volume geometry rather than hardcoded ranges.
+ * slices, well ties, amplitude spectra, and spectral decomposition.
+ * survey-info is fetched once here and passed down so each tab's sliders
+ * are bounded by the actual volume geometry rather than hardcoded ranges.
  */
 export default function SeismicPanel() {
   const [activeTab, setActiveTab] = useState<TabId>("section");
@@ -79,6 +81,7 @@ export default function SeismicPanel() {
             {activeTab === "timeslice" && <TimeSliceView surveyInfo={surveyInfoQuery.data} />}
             {activeTab === "welltie" && <WellTieView />}
             {activeTab === "spectrum" && <AmplitudeSpectrumView surveyInfo={surveyInfoQuery.data} />}
+            {activeTab === "spectral" && <SpectralDecompView surveyInfo={surveyInfoQuery.data} />}
           </div>
         </>
       )}

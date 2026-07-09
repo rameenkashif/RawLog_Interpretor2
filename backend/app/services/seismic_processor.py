@@ -34,6 +34,7 @@ from pathlib import Path
 
 import numpy as np
 import segyio
+from scipy.signal import fftconvolve, stft
 
 from app import well_seismic_tie as wst
 from app.services import well_service
@@ -44,6 +45,53 @@ RAW_SEISMIC_DIR = Path(__file__).resolve().parents[2] / "data" / "seismic_raw"
 # no inline is specified -- running an FFT over all 61k+ traces isn't
 # necessary for a representative average spectrum, and would be far slower.
 DEFAULT_SPECTRUM_SAMPLE_TRACES = 300
+
+# ---- Spectral decomposition (STFT / CWT) parameters ------------------------
+# STFT window: short (32 samples =~ 64 ms at 2 ms sampling) with heavy overlap
+# (75%). This is a deliberate tradeoff for this survey's short (~624 ms)
+# traces: a short window gives usable *time* resolution to localize tuning
+# effects along the trace, at the cost of coarse *frequency* resolution
+# (bin spacing = fs/nperseg =~ 500/32 =~ 15.6 Hz at 2 ms sampling). A longer
+# window would sharpen frequency resolution but blur exactly when along the
+# trace a given frequency's energy occurs, which defeats the purpose of
+# spectral decomposition (vs. the single flat FFT in get_amplitude_spectrum).
+STFT_WINDOW_SAMPLES = 32
+STFT_OVERLAP_FRACTION = 0.75
+
+# CWT: scipy.signal.cwt/morlet2 were removed in recent scipy releases (not
+# available in this environment's scipy 1.17), so the Morlet wavelet is
+# hand-rolled below -- the same approach well_seismic_tie.ricker_wavelet()
+# already takes for the same reason. w0 = 6 cycles under the Gaussian
+# envelope is the standard default balancing time vs. frequency resolution.
+CWT_MORLET_W0 = 6.0
+CWT_DEFAULT_FREQS_HZ: tuple[float, ...] = tuple(float(f) for f in range(5, 101, 5))
+
+# Typical usable seismic bandwidth, returned alongside the full frequency
+# axis so the frontend can highlight/default-zoom to this band rather than
+# the full 0-Nyquist range.
+TYPICAL_USEFUL_BAND_HZ = (5.0, 80.0)
+
+VALID_SPECTRAL_METHODS = ("stft", "cwt")
+
+
+def _validate_spectral_method(method: str) -> str:
+    method = method.lower()
+    if method not in VALID_SPECTRAL_METHODS:
+        raise SegyVolumeError(
+            f"Unknown spectral decomposition method '{method}' -- expected one of "
+            f"{VALID_SPECTRAL_METHODS}."
+        )
+    return method
+
+
+def _morlet_wavelet(freq_hz: float, dt_s: float, w0: float = CWT_MORLET_W0) -> np.ndarray:
+    """Complex Morlet wavelet centered at freq_hz, sampled at dt_s, spanning
+    +/-3 standard deviations of its Gaussian envelope."""
+    sigma_t = w0 / (2 * np.pi * freq_hz)
+    half_span = max(1, int(np.ceil(3 * sigma_t / dt_s)))
+    t = np.arange(-half_span, half_span + 1) * dt_s
+    norm = (np.pi**-0.25) / np.sqrt(sigma_t)
+    return norm * np.exp(2j * np.pi * freq_hz * t) * np.exp(-(t**2) / (2 * sigma_t**2))
 
 
 class SegyVolumeError(Exception):
@@ -161,6 +209,14 @@ class SegyVolume:
             (len(self._inlines_sorted), len(self._crosslines_sorted)), -1, dtype=int
         )
         self._grid_trace_idx[il_pos, xl_pos] = np.arange(self.n_traces)
+
+        # Spectral decomposition is compute-heavier than the flat FFT above,
+        # so full (inline, method) results are cached in memory -- repeated
+        # frontend requests for the same inline (e.g. a user scrubbing a
+        # frequency slider) index into the cached array instead of
+        # recomputing the whole STFT/CWT. Cleared naturally whenever a new
+        # SegyVolume is constructed (e.g. get_segy_volume(refresh=True)).
+        self._spectral_cache: dict[tuple[int, str], dict] = {}
 
     def _verify_header_layout(self, f) -> None:
         """Cross-check the bulk header read against a manual struct.unpack of
@@ -304,6 +360,154 @@ class SegyVolume:
             "dominant_freq_hz": dominant_freq_hz,
             "bandwidth_hz": bandwidth_hz,
             "snr_proxy": snr_proxy,
+        }
+
+    # ---- spectral decomposition -----------------------------------------
+    @property
+    def _nyquist_hz(self) -> float:
+        return 1000.0 / (2 * self.sample_interval_ms)
+
+    def _decompose_stft(self, traces: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Batched Short-Time Fourier Transform. traces: (n_pos, n_samples).
+        Returns (freq_hz, time_ms, energy) where energy has shape
+        (n_time, n_freq, n_pos) -- see module docstring for the window
+        choice and its time/frequency-resolution tradeoff."""
+        dt_s = self.sample_interval_ms / 1000.0
+        fs = 1.0 / dt_s
+        n_samples = traces.shape[-1]
+        nperseg = min(STFT_WINDOW_SAMPLES, n_samples)
+        noverlap = int(nperseg * STFT_OVERLAP_FRACTION)
+
+        freqs, times_s, Zxx = stft(
+            traces, fs=fs, window="hann", nperseg=nperseg, noverlap=noverlap,
+            boundary=None, padded=False, axis=-1,
+        )
+        # rfft-based freqs already top out at fs/2 (Nyquist), but filter
+        # explicitly so the Nyquist limit is enforced by construction, not
+        # just by scipy's default behavior.
+        keep = freqs <= self._nyquist_hz + 1e-9
+        freqs = freqs[keep]
+        Zxx = Zxx[..., keep, :] if Zxx.ndim == 3 else Zxx[keep, :]
+        if Zxx.ndim == 2:  # single-trace input -> add back the position axis
+            Zxx = Zxx[np.newaxis, ...]
+
+        energy = np.abs(Zxx)  # (n_pos, n_freq, n_time)
+        time_ms = self.twt_axis_ms[0] + times_s * 1000.0
+        return freqs, time_ms, energy.transpose(2, 1, 0)  # (n_time, n_freq, n_pos)
+
+    def _decompose_cwt(self, traces: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Continuous Wavelet Transform (hand-rolled complex Morlet -- see
+        module docstring for why, instead of scipy.signal.cwt/morlet2).
+        traces: (n_pos, n_samples). Returns (freq_hz, time_ms, energy) where
+        energy has shape (n_time, n_freq, n_pos), at the trace's native
+        sample resolution (unlike STFT, no windowing time-resolution loss)."""
+        dt_s = self.sample_interval_ms / 1000.0
+        freqs = np.array([f for f in CWT_DEFAULT_FREQS_HZ if f <= self._nyquist_hz], dtype=float)
+        if freqs.size == 0:
+            freqs = np.array([self._nyquist_hz * 0.5])
+
+        n_pos, n_samples = traces.shape
+        energy = np.empty((n_pos, len(freqs), n_samples), dtype=float)
+        for i, freq_hz in enumerate(freqs):
+            wavelet = _morlet_wavelet(float(freq_hz), dt_s)
+            conv = fftconvolve(traces, wavelet[np.newaxis, :], mode="same", axes=1)
+            energy[:, i, :] = np.abs(conv)
+
+        return freqs, self.twt_axis_ms.copy(), energy.transpose(2, 1, 0)  # (n_time, n_freq, n_pos)
+
+    def _decompose(self, traces: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return self._decompose_stft(traces) if method == "stft" else self._decompose_cwt(traces)
+
+    def get_spectral_decomposition_inline(
+        self, inline_number: int, method: str = "stft", frequency_hz: float | None = None
+    ) -> dict:
+        """Time-frequency decomposition for every trace along an inline.
+
+        With frequency_hz omitted, returns the full (time x freq x position)
+        volume -- heavier, meant for an initial load or export. With
+        frequency_hz given, returns just that single frequency's energy
+        across the section (time x position, same shape convention as
+        get_inline_section's "amplitude") -- this is the fast path meant for
+        a frontend frequency slider, and reuses the cached full decomposition
+        after the first call for a given (inline, method) rather than
+        recomputing the STFT/CWT on every slider tick.
+        """
+        method = _validate_spectral_method(method)
+        idx = self._inline_index.get(int(inline_number))
+        if idx is None:
+            raise SegyVolumeError(
+                f"Inline {inline_number} not found. Valid range: {self.inline_min}-{self.inline_max}."
+            )
+
+        cache_key = (int(inline_number), method)
+        cached = self._spectral_cache.get(cache_key)
+        if cached is None:
+            freq_hz, time_ms, energy = self._decompose(self._traces[idx].astype(float), method)
+            cached = {
+                "crossline_axis": self.crossline[idx].tolist(),
+                "freq_hz": freq_hz,
+                "time_ms": time_ms,
+                "energy": energy,  # (n_time, n_freq, n_pos)
+            }
+            self._spectral_cache[cache_key] = cached
+
+        if frequency_hz is None:
+            return {
+                "inline_number": int(inline_number),
+                "method": method,
+                "crossline_axis": cached["crossline_axis"],
+                "time_ms": cached["time_ms"].tolist(),
+                "freq_hz": cached["freq_hz"].tolist(),
+                "nyquist_hz": self._nyquist_hz,
+                "typical_band_hz": list(TYPICAL_USEFUL_BAND_HZ),
+                "energy": cached["energy"].tolist(),
+            }
+
+        freq_idx = int(np.argmin(np.abs(cached["freq_hz"] - frequency_hz)))
+        actual_freq = float(cached["freq_hz"][freq_idx])
+        amplitude_slice = cached["energy"][:, freq_idx, :]  # (n_time, n_pos)
+        return {
+            "inline_number": int(inline_number),
+            "method": method,
+            "requested_frequency_hz": float(frequency_hz),
+            "frequency_hz": actual_freq,
+            "crossline_axis": cached["crossline_axis"],
+            "time_ms": cached["time_ms"].tolist(),
+            "amplitude": amplitude_slice.tolist(),
+        }
+
+    def get_spectral_decomposition_trace(
+        self, inline_number: int, crossline_number: int, method: str = "stft"
+    ) -> dict:
+        """Time-frequency decomposition for a single trace, e.g. for a
+        trace-inspection view or well-tie context."""
+        method = _validate_spectral_method(method)
+        idx = self._inline_index.get(int(inline_number))
+        if idx is None:
+            raise SegyVolumeError(
+                f"Inline {inline_number} not found. Valid range: {self.inline_min}-{self.inline_max}."
+            )
+        match = np.where(self.crossline[idx] == int(crossline_number))[0]
+        if match.size == 0:
+            raise SegyVolumeError(
+                f"No trace at inline={inline_number}, crossline={crossline_number}. Valid "
+                f"crossline range: {self.crossline_min}-{self.crossline_max}."
+            )
+        trace_idx = int(idx[match[0]])
+
+        trace = self._traces[trace_idx : trace_idx + 1].astype(float)  # (1, n_samples)
+        freq_hz, time_ms, energy = self._decompose(trace, method)
+        energy_2d = energy[:, :, 0]  # (n_time, n_freq)
+
+        return {
+            "inline_number": int(inline_number),
+            "crossline_number": int(crossline_number),
+            "method": method,
+            "time_ms": time_ms.tolist(),
+            "freq_hz": freq_hz.tolist(),
+            "nyquist_hz": self._nyquist_hz,
+            "typical_band_hz": list(TYPICAL_USEFUL_BAND_HZ),
+            "energy": energy_2d.tolist(),
         }
 
     # ---- well tie -------------------------------------------------------

@@ -276,6 +276,52 @@ class AmplitudeSpectrumResponse(BaseModel):
     )
 
 
+class SpectralDecompositionResponse(BaseModel):
+    """Full time-frequency decomposition for every trace along an inline."""
+
+    inline_number: int
+    method: str = Field(..., description="'stft' or 'cwt'")
+    crossline_axis: list[int]
+    time_ms: list[float]
+    freq_hz: list[float]
+    nyquist_hz: float
+    typical_band_hz: list[float] = Field(
+        ..., description="[min, max] Hz of the typically-useful seismic band, for frontend default framing"
+    )
+    energy: list[list[list[float]]] = Field(
+        ..., description="Shape (n_time, n_freq, n_traces_in_line)"
+    )
+
+
+class SpectralFrequencySliceResponse(BaseModel):
+    """A single frequency's energy across an inline section -- the fast path
+    for a frontend frequency slider; same section-position shape convention
+    as InlineSectionResponse.amplitude so the same heatmap renderer works."""
+
+    inline_number: int
+    method: str = Field(..., description="'stft' or 'cwt'")
+    requested_frequency_hz: float
+    frequency_hz: float = Field(..., description="Actual frequency used (nearest available bin)")
+    crossline_axis: list[int]
+    time_ms: list[float]
+    amplitude: list[list[float]] = Field(
+        ..., description="Shape (n_time, n_traces_in_line), energy at frequency_hz"
+    )
+
+
+class SpectralTraceResponse(BaseModel):
+    """Time-frequency decomposition for a single trace."""
+
+    inline_number: int
+    crossline_number: int
+    method: str = Field(..., description="'stft' or 'cwt'")
+    time_ms: list[float]
+    freq_hz: list[float]
+    nyquist_hz: float
+    typical_band_hz: list[float]
+    energy: list[list[float]] = Field(..., description="Shape (n_time, n_freq)")
+
+
 # -----------------------------------------------------------------------------
 # Errors
 # -----------------------------------------------------------------------------

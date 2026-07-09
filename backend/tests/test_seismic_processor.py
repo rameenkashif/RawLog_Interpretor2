@@ -50,16 +50,23 @@ DELAY_MS = 2030
 INTERVAL_MS = 2
 
 
-def _write_synthetic_segy(path: Path, source_x_base: float = 363000.0, source_y_base: float = 2949800.0) -> None:
+def _write_synthetic_segy(
+    path: Path,
+    source_x_base: float = 363000.0,
+    source_y_base: float = 2949800.0,
+    n_samples: int = N_SAMPLES,
+    interval_ms: int = INTERVAL_MS,
+    delay_ms: int = DELAY_MS,
+) -> None:
     spec = segyio.spec()
     spec.format = 5
-    spec.samples = np.arange(N_SAMPLES) * INTERVAL_MS + DELAY_MS
+    spec.samples = np.arange(n_samples) * interval_ms + delay_ms
     spec.tracecount = len(INLINES) * len(CROSSLINES)
 
     rng = np.random.default_rng(42)
     i = 0
     with segyio.create(str(path), spec) as f:
-        f.bin[segyio.BinField.Interval] = INTERVAL_MS * 1000
+        f.bin[segyio.BinField.Interval] = interval_ms * 1000
         for il in INLINES:
             for xl in CROSSLINES:
                 f.header[i] = {
@@ -67,13 +74,13 @@ def _write_synthetic_segy(path: Path, source_x_base: float = 363000.0, source_y_
                     segyio.TraceField.TraceNumber: xl,
                     segyio.TraceField.SourceX: int(source_x_base + il * 10),
                     segyio.TraceField.SourceY: int(source_y_base + xl * 10),
-                    segyio.TraceField.DelayRecordingTime: DELAY_MS,
-                    segyio.TraceField.TRACE_SAMPLE_INTERVAL: INTERVAL_MS * 1000,
+                    segyio.TraceField.DelayRecordingTime: delay_ms,
+                    segyio.TraceField.TRACE_SAMPLE_INTERVAL: interval_ms * 1000,
                 }
                 # Distinct-ish waveform per trace so section/spectrum tests
                 # have something non-degenerate to check.
                 f.trace[i] = (
-                    np.sin(np.linspace(0, 2 * np.pi, N_SAMPLES)) + rng.normal(0, 0.05, N_SAMPLES)
+                    np.sin(np.linspace(0, 2 * np.pi, n_samples)) + rng.normal(0, 0.05, n_samples)
                 ).astype(np.float32)
                 i += 1
 
@@ -232,6 +239,98 @@ class TestWellTie:
         with pytest.raises(sp.MissingCurveError) as exc_info:
             volume.get_well_tie(result.well_id)
         assert exc_info.value.curve == "DT"
+
+
+class TestSpectralDecomposition:
+    @pytest.fixture
+    def wide_volume(self, tmp_path) -> sp.SegyVolume:
+        """More samples than the base `volume` fixture (80 vs. 6) at the
+        real survey's 2 ms interval, so STFT's 32-sample window has
+        something meaningful to slide across -- Nyquist here is still
+        250 Hz."""
+        path = tmp_path / "wide_survey.sgy"
+        _write_synthetic_segy(path, n_samples=80, interval_ms=2)
+        return sp.SegyVolume(path)
+
+    @pytest.fixture
+    def low_nyquist_volume(self, tmp_path) -> sp.SegyVolume:
+        """20 ms sample interval -> fs=50 Hz -> Nyquist=25 Hz, well below
+        CWT's default 5-100 Hz frequency grid -- exercises the actual
+        Nyquist-clamping logic (not just "the default grid happens to be
+        under 250 Hz")."""
+        path = tmp_path / "low_nyquist_survey.sgy"
+        _write_synthetic_segy(path, n_samples=80, interval_ms=20)
+        return sp.SegyVolume(path)
+
+    def test_stft_frequencies_never_exceed_nyquist(self, wide_volume):
+        result = wide_volume.get_spectral_decomposition_inline(384, method="stft")
+        assert result["nyquist_hz"] == pytest.approx(250.0)
+        assert max(result["freq_hz"]) <= result["nyquist_hz"] + 1e-9
+
+    def test_cwt_frequencies_never_exceed_nyquist(self, low_nyquist_volume):
+        result = low_nyquist_volume.get_spectral_decomposition_inline(384, method="cwt")
+        assert result["nyquist_hz"] == pytest.approx(25.0)
+        assert max(result["freq_hz"]) <= result["nyquist_hz"] + 1e-9
+        # CWT's default grid goes up to 100 Hz -- confirm it was actually
+        # clamped down, not just coincidentally already low.
+        assert max(result["freq_hz"]) < 100.0
+
+    def test_trace_decomposition_also_respects_nyquist(self, low_nyquist_volume):
+        result = low_nyquist_volume.get_spectral_decomposition_trace(384, 47, method="cwt")
+        assert max(result["freq_hz"]) <= result["nyquist_hz"] + 1e-9
+
+    def test_frequency_slice_matches_inline_section_position_shape(self, wide_volume):
+        section = wide_volume.get_inline_section(384)
+        slice_result = wide_volume.get_spectral_decomposition_inline(
+            384, method="stft", frequency_hz=50.0
+        )
+        assert slice_result["crossline_axis"] == section["crossline_axis"]
+        n_pos = len(section["crossline_axis"])
+        assert all(len(row) == n_pos for row in slice_result["amplitude"])
+
+    def test_frequency_slice_matches_inline_section_position_shape_cwt(self, wide_volume):
+        section = wide_volume.get_inline_section(384)
+        slice_result = wide_volume.get_spectral_decomposition_inline(
+            384, method="cwt", frequency_hz=30.0
+        )
+        assert slice_result["crossline_axis"] == section["crossline_axis"]
+        n_pos = len(section["crossline_axis"])
+        assert all(len(row) == n_pos for row in slice_result["amplitude"])
+
+    def test_stft_and_cwt_produce_internally_consistent_but_different_resolutions(self, wide_volume):
+        stft_result = wide_volume.get_spectral_decomposition_trace(384, 47, method="stft")
+        cwt_result = wide_volume.get_spectral_decomposition_trace(384, 47, method="cwt")
+
+        # Each method's own energy array must be internally consistent with
+        # its own time/freq axes...
+        for result in (stft_result, cwt_result):
+            n_time, n_freq = len(result["time_ms"]), len(result["freq_hz"])
+            assert len(result["energy"]) == n_time
+            assert all(len(row) == n_freq for row in result["energy"])
+
+        # ...even though the two methods are NOT required to share the same
+        # time/frequency resolution (STFT is windowed/coarser in time; CWT
+        # runs at native sample resolution) -- the response model must
+        # handle both without forcing a common grid.
+        assert len(stft_result["time_ms"]) != len(cwt_result["time_ms"])
+
+    def test_unknown_method_raises(self, wide_volume):
+        with pytest.raises(sp.SegyVolumeError):
+            wide_volume.get_spectral_decomposition_inline(384, method="bogus")
+
+    def test_unknown_trace_raises(self, wide_volume):
+        with pytest.raises(sp.SegyVolumeError):
+            wide_volume.get_spectral_decomposition_trace(384, 9999, method="stft")
+
+    def test_full_decomposition_is_cached_across_calls(self, wide_volume):
+        wide_volume.get_spectral_decomposition_inline(384, method="stft")
+        cache_key = (384, "stft")
+        assert cache_key in wide_volume._spectral_cache
+        cached_energy = wide_volume._spectral_cache[cache_key]["energy"]
+        # A second call (including a frequency-slice request) must reuse
+        # the same cached array rather than recomputing it.
+        wide_volume.get_spectral_decomposition_inline(384, method="stft", frequency_hz=40.0)
+        assert wide_volume._spectral_cache[cache_key]["energy"] is cached_energy
 
 
 class TestSegyVolumeSingleton:

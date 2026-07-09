@@ -35,6 +35,22 @@ def client(tmp_path, monkeypatch):
     sp._volume_cache.clear()
 
 
+@pytest.fixture
+def wide_client(tmp_path, monkeypatch):
+    """80 samples instead of the base `client` fixture's 6, so STFT's
+    32-sample window has something meaningful to slide across."""
+    _write_synthetic_segy(tmp_path / "wide_survey.sgy", n_samples=80, interval_ms=2)
+    monkeypatch.setattr(sp, "RAW_SEISMIC_DIR", tmp_path)
+    sp._volume_cache.clear()
+
+    import main
+
+    with TestClient(main.app) as c:
+        yield c
+
+    sp._volume_cache.clear()
+
+
 class TestSurveyInfo:
     def test_returns_geometry(self, client):
         resp = client.get("/api/seismic/survey-info")
@@ -81,6 +97,64 @@ class TestSpectrum:
 
     def test_bad_inline_is_422(self, client):
         resp = client.get("/api/seismic/spectrum", params={"inline_number": 9999})
+        assert resp.status_code == 422
+
+
+class TestSpectralDecompEndpoints:
+    def test_full_inline_decomposition_stft(self, wide_client):
+        resp = wide_client.get("/api/seismic/spectral-decomp/inline/384", params={"method": "stft"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["method"] == "stft"
+        assert max(body["freq_hz"]) <= body["nyquist_hz"] + 1e-9
+        assert len(body["energy"]) == len(body["time_ms"])
+        assert len(body["energy"][0]) == len(body["freq_hz"])
+        assert len(body["energy"][0][0]) == len(body["crossline_axis"])
+
+    def test_full_inline_decomposition_cwt(self, wide_client):
+        resp = wide_client.get("/api/seismic/spectral-decomp/inline/384", params={"method": "cwt"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["method"] == "cwt"
+        assert max(body["freq_hz"]) <= body["nyquist_hz"] + 1e-9
+
+    def test_frequency_slice_matches_inline_section_shape(self, wide_client):
+        section = wide_client.get("/api/seismic/inline/384").json()
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/inline/384",
+            params={"method": "stft", "frequency_hz": 50},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "amplitude" in body and "energy" not in body  # slice shape, not the full volume
+        assert body["crossline_axis"] == section["crossline_axis"]
+        n_pos = len(section["crossline_axis"])
+        assert all(len(row) == n_pos for row in body["amplitude"])
+
+    def test_trace_decomposition(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/trace",
+            params={"inline_number": 384, "crossline_number": 47, "method": "cwt"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert max(body["freq_hz"]) <= body["nyquist_hz"] + 1e-9
+        assert len(body["energy"]) == len(body["time_ms"])
+        assert len(body["energy"][0]) == len(body["freq_hz"])
+
+    def test_bad_inline_is_422(self, wide_client):
+        resp = wide_client.get("/api/seismic/spectral-decomp/inline/9999", params={"method": "stft"})
+        assert resp.status_code == 422
+
+    def test_bad_method_is_422(self, wide_client):
+        resp = wide_client.get("/api/seismic/spectral-decomp/inline/384", params={"method": "bogus"})
+        assert resp.status_code == 422
+
+    def test_unknown_trace_is_422(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/trace",
+            params={"inline_number": 384, "crossline_number": 9999, "method": "stft"},
+        )
         assert resp.status_code == 422
 
 
