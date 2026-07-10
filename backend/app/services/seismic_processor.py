@@ -540,6 +540,19 @@ class SegyVolume:
             "energy": energy_2d.tolist(),
         }
 
+    def get_grid_geometry(self) -> dict:
+        """Public accessor for the internal dense (inline, crossline) ->
+        trace index lookup table and its sorted axes, for callers outside
+        this class that need to work across the full grid (e.g.
+        well_zone_tie_service's IDW interpolation) without duplicating the
+        grid-building logic from __init__. grid_trace_idx entries are -1
+        for a gap (see __init__)."""
+        return {
+            "grid_trace_idx": self._grid_trace_idx,
+            "inlines_sorted": self._inlines_sorted,
+            "crosslines_sorted": self._crosslines_sorted,
+        }
+
     # ---- well tie -------------------------------------------------------
     def check_crs_alignment(self, well_id: str, well_x: float, well_y: float) -> None:
         x_min, x_max = float(self.source_x.min()), float(self.source_x.max())

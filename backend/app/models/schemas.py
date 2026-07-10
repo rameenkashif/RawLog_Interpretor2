@@ -281,6 +281,31 @@ class WellTieVizResponse(BaseModel):
     )
 
 
+class WellZoneTiePoint(BaseModel):
+    well_id: str
+    well_name: str
+    inline: int
+    crossline: int
+    distance_m: float
+    mean_vsh_pay: float = Field(..., description="Mean VSH over samples classified ZONES==Pay for this well")
+    n_pay_samples: int
+
+
+class WellZoneTieMapResponse(BaseModel):
+    inline_axis: list[int]
+    crossline_axis: list[int]
+    predicted_vsh: list[list[float | None]] = Field(
+        ..., description="(n_inlines x n_crosslines) IDW-interpolated VSH map; null where the grid has no trace"
+    )
+    wells: list[WellZoneTiePoint]
+    warnings: list[str] = Field(
+        default_factory=list, description="Wells skipped (no coordinates, CRS mismatch, no Pay-zone samples, etc.)"
+    )
+    method_note: str = Field(
+        ..., description="Caveat: this is geometric IDW interpolation between wells, not a seismic inversion/ML prediction"
+    )
+
+
 class AmplitudeSpectrumResponse(BaseModel):
     inline_number: int | None
     n_traces_sampled: int

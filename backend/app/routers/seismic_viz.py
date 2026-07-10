@@ -27,8 +27,10 @@ from app.models.schemas import (
     SurveyInfoResponse,
     TimeSliceResponse,
     WellTieVizResponse,
+    WellZoneTieMapResponse,
 )
 from app.services import seismic_processor as sp
+from app.services import well_zone_tie_service as wzt
 from app.services.well_service import WellNotFoundError
 
 router = APIRouter(prefix="/api/seismic", tags=["seismic-viz"])
@@ -37,6 +39,8 @@ router = APIRouter(prefix="/api/seismic", tags=["seismic-viz"])
 def _handle(exc: Exception):
     if isinstance(exc, (WellNotFoundError, sp.SegyFileNotFoundError)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, wzt.WellZoneTieError):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if isinstance(exc, sp.SegyVolumeError):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     raise exc
@@ -88,6 +92,21 @@ async def well_tie(
     try:
         volume = sp.get_segy_volume()
         return WellTieVizResponse(**volume.get_well_tie(well_id, wavelet_freq_hz=wavelet_freq_hz))
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/well-zone-tie-map", response_model=WellZoneTieMapResponse)
+async def well_zone_tie_map(
+    power: float = Query(2.0, gt=0, description="Inverse-distance-weighting power (higher = more locally-dominated by the nearest well)"),
+) -> WellZoneTieMapResponse:
+    """'Well-Seismic Tie' map: every well's Pay-zone mean VSH, tied to the
+    survey via real coordinates and spatially interpolated (IDW) across
+    the full inline/crossline grid -- see well_zone_tie_service for the
+    important caveat that this is geometric interpolation, not a seismic
+    inversion."""
+    try:
+        return WellZoneTieMapResponse(**wzt.compute_well_zone_tie_map(power=power))
     except Exception as exc:  # noqa: BLE001
         _handle(exc)
 

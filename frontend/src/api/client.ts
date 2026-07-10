@@ -35,6 +35,7 @@ import type {
   WellTieVizResponse,
   WellUploadResponse,
   WellZonesResponse,
+  WellZoneTieMapResponse,
 } from "./types";
 
 // In dev, Vite proxies /wells, /dashboard, /chat to the FastAPI backend (see vite.config.ts).
@@ -194,6 +195,13 @@ export async function getWellTieViz(
     `/api/seismic/well-tie/${wellId}`,
     { params: { wavelet_freq_hz: waveletFreqHz } },
   );
+  return data;
+}
+
+export async function getWellZoneTieMap(power?: number): Promise<WellZoneTieMapResponse> {
+  const { data } = await http.get<WellZoneTieMapResponse>("/api/seismic/well-zone-tie-map", {
+    params: { power },
+  });
   return data;
 }
 

@@ -4,6 +4,7 @@ import { getSurveyInfo } from "@/api/client";
 import SeismicSectionView from "./SeismicSectionView";
 import TimeSliceView from "./TimeSliceView";
 import WellTieView from "./WellTieView";
+import WellZoneTieMapView from "./WellZoneTieMapView";
 import AmplitudeSpectrumView from "./AmplitudeSpectrumView";
 import SpectralDecompView from "./SpectralDecompView";
 
@@ -11,6 +12,7 @@ const TABS = [
   { id: "section", label: "Inline / Crossline Section" },
   { id: "timeslice", label: "Time Slice" },
   { id: "welltie", label: "Well Tie" },
+  { id: "wellzonetiemap", label: "Well-Seismic Tie" },
   { id: "spectrum", label: "Amplitude Spectrum" },
   { id: "spectral", label: "Spectral Decomposition" },
 ] as const;
@@ -80,6 +82,7 @@ export default function SeismicPanel() {
             {activeTab === "section" && <SeismicSectionView surveyInfo={surveyInfoQuery.data} />}
             {activeTab === "timeslice" && <TimeSliceView surveyInfo={surveyInfoQuery.data} />}
             {activeTab === "welltie" && <WellTieView />}
+            {activeTab === "wellzonetiemap" && <WellZoneTieMapView />}
             {activeTab === "spectrum" && <AmplitudeSpectrumView surveyInfo={surveyInfoQuery.data} />}
             {activeTab === "spectral" && <SpectralDecompView surveyInfo={surveyInfoQuery.data} />}
           </div>

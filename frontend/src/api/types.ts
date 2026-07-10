@@ -205,6 +205,25 @@ export interface WellTieVizResponse {
   note: string;
 }
 
+export interface WellZoneTiePoint {
+  well_id: string;
+  well_name: string;
+  inline: number;
+  crossline: number;
+  distance_m: number;
+  mean_vsh_pay: number;
+  n_pay_samples: number;
+}
+
+export interface WellZoneTieMapResponse {
+  inline_axis: number[];
+  crossline_axis: number[];
+  predicted_vsh: (number | null)[][]; // shape (n_inlines, n_crosslines)
+  wells: WellZoneTiePoint[];
+  warnings: string[];
+  method_note: string;
+}
+
 export interface AmplitudeSpectrumResponse {
   inline_number: number | null;
   n_traces_sampled: number;
