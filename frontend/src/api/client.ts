@@ -9,12 +9,14 @@ import axios from "axios";
 import type {
   AmplitudeSpectrumResponse,
   ChatStreamEvent,
+  CoordinateCalibrationReportResponse,
   CrosslineSectionResponse,
   CrossplotResponse,
   DashboardSummary,
   DensityMethod,
   InlineSectionResponse,
   NearestTraceResponse,
+  RecalibrateResponse,
   SaveTiePointsRequest,
   SeismicAttributesResponse,
   SeismicSectionResponse,
@@ -33,6 +35,8 @@ import type {
   WellSeismicTieResponse,
   WellSummary,
   WellTieVizResponse,
+  WellTraceOverrideRequest,
+  WellTraceOverrideResponse,
   WellUploadResponse,
   WellZonesResponse,
   WellZoneTieMapResponse,
@@ -202,6 +206,39 @@ export async function getWellZoneTieMap(power?: number): Promise<WellZoneTieMapR
   const { data } = await http.get<WellZoneTieMapResponse>("/api/seismic/well-zone-tie-map", {
     params: { power },
   });
+  return data;
+}
+
+export async function getCoordinateCalibrationReport(): Promise<CoordinateCalibrationReportResponse> {
+  const { data } = await http.get<CoordinateCalibrationReportResponse>("/api/seismic/coordinate-calibration");
+  return data;
+}
+
+export async function recalibrateCoordinates(wellIds?: string[] | null): Promise<RecalibrateResponse> {
+  const { data } = await http.post<RecalibrateResponse>("/api/seismic/coordinate-calibration/recalibrate", {
+    well_ids: wellIds ?? null,
+  });
+  return data;
+}
+
+export async function listCoordinateOverrides(): Promise<WellTraceOverrideResponse[]> {
+  const { data } = await http.get<WellTraceOverrideResponse[]>("/api/seismic/coordinate-calibration/overrides");
+  return data;
+}
+
+export async function saveCoordinateOverride(
+  wellId: string,
+  body: WellTraceOverrideRequest,
+): Promise<WellTraceOverrideResponse> {
+  const { data } = await http.put<WellTraceOverrideResponse>(
+    `/api/seismic/coordinate-calibration/overrides/${wellId}`,
+    body,
+  );
+  return data;
+}
+
+export async function deleteCoordinateOverride(wellId: string): Promise<{ well_id: string; deleted: boolean }> {
+  const { data } = await http.delete(`/api/seismic/coordinate-calibration/overrides/${wellId}`);
   return data;
 }
 

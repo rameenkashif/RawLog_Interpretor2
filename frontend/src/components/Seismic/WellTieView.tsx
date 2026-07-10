@@ -101,7 +101,11 @@ export default function WellTieView() {
             <span>
               Nearest inline/crossline: {tieQuery.data.nearest_inline} / {tieQuery.data.nearest_crossline}
             </span>
-            <span>Distance: {tieQuery.data.distance_m.toFixed(0)} m</span>
+            <span>
+              {tieQuery.data.tie_method === "manual_override"
+                ? "Distance: manual override"
+                : `Distance: ${tieQuery.data.distance_m?.toFixed(0)} m`}
+            </span>
           </div>
 
           <div className="bg-surface border border-border rounded-xl p-4 shadow-card">

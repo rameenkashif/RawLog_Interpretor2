@@ -74,10 +74,15 @@ export default function WellSeismicTie() {
             {tieQuery.data.distance_m !== null && (
               <span>Distance: {tieQuery.data.distance_m.toFixed(0)} m</span>
             )}
-            <span>Best shift: {tieQuery.data.best_shift_ms.toFixed(1)} ms</span>
+            <span>
+              Best shift: {tieQuery.data.best_shift_ms.toFixed(1)} ms (search ±{tieQuery.data.max_shift_ms.toFixed(0)} ms)
+            </span>
             <span className={tieQuery.data.correlation > 0.5 ? "text-green-600" : "text-orange-600"}>
               Correlation: {tieQuery.data.correlation.toFixed(3)}
             </span>
+            {tieQuery.data.boundary_pinned && (
+              <span className="text-danger">⚠ Shift pinned to search edge — likely spurious, not a genuine tie</span>
+            )}
           </div>
 
           <Plot

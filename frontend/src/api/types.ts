@@ -149,6 +149,8 @@ export interface WellSeismicTieResponse {
   real_trace: number[];
   best_shift_ms: number;
   correlation: number;
+  max_shift_ms: number;
+  boundary_pinned: boolean;
   geometry_warning: string | null;
 }
 
@@ -169,6 +171,57 @@ export interface SurveyInfoResponse {
   n_inlines: number;
   n_crosslines: number;
   best_time_ms: number;
+  textual_header_encoding: string;
+  byte_locations: Record<string, number>;
+  byte_locations_declared: Record<string, boolean>;
+  delay_recording_time_ms: number;
+  delay_recording_time_uniform: boolean;
+}
+
+export interface WellCalibrationReportItem {
+  well_id: string;
+  well_name: string;
+  well_x: number;
+  well_y: number;
+  transformed_x: number;
+  transformed_y: number;
+  nearest_inline: number;
+  nearest_crossline: number;
+  nearest_trace_distance_m: number;
+  is_extrapolated: boolean;
+  within_bin_tolerance: boolean;
+  trustworthy: boolean;
+  used_in_calibration: boolean;
+  has_manual_override: boolean;
+  override_inline: number | null;
+  override_crossline: number | null;
+}
+
+export interface CoordinateCalibrationReportResponse {
+  wells: WellCalibrationReportItem[];
+  method_note: string;
+}
+
+export interface WellTraceOverrideRequest {
+  inline: number;
+  crossline: number;
+  note?: string;
+}
+
+export interface WellTraceOverrideResponse {
+  well_id: string;
+  inline: number;
+  crossline: number;
+  note: string;
+}
+
+export interface RecalibrateRequest {
+  well_ids?: string[] | null;
+}
+
+export interface RecalibrateResponse {
+  well_ids_used: string[];
+  bin_spacing_m: number;
 }
 
 export interface InlineSectionResponse {
@@ -201,7 +254,8 @@ export interface WellTieVizResponse {
   real_trace: number[];
   nearest_inline: number;
   nearest_crossline: number;
-  distance_m: number;
+  distance_m: number | null;
+  tie_method: "calibrated_fit" | "manual_override" | "direct_unvalidated";
   note: string;
 }
 
@@ -316,6 +370,15 @@ export interface TiePointModel {
   time_shift_ms: number;
 }
 
+export interface DatumCheckModel {
+  delay_ms: number;
+  implied_depth_m: number;
+  logged_top_depth_m: number;
+  relative_error: number;
+  avg_velocity_m_s: number;
+  plausible: boolean;
+}
+
 export interface SyntheticSeismogramResponse {
   well_id: string;
   well_header: WellHeaderQc;
@@ -326,7 +389,8 @@ export interface SyntheticSeismogramResponse {
   gardner_coefficients: GardnerCoefficients | null;
   nearest_inline: number;
   nearest_crossline: number;
-  distance_m: number;
+  distance_m: number | null;
+  tie_method: "calibrated_fit" | "manual_override" | "direct_unvalidated";
   depth_m: number[];
   twt_ms: number[];
   acoustic_impedance: number[];
@@ -348,6 +412,9 @@ export interface SyntheticSeismogramResponse {
   real_trace: number[];
   best_shift_ms: number;
   correlation: number;
+  max_shift_ms: number;
+  boundary_pinned: boolean;
+  datum_check: DatumCheckModel;
   applied_tie_points: TiePointModel[];
 }
 
@@ -370,5 +437,6 @@ export interface NearestTraceResponse {
   trace_index: number;
   inline: number;
   crossline: number;
-  distance_m: number;
+  distance_m: number | null;
+  tie_method: "calibrated_fit" | "manual_override" | "direct_unvalidated";
 }

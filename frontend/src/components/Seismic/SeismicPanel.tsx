@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getSurveyInfo } from "@/api/client";
+import CoordinateCalibrationView from "./CoordinateCalibrationView";
 import SeismicSectionView from "./SeismicSectionView";
 import TimeSliceView from "./TimeSliceView";
 import WellTieView from "./WellTieView";
@@ -13,6 +14,7 @@ const TABS = [
   { id: "timeslice", label: "Time Slice" },
   { id: "welltie", label: "Well Tie" },
   { id: "wellzonetiemap", label: "Well-Seismic Tie" },
+  { id: "coordcal", label: "Coordinate Calibration" },
   { id: "spectrum", label: "Amplitude Spectrum" },
   { id: "spectral", label: "Spectral Decomposition" },
 ] as const;
@@ -42,9 +44,19 @@ export default function SeismicPanel() {
           </p>
         </div>
         {surveyInfoQuery.data && (
-          <span className="text-xs font-semibold text-ink-faint bg-surface-sunken px-3 py-1 rounded-full">
+          <span
+            className="text-xs font-semibold text-ink-faint bg-surface-sunken px-3 py-1 rounded-full"
+            title={`Textual header decoded as ${surveyInfoQuery.data.textual_header_encoding}; inline/crossline/sourceX/sourceY byte locations ${
+              Object.entries(surveyInfoQuery.data.byte_locations_declared)
+                .map(([k, declared]) => `${k}=${declared ? "declared" : "rev1 default"}`)
+                .join(", ")
+            }; delay recording time ${surveyInfoQuery.data.delay_recording_time_ms}ms${
+              surveyInfoQuery.data.delay_recording_time_uniform ? "" : " (NOT uniform across traces!)"
+            }`}
+          >
             {surveyInfoQuery.data.source_filename} · {surveyInfoQuery.data.n_traces.toLocaleString()} traces ·{" "}
-            {surveyInfoQuery.data.n_inlines}×{surveyInfoQuery.data.n_crosslines} grid
+            {surveyInfoQuery.data.n_inlines}×{surveyInfoQuery.data.n_crosslines} grid ·{" "}
+            {surveyInfoQuery.data.textual_header_encoding} header
           </span>
         )}
       </div>
@@ -83,6 +95,7 @@ export default function SeismicPanel() {
             {activeTab === "timeslice" && <TimeSliceView surveyInfo={surveyInfoQuery.data} />}
             {activeTab === "welltie" && <WellTieView />}
             {activeTab === "wellzonetiemap" && <WellZoneTieMapView />}
+            {activeTab === "coordcal" && <CoordinateCalibrationView />}
             {activeTab === "spectrum" && <AmplitudeSpectrumView surveyInfo={surveyInfoQuery.data} />}
             {activeTab === "spectral" && <SpectralDecompView surveyInfo={surveyInfoQuery.data} />}
           </div>
