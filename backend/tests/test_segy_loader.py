@@ -85,3 +85,29 @@ class TestTraceCoordinates:
         loaded = load_segy_file(_write_segy(tmp_path, headers))
         assert loaded.trace_x.shape == (7,)
         assert loaded.trace_y.shape == (7,)
+
+
+class TestHeaderDiagnostics:
+    def test_no_declaration_defaults_to_rev1_source_xy(self, tmp_path):
+        headers = [{segyio.TraceField.SourceX: 111, segyio.TraceField.SourceY: 222, segyio.TraceField.SourceGroupScalar: 1}]
+        loaded = load_segy_file(_write_segy(tmp_path, headers))
+        assert loaded.metadata.source_byte_locations == {"source_x": 73, "source_y": 77}
+        assert loaded.metadata.source_byte_locations_declared == {"source_x": False, "source_y": False}
+        assert loaded.metadata.textual_header_encoding in ("cp037", "ascii", "latin-1")
+
+    def test_delay_recording_time_read_explicitly(self, tmp_path):
+        headers = [
+            {segyio.TraceField.DelayRecordingTime: 2030, segyio.TraceField.SourceGroupScalar: 1} for _ in range(3)
+        ]
+        loaded = load_segy_file(_write_segy(tmp_path, headers))
+        assert loaded.metadata.delay_recording_time_ms == 2030.0
+        assert loaded.metadata.delay_recording_time_uniform is True
+        assert loaded.twt_axis_ms[0] == 2030.0
+
+    def test_nonuniform_delay_flagged(self, tmp_path):
+        headers = [
+            {segyio.TraceField.DelayRecordingTime: 2030, segyio.TraceField.SourceGroupScalar: 1},
+            {segyio.TraceField.DelayRecordingTime: 2040, segyio.TraceField.SourceGroupScalar: 1},
+        ]
+        loaded = load_segy_file(_write_segy(tmp_path, headers))
+        assert loaded.metadata.delay_recording_time_uniform is False

@@ -10,20 +10,27 @@ segyio, rather than going through the upload/attribute pipeline
 inline/crossline geometry, which this feature needs to reshape traces into
 2D sections and 3D-style time slices.
 
-NON-STANDARD TRACE HEADER LAYOUT (confirmed by inspecting this file's
-textual header): inline number lives at trace header bytes 9-12 and
-crossline number at bytes 13-16. segyio's usual TraceField.INLINE_3D /
-CROSSLINE_3D constants point at bytes 189/193 instead, and would silently
-read the wrong values for this file -- so this module reads bytes 9-12 and
-13-16 explicitly instead (those happen to be segyio's FieldRecord/
-TraceNumber trace-header fields, which are just names for those same byte
-offsets; _verify_header_layout() double-checks this with a raw
-struct.unpack against trace 0 at file-open time so a segyio behavior
-change would fail loudly rather than silently mis-read the geometry).
-SourceX/SourceY (bytes 73-76/77-80) and the sample interval/delay
-recording time (bytes 117-118/109-110) ARE the standard SEG-Y rev1
-locations, so segyio's normal parsing (f.samples, TraceField.SourceX/Y) is
-used for those.
+NON-STANDARD TRACE HEADER LAYOUT: this vendor's (LMKR) SEG-Y export
+declares its own trace-header byte locations for inline/crossline (bytes
+9-12/13-16, NOT the rev1-standard 189/193) directly in the textual
+header ("Trace Inline At 9 And Size 4" etc.) -- see
+app/segy_header_parser.py, which regex-parses those declarations (falling
+back to rev1 standard locations for anything not declared) instead of
+hardcoding either convention. The textual header itself is also plain
+ASCII rather than the rev1-mandated EBCDIC, which segy_header_parser
+detects by trying both encodings and keeping whichever decodes to more
+printable text -- segyio's own f.text[] property always assumes EBCDIC
+and would garble an ASCII header, so the raw bytes are read directly
+instead. _verify_header_layout() double-checks the resolved byte
+locations with a raw struct.unpack against trace 0 at file-open time, so
+a segyio behavior change (or a byte-location parse gone wrong) fails
+loudly rather than silently mis-reading the geometry.
+
+The recording time axis also has a non-zero DelayRecordingTime (this
+survey: 2030 ms) -- i.e. the first sample is NOT at TWT=0. That's read
+explicitly from trace 0's header and used to build twt_axis_ms
+(delay_ms + arange(n_samples)*sample_interval_ms) rather than trusting
+segyio's f.samples to have picked it up correctly.
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ import numpy as np
 import segyio
 from scipy.signal import fftconvolve, stft
 
+from app import segy_header_parser as shp
 from app import well_seismic_tie as wst
 from app.services import well_service
 
@@ -137,6 +145,11 @@ class SurveyInfo:
     n_inlines: int
     n_crosslines: int
     best_time_ms: float
+    textual_header_encoding: str
+    byte_locations: dict[str, int]
+    byte_locations_declared: dict[str, bool]
+    delay_recording_time_ms: float
+    delay_recording_time_uniform: bool
 
 
 class SegyVolume:
@@ -152,25 +165,47 @@ class SegyVolume:
         if not self.path.exists():
             raise SegyFileNotFoundError(f"SEG-Y file not found: {self.path}")
 
+        # Detect textual-header encoding (ASCII vs EBCDIC) and any
+        # vendor-declared trace-header byte locations BEFORE opening with
+        # segyio's own header parsing, since segyio's f.text[] always
+        # assumes EBCDIC and would garble this vendor's plain-ASCII header
+        # -- see segy_header_parser module docstring.
+        header_result, byte_result = shp.detect_geometry(str(self.path))
+        self.textual_header_encoding = header_result.encoding
+        self.textual_header_printable_fraction = header_result.printable_fraction
+        self.byte_locations = byte_result.byte_locations
+        self.byte_locations_declared = byte_result.declared
+        resolved_fields = shp.resolve_trace_fields(self.byte_locations)
+
         f = segyio.open(str(self.path), "r", ignore_geometry=True)
         try:
             f.mmap()
             self.n_traces = f.tracecount
-            self.twt_axis_ms = np.array(f.samples, dtype=float)
-            self.n_samples = len(self.twt_axis_ms)
-            self.sample_interval_ms = (
-                float(self.twt_axis_ms[1] - self.twt_axis_ms[0]) if self.n_samples > 1 else 0.0
-            )
 
-            # NON-STANDARD: inline at bytes 9-12 (FieldRecord), crossline at
-            # bytes 13-16 (TraceNumber) -- NOT INLINE_3D/CROSSLINE_3D. See
-            # module docstring.
-            self.inline = np.asarray(f.attributes(segyio.TraceField.FieldRecord)[:], dtype=int)
-            self.crossline = np.asarray(f.attributes(segyio.TraceField.TraceNumber)[:], dtype=int)
-            self.source_x = np.asarray(f.attributes(segyio.TraceField.SourceX)[:], dtype=float)
-            self.source_y = np.asarray(f.attributes(segyio.TraceField.SourceY)[:], dtype=float)
+            self.inline = np.asarray(f.attributes(resolved_fields["inline"])[:], dtype=int)
+            self.crossline = np.asarray(f.attributes(resolved_fields["crossline"])[:], dtype=int)
+            self.source_x = np.asarray(f.attributes(resolved_fields["source_x"])[:], dtype=float)
+            self.source_y = np.asarray(f.attributes(resolved_fields["source_y"])[:], dtype=float)
 
+            self._resolved_fields = resolved_fields
             self._verify_header_layout(f)
+
+            # Explicit DelayRecordingTime read (trace header bytes 109-110)
+            # rather than trusting f.samples to have picked it up --
+            # DelayRecordingTime is the actual start of the recorded time
+            # axis (this survey: 2030 ms, i.e. the first sample is NOT at
+            # TWT=0). Sanity-checked for consistency across traces: a
+            # varying delay would mean traces aren't directly comparable
+            # sample-for-sample, which every 2D section/time-slice/well-tie
+            # method in this class assumes.
+            delay_all = np.asarray(f.attributes(segyio.TraceField.DelayRecordingTime)[:], dtype=float)
+            self.delay_recording_time_ms = float(delay_all[0]) if len(delay_all) else 0.0
+            self.delay_recording_time_uniform = bool(np.all(delay_all == delay_all[0])) if len(delay_all) else True
+
+            interval_us = float(segyio.tools.dt(f))
+            self.sample_interval_ms = interval_us / 1000.0
+            self.n_samples = len(f.samples)
+            self.twt_axis_ms = self.delay_recording_time_ms + np.arange(self.n_samples) * self.sample_interval_ms
 
             # Load the full amplitude matrix once (a ~90 MB SEG-Y file is a
             # ~75-80 MB float32 array in memory) so every read below is a
@@ -233,19 +268,28 @@ class SegyVolume:
 
     def _verify_header_layout(self, f) -> None:
         """Cross-check the bulk header read against a manual struct.unpack of
-        trace 0's raw header bytes at the documented offsets, so a segyio
-        version/behavior difference fails loudly instead of silently
-        mis-reading this file's non-standard inline/crossline layout."""
+        trace 0's raw header bytes at the DYNAMICALLY RESOLVED byte offsets
+        (self.byte_locations, from segy_header_parser -- never hardcoded),
+        so a segyio version/behavior difference -- or a byte-location parse
+        gone wrong -- fails loudly instead of silently mis-reading this
+        file's geometry."""
         raw = bytes(f.header[0].buf)
-        inline0 = struct.unpack(">i", raw[8:12])[0]
-        crossline0 = struct.unpack(">i", raw[12:16])[0]
-        srcx0 = struct.unpack(">i", raw[72:76])[0]
-        srcy0 = struct.unpack(">i", raw[76:80])[0]
-        expected = (inline0, crossline0, srcx0, srcy0)
+
+        def _unpack_at(byte_1indexed: int) -> int:
+            offset = byte_1indexed - 1  # SEG-Y byte locations are 1-indexed
+            return struct.unpack(">i", raw[offset : offset + 4])[0]
+
+        expected = (
+            _unpack_at(self.byte_locations["inline"]),
+            _unpack_at(self.byte_locations["crossline"]),
+            _unpack_at(self.byte_locations["source_x"]),
+            _unpack_at(self.byte_locations["source_y"]),
+        )
         actual = (int(self.inline[0]), int(self.crossline[0]), int(self.source_x[0]), int(self.source_y[0]))
         if expected != actual:
             raise SegyVolumeError(
-                "Trace header layout mismatch: manual byte-offset read of trace 0 "
+                f"Trace header layout mismatch: manual byte-offset read of trace 0 at the "
+                f"resolved locations {self.byte_locations} "
                 f"(inline={expected[0]}, crossline={expected[1]}, srcX={expected[2]}, "
                 f"srcY={expected[3]}) disagrees with the bulk field read (inline={actual[0]}, "
                 f"crossline={actual[1]}, srcX={actual[2]}, srcY={actual[3]}). Refusing to serve "
@@ -268,6 +312,11 @@ class SegyVolume:
             n_inlines=len(self._inlines_sorted),
             n_crosslines=len(self._crosslines_sorted),
             best_time_ms=float(self.twt_axis_ms[self._best_time_sample_idx]),
+            textual_header_encoding=self.textual_header_encoding,
+            byte_locations=self.byte_locations,
+            byte_locations_declared=self.byte_locations_declared,
+            delay_recording_time_ms=self.delay_recording_time_ms,
+            delay_recording_time_uniform=self.delay_recording_time_uniform,
         )
 
     def get_trace(self, index: int) -> np.ndarray:

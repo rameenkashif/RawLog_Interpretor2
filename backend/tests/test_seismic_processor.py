@@ -78,6 +78,17 @@ def _write_synthetic_segy(
     i = 0
     with segyio.create(str(path), spec) as f:
         f.bin[segyio.BinField.Interval] = interval_ms * 1000
+        # Mirrors the real production file's vendor-declared (non-rev1)
+        # byte locations for inline/crossline, so tests exercise
+        # segy_header_parser's byte-location parsing the same way the real
+        # file does rather than falling back to the rev1 defaults (which
+        # would silently break every inline=9/crossline=13-based test
+        # below). SourceX/Y are left undeclared -- like the real file,
+        # they're at the rev1 standard location (73/77) already.
+        f.text[0] = (
+            "C 1 CLIENT LMKR SURVEY TEST TRACE INLINE AT 9 AND SIZE 4 "
+            "TRACE CROSSLINE AT 13 AND SIZE 4"
+        ).ljust(3200)
         for il in INLINES:
             for xl in CROSSLINES:
                 f.header[i] = {
@@ -114,6 +125,13 @@ def _write_windowed_synthetic_segy(path: Path) -> None:
     i = 0
     with segyio.create(str(path), spec) as f:
         f.bin[segyio.BinField.Interval] = INTERVAL_MS * 1000
+        # See _write_synthetic_segy's comment above -- without a declared
+        # byte location, segy_header_parser falls back to the rev1
+        # standard (189/193) instead of this fixture's FieldRecord/
+        # TraceNumber (9/13) convention.
+        f.text[0] = (
+            "C 1 TRACE INLINE AT 9 AND SIZE 4 TRACE CROSSLINE AT 13 AND SIZE 4"
+        ).ljust(3200)
         for il in INLINES:
             for xl in CROSSLINES:
                 f.header[i] = {
@@ -142,6 +160,22 @@ class TestGeometry:
         assert info.n_samples == N_SAMPLES
         assert info.inline_min == 382 and info.inline_max == 386
         assert info.crossline_min == 46 and info.crossline_max == 49
+
+    def test_survey_info_surfaces_header_diagnostics(self, volume):
+        info = volume.survey_info()
+        # This fixture's textual header declares inline/crossline at bytes
+        # 9/13 (see _write_synthetic_segy) -- resolved dynamically, not
+        # hardcoded (segy_header_parser).
+        assert info.byte_locations["inline"] == 9
+        assert info.byte_locations["crossline"] == 13
+        assert info.byte_locations_declared["inline"] is True
+        assert info.byte_locations_declared["crossline"] is True
+        # source_x/source_y weren't declared -- defaulted to rev1 standard.
+        assert info.byte_locations_declared["source_x"] is False
+        assert info.byte_locations_declared["source_y"] is False
+        assert info.textual_header_encoding in ("cp037", "ascii", "latin-1")
+        assert info.delay_recording_time_ms == DELAY_MS
+        assert info.delay_recording_time_uniform is True
         assert info.n_inlines == 5 and info.n_crosslines == 4
         assert info.twt_start_ms == 2030.0
         assert info.sample_interval_ms == 2.0

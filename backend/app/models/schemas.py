@@ -128,6 +128,19 @@ class SeismicSummary(BaseModel):
         None,
         description="Amplitude-based porosity-trend proxy -- NOT a measured porosity. See caveat in seismic_attributes.py.",
     )
+    textual_header_encoding: str = Field(
+        "cp037", description="Encoding the textual header actually decoded with, auto-detected (not assumed cp037)"
+    )
+    source_byte_locations: dict[str, int] = Field(
+        default_factory=dict, description="Resolved SourceX/SourceY trace-header byte locations"
+    )
+    source_byte_locations_declared: dict[str, bool] = Field(
+        default_factory=dict, description="True per field if the textual header declared it; False if defaulted to rev1 standard"
+    )
+    delay_recording_time_ms: float = Field(0.0, description="TWT of the first sample, read from trace headers")
+    delay_recording_time_uniform: bool = Field(
+        True, description="False if DelayRecordingTime varies across traces"
+    )
     avg_swe_proxy: float | None = Field(
         None,
         description="Bright-spot-based hydrocarbon-indicator proxy -- NOT a measured water saturation. See caveat in seismic_attributes.py.",
@@ -237,6 +250,19 @@ class SurveyInfoResponse(BaseModel):
     n_inlines: int
     n_crosslines: int
     best_time_ms: float
+    textual_header_encoding: str = Field(
+        ..., description="Encoding the textual header actually decoded with ('cp037'/'ascii'/'latin-1'), auto-detected"
+    )
+    byte_locations: dict[str, int] = Field(
+        ..., description="Resolved trace-header byte locations (inline/crossline/source_x/source_y)"
+    )
+    byte_locations_declared: dict[str, bool] = Field(
+        ..., description="True per field if the textual header declared it explicitly; False if defaulted to rev1 standard"
+    )
+    delay_recording_time_ms: float = Field(..., description="TWT of the first sample, read from trace headers")
+    delay_recording_time_uniform: bool = Field(
+        ..., description="False if DelayRecordingTime varies across traces (traces would not be directly comparable sample-for-sample)"
+    )
 
 
 class InlineSectionResponse(BaseModel):

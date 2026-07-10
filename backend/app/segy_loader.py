@@ -19,12 +19,14 @@ already applied to LAS uploads in las_loader.py.
 from __future__ import annotations
 
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 
 import numpy as np
 import segyio
+
+from app import segy_header_parser as shp
 
 
 class SegyValidationError(ValueError):
@@ -41,6 +43,11 @@ class SegyMetadata:
     n_samples: int
     sample_interval_ms: float
     duration_ms: float
+    textual_header_encoding: str = "cp037"
+    source_byte_locations: dict[str, int] = field(default_factory=dict)
+    source_byte_locations_declared: dict[str, bool] = field(default_factory=dict)
+    delay_recording_time_ms: float = 0.0
+    delay_recording_time_uniform: bool = True
 
 
 @dataclass
@@ -66,12 +73,16 @@ def _apply_coord_scalar(raw: np.ndarray, scalar: np.ndarray) -> np.ndarray:
     return out
 
 
-def _extract_trace_coordinates(f, n_traces: int) -> tuple[np.ndarray, np.ndarray]:
+def _extract_trace_coordinates(
+    f, n_traces: int, source_x_field: int, source_y_field: int
+) -> tuple[np.ndarray, np.ndarray]:
     """Best-effort extraction of per-trace surface coordinates from the
-    trace headers (CDP_X/CDP_Y, falling back to SourceX/SourceY), so wells
-    carrying their own surface coordinates (see las_loader.py) can be tied
-    to the nearest real trace by location instead of a manually configured
-    trace index -- see well_seismic_tie.find_nearest_trace_index.
+    trace headers (CDP_X/CDP_Y at their standard locations, falling back
+    to SourceX/SourceY at the DYNAMICALLY RESOLVED byte locations passed
+    in -- see segy_header_parser, never hardcoded), so wells carrying
+    their own surface coordinates (see las_loader.py) can be tied to the
+    nearest real trace by location instead of a manually configured trace
+    index -- see well_seismic_tie.find_nearest_trace_index.
 
     Returns arrays of NaN if the file has no usable coordinate headers; this
     is common for vendor exports/2D lines with blank or non-standard
@@ -92,10 +103,10 @@ def _extract_trace_coordinates(f, n_traces: int) -> tuple[np.ndarray, np.ndarray
             return cdp_x, cdp_y
 
         src_x = _apply_coord_scalar(
-            np.array(f.attributes(segyio.TraceField.SourceX)[:], dtype=float), scalar
+            np.array(f.attributes(source_x_field)[:], dtype=float), scalar
         )
         src_y = _apply_coord_scalar(
-            np.array(f.attributes(segyio.TraceField.SourceY)[:], dtype=float), scalar
+            np.array(f.attributes(source_y_field)[:], dtype=float), scalar
         )
         if np.any(src_x) or np.any(src_y):
             return src_x, src_y
@@ -143,6 +154,16 @@ def load_segy_file(
         path = Path(filename)
 
     try:
+        # Detect textual-header encoding (ASCII vs EBCDIC) and any
+        # vendor-declared SourceX/SourceY byte locations BEFORE opening
+        # with segyio -- segyio's own f.text[] always assumes EBCDIC and
+        # would garble a plain-ASCII vendor header (see
+        # segy_header_parser module docstring).
+        header_result, byte_result = shp.detect_geometry(read_path)
+        resolved_fields = shp.resolve_trace_fields(
+            {"source_x": byte_result.byte_locations["source_x"], "source_y": byte_result.byte_locations["source_y"]}
+        )
+
         # ignore_geometry=True avoids requiring inline/crossline byte
         # locations to be correctly set in the trace headers -- many
         # real-world SEG-Y files (especially 2D lines or vendor exports)
@@ -156,8 +177,7 @@ def load_segy_file(
                     f"SEG-Y file '{filename}' contains no traces."
                 )
 
-            twt_axis_ms = np.array(f.samples, dtype=float)
-            n_samples = len(twt_axis_ms)
+            n_samples = len(f.samples)
             if n_samples == 0:
                 raise SegyValidationError(
                     f"SEG-Y file '{filename}' contains no samples."
@@ -166,10 +186,23 @@ def load_segy_file(
             sample_interval_ms = float(
                 segyio.tools.dt(f) / 1000.0
             )  # dt() returns microseconds
+
+            # Explicit DelayRecordingTime read rather than trusting
+            # f.samples to have picked it up -- the actual start of the
+            # recorded time axis, not necessarily 0 (see
+            # seismic_processor.py's SegyVolume for the same fix and its
+            # rationale).
+            delay_all = np.asarray(f.attributes(segyio.TraceField.DelayRecordingTime)[:], dtype=float)
+            delay_recording_time_ms = float(delay_all[0]) if len(delay_all) else 0.0
+            delay_recording_time_uniform = bool(np.all(delay_all == delay_all[0])) if len(delay_all) else True
+            twt_axis_ms = delay_recording_time_ms + np.arange(n_samples) * sample_interval_ms
+
             traces = segyio.tools.collect(f.trace[:]).astype(
                 float
             )  # (n_traces, n_samples)
-            trace_x, trace_y = _extract_trace_coordinates(f, n_traces)
+            trace_x, trace_y = _extract_trace_coordinates(
+                f, n_traces, resolved_fields["source_x"], resolved_fields["source_y"]
+            )
 
     except SegyValidationError:
         raise
@@ -189,6 +222,17 @@ def load_segy_file(
         n_traces=n_traces,
         n_samples=n_samples,
         sample_interval_ms=sample_interval_ms,
+        textual_header_encoding=header_result.encoding,
+        source_byte_locations={
+            "source_x": byte_result.byte_locations["source_x"],
+            "source_y": byte_result.byte_locations["source_y"],
+        },
+        source_byte_locations_declared={
+            "source_x": byte_result.declared["source_x"],
+            "source_y": byte_result.declared["source_y"],
+        },
+        delay_recording_time_ms=delay_recording_time_ms,
+        delay_recording_time_uniform=delay_recording_time_uniform,
         duration_ms=duration_ms,
     )
 

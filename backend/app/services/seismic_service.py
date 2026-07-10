@@ -76,6 +76,11 @@ def _build_seismic_summary(metadata: SegyMetadata, attributes) -> SeismicSummary
         avg_vsh_proxy=safe_mean("VSH_SEISMIC_PROXY"),
         avg_phie_proxy=safe_mean("PHIE_SEISMIC_PROXY"),
         avg_swe_proxy=safe_mean("SWE_SEISMIC_PROXY"),
+        textual_header_encoding=metadata.textual_header_encoding,
+        source_byte_locations=metadata.source_byte_locations,
+        source_byte_locations_declared=metadata.source_byte_locations_declared,
+        delay_recording_time_ms=metadata.delay_recording_time_ms,
+        delay_recording_time_uniform=metadata.delay_recording_time_uniform,
     )
 
 
