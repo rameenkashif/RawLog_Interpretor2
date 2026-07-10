@@ -89,3 +89,28 @@ def synthetic_well_df():
 @pytest.fixture
 def step_depth():
     return 0.1524
+
+
+@pytest.fixture(autouse=True)
+def _isolate_coordinate_repos(tmp_path, monkeypatch):
+    """coordinate_calibration_service.py's default repo accessors
+    (get_coordinate_calibration_repository / get_coordinate_tie_override_
+    repository) are module-level singletons backed by real files under
+    backend/data/coordinate_overrides/. Any test that exercises a well-tie
+    path without explicitly injecting its own repo (e.g. via
+    SegyVolume.get_well_tie or synthetic_seismogram_service, which don't
+    expose that as a parameter) would otherwise read/write that REAL
+    directory -- leaking calibration state across unrelated tests, and
+    even across separate pytest invocations since it's a real file, not
+    an in-memory fixture. Force every test's default singleton to a fresh
+    per-test tmp_path instance instead; tests that pass their own
+    calibration_repo/override_repo explicitly are unaffected."""
+    import app.coordinate_calibration_repository as ccr
+    import app.coordinate_tie_override_repository as ctor
+
+    monkeypatch.setattr(
+        ccr, "_repository", ccr.FileCoordinateCalibrationRepository(path=tmp_path / "calibration.json")
+    )
+    monkeypatch.setattr(
+        ctor, "_repository", ctor.FileCoordinateTieOverrideRepository(base_dir=tmp_path / "overrides")
+    )

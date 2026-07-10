@@ -19,16 +19,25 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.models.schemas import (
     AmplitudeSpectrumResponse,
+    CoordinateCalibrationReportResponse,
     CrosslineSectionResponse,
     InlineSectionResponse,
+    RecalibrateRequest,
+    RecalibrateResponse,
     SpectralDecompositionResponse,
     SpectralFrequencySliceResponse,
     SpectralTraceResponse,
     SurveyInfoResponse,
     TimeSliceResponse,
+    WellCalibrationReportItem,
     WellTieVizResponse,
+    WellTraceOverrideRequest,
+    WellTraceOverrideResponse,
     WellZoneTieMapResponse,
 )
+from app.coordinate_calibration import CoordinateCalibrationError
+from app.coordinate_tie_override_repository import WellTraceOverride, get_coordinate_tie_override_repository
+from app.services import coordinate_calibration_service as ccs
 from app.services import seismic_processor as sp
 from app.services import well_zone_tie_service as wzt
 from app.services.well_service import WellNotFoundError
@@ -40,6 +49,8 @@ def _handle(exc: Exception):
     if isinstance(exc, (WellNotFoundError, sp.SegyFileNotFoundError)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if isinstance(exc, wzt.WellZoneTieError):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if isinstance(exc, (ccs.UnresolvedCoordinateError, CoordinateCalibrationError)):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if isinstance(exc, sp.SegyVolumeError):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -109,6 +120,71 @@ async def well_zone_tie_map(
         return WellZoneTieMapResponse(**wzt.compute_well_zone_tie_map(power=power))
     except Exception as exc:  # noqa: BLE001
         _handle(exc)
+
+
+@router.get("/coordinate-calibration", response_model=CoordinateCalibrationReportResponse)
+async def coordinate_calibration_report() -> CoordinateCalibrationReportResponse:
+    """Diagnostic report for every well with known coordinates: the
+    per-axis well<->seismic calibration's estimate, residual-vs-bin-
+    spacing validation, extrapolation flag, and manual override status --
+    see coordinate_calibration_service.py. NOT a seismic inversion or CRS
+    reprojection; only wells flagged trustworthy (or with a manual
+    override) should be used for downstream tie/prediction workflows."""
+    try:
+        volume = sp.get_segy_volume()
+        reports = ccs.get_calibration_report(volume)
+        return CoordinateCalibrationReportResponse(
+            wells=[WellCalibrationReportItem(**vars(r)) for r in reports],
+            method_note=(
+                "Per-axis linear fit (X_seismic = a*X_well + b, Y_seismic = c*Y_well + d) between "
+                "well and seismic coordinates, calibrated from the wells' own coordinate extent -- "
+                "NOT a real CRS reprojection (no known CRS/EPSG exists for either dataset). Only "
+                "trust a well flagged trustworthy=true, or one with a manual override; treat any "
+                "other well's tie as unresolved."
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.post("/coordinate-calibration/recalibrate", response_model=RecalibrateResponse)
+async def recalibrate(body: RecalibrateRequest) -> RecalibrateResponse:
+    """Explicitly (re)fit the calibration baseline -- from every well with
+    known coordinates if well_ids is omitted, or from a curated subset
+    (e.g. excluding a well known to be bad) if given. This is the real
+    fix path when the calibration itself looks wrong, vs. a manual
+    tie-point override for a single problem well."""
+    try:
+        volume = sp.get_segy_volume()
+        _cal, well_ids_used, bin_spacing_m = ccs.fit_and_store_calibration(volume, well_ids=body.well_ids)
+        return RecalibrateResponse(well_ids_used=well_ids_used, bin_spacing_m=bin_spacing_m)
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/coordinate-calibration/overrides", response_model=list[WellTraceOverrideResponse])
+async def list_coordinate_overrides() -> list[WellTraceOverrideResponse]:
+    repo = get_coordinate_tie_override_repository()
+    return [WellTraceOverrideResponse(**vars(o)) for o in repo.list_overrides()]
+
+
+@router.put("/coordinate-calibration/overrides/{well_id}", response_model=WellTraceOverrideResponse)
+async def save_coordinate_override(well_id: str, body: WellTraceOverrideRequest) -> WellTraceOverrideResponse:
+    """Manual well->trace tie-point override -- the real fix path for a
+    well the calibration can't resolve with confidence (fix #5): once
+    saved, this takes priority over the calibrated fit everywhere the
+    well needs to be located on the seismic survey."""
+    repo = get_coordinate_tie_override_repository()
+    override = WellTraceOverride(well_id=well_id, inline=body.inline, crossline=body.crossline, note=body.note)
+    repo.save_override(override)
+    return WellTraceOverrideResponse(**vars(override))
+
+
+@router.delete("/coordinate-calibration/overrides/{well_id}")
+async def delete_coordinate_override(well_id: str) -> dict:
+    repo = get_coordinate_tie_override_repository()
+    deleted = repo.delete_override(well_id)
+    return {"well_id": well_id, "deleted": deleted}
 
 
 @router.get("/spectrum", response_model=AmplitudeSpectrumResponse)

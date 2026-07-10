@@ -26,7 +26,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from app import petrophysics as pp
-from app import well_seismic_tie as wst
+from app.coordinate_calibration import CoordinateCalibrationError
+from app.services import coordinate_calibration_service as ccs
 from app.services import seismic_processor as sp
 from app.services import well_service
 
@@ -64,8 +65,8 @@ def _collect_tie_points(volume: sp.SegyVolume) -> tuple[list[_WellTiePoint], lis
             warnings.append(f"{well_id}: no surface coordinates in LAS header -- skipped.")
             continue
         try:
-            volume.check_crs_alignment(well_id, summary.well_x, summary.well_y)
-        except sp.CrsMismatchError as exc:
+            trace_idx, distance_m, _tie_method = ccs.resolve_well_trace_index(volume, well_id)
+        except (ccs.UnresolvedCoordinateError, CoordinateCalibrationError, sp.CrsMismatchError) as exc:
             warnings.append(f"{well_id}: {exc}")
             continue
 
@@ -78,9 +79,7 @@ def _collect_tie_points(volume: sp.SegyVolume) -> tuple[list[_WellTiePoint], lis
             warnings.append(f"{well_id}: no Pay-zone samples -- skipped.")
             continue
 
-        trace_idx, distance_m = wst.find_nearest_trace_index(
-            summary.well_x, summary.well_y, volume.source_x, volume.source_y
-        )
+        distance_m = distance_m if distance_m is not None else 0.0
         points.append(
             _WellTiePoint(
                 well_id=well_id,

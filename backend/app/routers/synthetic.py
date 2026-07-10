@@ -31,6 +31,8 @@ from app.models.schemas import (
     SyntheticSeismogramResponse,
     TiePointsResponse,
 )
+from app.coordinate_calibration import CoordinateCalibrationError
+from app.services import coordinate_calibration_service as ccs
 from app.services import seismic_processor as sp
 from app.services import synthetic_seismogram_service as sss
 from app.services.well_service import WellNotFoundError
@@ -41,6 +43,8 @@ router = APIRouter(prefix="/api/synthetic", tags=["synthetic-seismogram"])
 def _handle(exc: Exception):
     if isinstance(exc, (WellNotFoundError, sp.SegyFileNotFoundError)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if isinstance(exc, (ccs.UnresolvedCoordinateError, CoordinateCalibrationError)):
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if isinstance(exc, (sss.SyntheticSeismogramError, sp.SegyVolumeError)):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     raise exc
@@ -142,7 +146,9 @@ async def export_tie_report(
     writer.writerow(["# Synthetic seismogram tie report", well_id])
     writer.writerow(["# nearest_inline", result["nearest_inline"]])
     writer.writerow(["# nearest_crossline", result["nearest_crossline"]])
-    writer.writerow(["# distance_m", f"{result['distance_m']:.2f}"])
+    writer.writerow(["# tie_method", result["tie_method"]])
+    distance_m = result["distance_m"]
+    writer.writerow(["# distance_m", f"{distance_m:.2f}" if distance_m is not None else "n/a (manual override)"])
     writer.writerow(["# correlation", f"{result['correlation']:.4f}"])
     writer.writerow(["# best_shift_ms", f"{result['best_shift_ms']:.2f}"])
     writer.writerow(["# density_method", result["density_method"]])

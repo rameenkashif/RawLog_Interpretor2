@@ -45,6 +45,7 @@ from scipy.signal import fftconvolve, stft
 
 from app import segy_header_parser as shp
 from app import well_seismic_tie as wst
+from app.services import coordinate_calibration_service as ccs
 from app.services import well_service
 
 RAW_SEISMIC_DIR = Path(__file__).resolve().parents[2] / "data" / "seismic_raw"
@@ -629,17 +630,17 @@ class SegyVolume:
 
     def get_well_tie(self, well_id: str, wavelet_freq_hz: float = 25.0) -> dict:
         # Reuses well_service (LAS loading/repository) and well_seismic_tie
-        # (impedance/reflectivity/Ricker-wavelet synthetic + nearest-trace
-        # search) rather than re-implementing either -- see tie_service.py
-        # for the analogous flow against the upload-pipeline's seismic data.
-        well_summary = well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
-        if well_summary.well_x is None or well_summary.well_y is None:
-            raise SegyVolumeError(
-                f"Well '{well_id}' has no surface coordinates in its LAS header -- cannot "
-                "locate it within the seismic survey."
-            )
-
-        self.check_crs_alignment(well_id, well_summary.well_x, well_summary.well_y)
+        # (impedance/reflectivity/Ricker-wavelet synthetic) rather than
+        # re-implementing either -- see tie_service.py for the analogous
+        # flow against the upload-pipeline's seismic data. Well location is
+        # resolved via coordinate_calibration_service, NOT a direct
+        # find_nearest_trace_index(well_x, well_y, source_x, source_y) call
+        # -- well and seismic coordinates are on different, unknown
+        # coordinate reference systems (see that module's docstring), so a
+        # raw distance comparison between them is meaningless without the
+        # calibrated transform.
+        well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent, before coordinate resolution
+        trace_idx, distance_m, tie_method = ccs.resolve_well_trace_index(self, well_id)
 
         curves_response = well_service.get_well_curves(well_id)
         rows = curves_response["data"]
@@ -660,10 +661,6 @@ class SegyVolume:
             raise MissingCurveError(well_id, "DT")
         if not np.isfinite(rhob).any():
             raise MissingCurveError(well_id, "RHOB")
-
-        trace_idx, distance_m = wst.find_nearest_trace_index(
-            well_summary.well_x, well_summary.well_y, self.source_x, self.source_y
-        )
 
         result = wst.build_synthetic(
             depth_m=depth,
@@ -695,6 +692,7 @@ class SegyVolume:
             "nearest_inline": int(self.inline[trace_idx]),
             "nearest_crossline": int(self.crossline[trace_idx]),
             "distance_m": distance_m,
+            "tie_method": tie_method,
             "note": note,
         }
 

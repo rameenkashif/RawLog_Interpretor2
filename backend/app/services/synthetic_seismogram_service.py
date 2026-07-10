@@ -21,6 +21,7 @@ from __future__ import annotations
 import numpy as np
 
 from app import well_seismic_tie as wst
+from app.services import coordinate_calibration_service as ccs
 from app.services import seismic_processor as sp
 from app.services import well_service
 from app.synthetic_tie_repository import (
@@ -128,12 +129,13 @@ def generate(
     volume = sp.get_segy_volume()
     well_summary = well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
 
-    if well_summary.well_x is None or well_summary.well_y is None:
-        raise SyntheticSeismogramError(
-            f"Well '{well_id}' has no surface coordinates -- cannot locate it within the "
-            "seismic survey."
-        )
-    volume.check_crs_alignment(well_id, well_summary.well_x, well_summary.well_y)
+    # Well location resolved via coordinate_calibration_service, NOT a
+    # direct find_nearest_trace_index(well_x, well_y, source_x, source_y)
+    # call -- well and seismic coordinates are on different, unknown
+    # coordinate reference systems, so a raw distance comparison between
+    # them is meaningless without the calibrated transform (or an
+    # explicit manual override) -- see that module's docstring.
+    trace_idx, distance_m, tie_method = ccs.resolve_well_trace_index(volume, well_id)
 
     curves_response = well_service.get_well_curves(well_id)
     rows = curves_response["data"]
@@ -158,9 +160,6 @@ def generate(
         nphi, rhob_real if np.isfinite(rhob_real).any() else density, dt_log
     )
 
-    trace_idx, distance_m = wst.find_nearest_trace_index(
-        well_summary.well_x, well_summary.well_y, volume.source_x, volume.source_y
-    )
     real_trace = volume.get_trace(trace_idx)
     dt_ms = volume.sample_interval_ms
 
@@ -230,6 +229,7 @@ def generate(
         "nearest_inline": int(volume.inline[trace_idx]),
         "nearest_crossline": int(volume.crossline[trace_idx]),
         "distance_m": distance_m,
+        "tie_method": tie_method,
         "depth_m": depth_v.tolist(),
         "twt_ms": twt_ms.tolist(),
         "acoustic_impedance": ai.tolist(),
@@ -282,17 +282,13 @@ def nearest_trace(well_id: str) -> dict:
     """Standalone nearest-trace lookup (without generating the full
     synthetic), for a lightweight "where does this well tie to" check."""
     volume = sp.get_segy_volume()
-    well_summary = well_service.get_well_summary(well_id)
-    if well_summary.well_x is None or well_summary.well_y is None:
-        raise SyntheticSeismogramError(f"Well '{well_id}' has no surface coordinates.")
-    volume.check_crs_alignment(well_id, well_summary.well_x, well_summary.well_y)
-    trace_idx, distance_m = wst.find_nearest_trace_index(
-        well_summary.well_x, well_summary.well_y, volume.source_x, volume.source_y
-    )
+    well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
+    trace_idx, distance_m, tie_method = ccs.resolve_well_trace_index(volume, well_id)
     return {
         "well_id": well_id,
         "trace_index": trace_idx,
         "inline": int(volume.inline[trace_idx]),
         "crossline": int(volume.crossline[trace_idx]),
         "distance_m": distance_m,
+        "tie_method": tie_method,
     }

@@ -314,7 +314,8 @@ class WellTieVizResponse(BaseModel):
     real_trace: list[float]
     nearest_inline: int
     nearest_crossline: int
-    distance_m: float
+    distance_m: float | None = Field(None, description="None for a manual override (asserted directly, no residual)")
+    tie_method: str = Field("calibrated_fit", description="'calibrated_fit' or 'manual_override'")
     note: str = Field(
         ..., description="Simplifications/caveats in this tie (e.g. sonic-only depth-time conversion)"
     )
@@ -343,6 +344,63 @@ class WellZoneTieMapResponse(BaseModel):
     method_note: str = Field(
         ..., description="Caveat: this is geometric IDW interpolation between wells, not a seismic inversion/ML prediction"
     )
+
+
+class WellCalibrationReportItem(BaseModel):
+    well_id: str
+    well_name: str
+    well_x: float
+    well_y: float
+    transformed_x: float = Field(..., description="Well coordinate mapped into seismic-survey coordinate space by the calibration")
+    transformed_y: float
+    nearest_inline: int
+    nearest_crossline: int
+    nearest_trace_distance_m: float
+    is_extrapolated: bool = Field(
+        ..., description="Coordinates fall outside both the calibration's fit range and the survey's own extent"
+    )
+    within_bin_tolerance: bool = Field(..., description="Nearest-trace residual is within ~2x the survey's bin spacing")
+    trustworthy: bool = Field(..., description="within_bin_tolerance AND NOT is_extrapolated")
+    used_in_calibration: bool = Field(..., description="This well was part of the calibration baseline's own fit")
+    has_manual_override: bool
+    override_inline: int | None = None
+    override_crossline: int | None = None
+
+
+class CoordinateCalibrationReportResponse(BaseModel):
+    wells: list[WellCalibrationReportItem]
+    method_note: str = Field(
+        ...,
+        description=(
+            "Caveat: this is a 2-point-per-axis linear fit between well and seismic coordinates, "
+            "not a real CRS reprojection -- only trust wells flagged trustworthy=true, or a well "
+            "with a manual override."
+        ),
+    )
+
+
+class WellTraceOverrideRequest(BaseModel):
+    inline: int
+    crossline: int
+    note: str = ""
+
+
+class WellTraceOverrideResponse(BaseModel):
+    well_id: str
+    inline: int
+    crossline: int
+    note: str = ""
+
+
+class RecalibrateRequest(BaseModel):
+    well_ids: list[str] | None = Field(
+        None, description="Explicit subset of wells to calibrate from; omit to use every well with known coordinates"
+    )
+
+
+class RecalibrateResponse(BaseModel):
+    well_ids_used: list[str]
+    bin_spacing_m: float
 
 
 class AmplitudeSpectrumResponse(BaseModel):
@@ -439,7 +497,10 @@ class SyntheticSeismogramResponse(BaseModel):
     gardner_coefficients: GardnerCoefficients | None = None
     nearest_inline: int
     nearest_crossline: int
-    distance_m: float
+    distance_m: float | None = Field(
+        None, description="Distance to the tied trace, meters. None for a manual override (asserted directly, no residual)."
+    )
+    tie_method: str = Field("calibrated_fit", description="'calibrated_fit' or 'manual_override' -- see coordinate_calibration_service.py")
     depth_m: list[float]
     twt_ms: list[float]
     acoustic_impedance: list[float]
@@ -485,7 +546,8 @@ class NearestTraceResponse(BaseModel):
     trace_index: int
     inline: int
     crossline: int
-    distance_m: float
+    distance_m: float | None = Field(None, description="None for a manual override (asserted directly, no residual)")
+    tie_method: str = Field("calibrated_fit", description="'calibrated_fit' or 'manual_override'")
 
 
 # -----------------------------------------------------------------------------
