@@ -135,5 +135,7 @@ def get_well_seismic_tie(well_id: str, dataset_id: str) -> WellSeismicTieRespons
         real_trace=real_trace.tolist(),
         best_shift_ms=tie["best_shift_ms"],
         correlation=tie["correlation"],
+        max_shift_ms=tie["max_shift_ms"],
+        boundary_pinned=tie["boundary_pinned"],
         geometry_warning=geometry_warning,
     )

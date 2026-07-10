@@ -8,7 +8,9 @@ from app.well_seismic_tie import (
     build_synthetic,
     calibrate_gardner_coefficients,
     cross_correlate_and_shift,
+    cross_check_delay_datum,
     depth_to_twt,
+    despike_mad,
     extract_statistical_wavelet,
     find_nearest_trace_index,
     gardner_density,
@@ -65,6 +67,77 @@ def test_cross_correlate_shifted_trace_recovers_shift():
     shifted = np.roll(trace, 5)
     result = cross_correlate_and_shift(shifted, trace, dt_ms)
     assert result["correlation"] > 0.9
+
+
+class TestCrossCorrelateSearchRangeAndBoundaryFlag:
+    def test_default_max_shift_is_300ms(self):
+        dt_ms = 2.0
+        t = np.linspace(0, 100, 200)
+        trace = np.sin(2 * np.pi * 0.05 * t)
+        result = cross_correlate_and_shift(trace, trace, dt_ms)
+        assert result["max_shift_ms"] == 300.0
+
+    def test_small_interior_shift_not_boundary_pinned(self):
+        dt_ms = 2.0
+        t = np.linspace(0, 100, 200)
+        trace = np.sin(2 * np.pi * 0.05 * t)
+        shifted = np.roll(trace, 5)  # 10ms, well inside a 300ms window
+        result = cross_correlate_and_shift(shifted, trace, dt_ms)
+        assert result["boundary_pinned"] is False
+
+    def test_true_shift_beyond_narrow_window_gets_boundary_pinned(self):
+        # A single broad Gaussian pulse (not periodic, unlike a sine) so
+        # correlation-vs-shift is a clean single peak with no aliasing,
+        # and wide enough (sigma=30) that its gradient is still
+        # meaningful within a narrow search window. True best alignment
+        # is a 100-sample (200ms) shift, but the search is bounded to
+        # +/-20ms, forcing the best FOUND shift to sit right at the
+        # window edge.
+        n = 400
+        t = np.arange(n)
+        sigma = 30.0
+        synthetic = np.exp(-((t - 150) ** 2) / (2 * sigma**2))
+        real = np.exp(-((t - 250) ** 2) / (2 * sigma**2))  # +100 samples from synthetic
+        dt_ms = 2.0
+        result = cross_correlate_and_shift(synthetic, real, dt_ms, max_shift_ms=20.0)
+        assert result["boundary_pinned"] is True
+        assert abs(result["best_shift_ms"]) == pytest.approx(20.0)
+
+    def test_true_shift_within_wide_window_not_boundary_pinned(self):
+        n = 400
+        t = np.arange(n)
+        sigma = 30.0
+        synthetic = np.exp(-((t - 150) ** 2) / (2 * sigma**2))
+        real = np.exp(-((t - 250) ** 2) / (2 * sigma**2))
+        dt_ms = 2.0
+        # Same pair, but a search window wide enough to actually contain
+        # the true 200ms shift -- should converge near it, not pin.
+        result = cross_correlate_and_shift(synthetic, real, dt_ms, max_shift_ms=300.0)
+        assert result["boundary_pinned"] is False
+        assert result["best_shift_ms"] == pytest.approx(200.0, abs=10.0)
+
+    def test_negative_max_shift_ms_raises(self):
+        dt_ms = 2.0
+        trace = np.sin(np.linspace(0, 10, 50))
+        with pytest.raises(TieError):
+            cross_correlate_and_shift(trace, trace, dt_ms, max_shift_ms=-10.0)
+
+    def test_narrow_window_can_change_result_vs_wide_window(self):
+        # Directly demonstrates fix #8's failure mode: a search range too
+        # narrow to contain the true answer silently returns a much worse
+        # correlation than the real ~1.0 match -- indistinguishable from
+        # "the tie genuinely failed" unless you know to widen the window.
+        n = 400
+        t = np.arange(n)
+        sigma = 30.0
+        synthetic = np.exp(-((t - 150) ** 2) / (2 * sigma**2))
+        real = np.exp(-((t - 250) ** 2) / (2 * sigma**2))
+        dt_ms = 2.0
+        narrow = cross_correlate_and_shift(synthetic, real, dt_ms, max_shift_ms=20.0)
+        wide = cross_correlate_and_shift(synthetic, real, dt_ms, max_shift_ms=300.0)
+        assert wide["correlation"] > narrow["correlation"] + 0.3
+        assert wide["boundary_pinned"] is False
+        assert narrow["boundary_pinned"] is True
 
 
 def test_build_synthetic_end_to_end_smoke():
@@ -286,3 +359,107 @@ class TestWaveletSpectra:
         _, wavelet = ricker_wavelet(freq_hz=25.0, dt_s=0.002, length_s=0.128)
         spectra = wavelet_spectra(wavelet, dt_ms=2.0)
         assert len(spectra["freq_hz"]) == len(spectra["amplitude"]) == len(spectra["phase_deg"])
+
+
+class TestCrossCheckDelayDatum:
+    def test_plausible_when_implied_depth_close_to_logged_top(self):
+        # delay=2030ms -> one-way 1015ms -> at 3000 m/s implied depth 3045m,
+        # close to a logged top of ~3454m (the real Z-02 well's actual
+        # value) -- within the default 50% relative-error tolerance.
+        result = cross_check_delay_datum(delay_ms=2030.0, logged_top_depth_m=3454.5)
+        assert result.plausible is True
+        assert result.implied_depth_m == pytest.approx(3045.0, rel=0.01)
+
+    def test_implausible_when_wildly_off(self):
+        # delay=2030ms implies ~3045m regardless of logged top; a logged
+        # top of 50m makes that wildly implausible.
+        result = cross_check_delay_datum(delay_ms=2030.0, logged_top_depth_m=50.0)
+        assert result.plausible is False
+        assert result.relative_error > 1.0
+
+    def test_zero_logged_top_is_implausible(self):
+        result = cross_check_delay_datum(delay_ms=2030.0, logged_top_depth_m=0.0)
+        assert result.plausible is False
+
+    def test_custom_velocity_changes_implied_depth(self):
+        slow = cross_check_delay_datum(delay_ms=2000.0, logged_top_depth_m=1500.0, avg_velocity_m_s=1500.0)
+        fast = cross_check_delay_datum(delay_ms=2000.0, logged_top_depth_m=1500.0, avg_velocity_m_s=4500.0)
+        assert fast.implied_depth_m > slow.implied_depth_m
+
+
+class TestDespikeMad:
+    def test_leaves_clean_signal_unchanged(self):
+        signal = np.sin(np.linspace(0, 4 * np.pi, 200)) * 0.1
+        despiked = despike_mad(signal)
+        np.testing.assert_allclose(despiked, signal)
+
+    def test_removes_genuine_outlier(self):
+        # Real baseline variance alongside one extreme, unambiguous
+        # outlier -- unlike a flat-zero baseline, removing the outlier
+        # alone shouldn't (and doesn't) collapse the whole signal.
+        rng = np.random.default_rng(1)
+        signal = rng.normal(0, 0.01, 100)
+        signal[50] = 100.0
+        despiked = despike_mad(signal)
+        assert despiked[50] == 0.0
+        assert np.std(despiked) > 0
+
+    def test_sparse_reflectivity_like_signal_not_collapsed_to_zero(self):
+        # Mostly-zero signal with a handful of small-but-real nonzero
+        # samples -- exactly the shape of a reflectivity series between
+        # reflectors. An unfloored MAD threshold degenerates to ~0 here
+        # (median of a 94%-zero array is 0) and flags nearly every
+        # nonzero sample as a spike; flooring the threshold at a fraction
+        # of RMS keeps SOME of that real signal instead of destroying all
+        # of it (despike_mad raises outright if it would still collapse
+        # to zero variance despite the floor).
+        rng = np.random.default_rng(0)
+        signal = np.zeros(500)
+        spike_idx = rng.choice(500, size=30, replace=False)
+        signal[spike_idx] = rng.normal(0, 0.02, size=30)  # small, real reflectivity values
+        despiked = despike_mad(signal)  # must not raise
+        assert np.std(despiked) > 0
+        assert np.count_nonzero(despiked) > 0
+
+    def test_raises_if_would_collapse_signal_with_real_variance(self):
+        # Sparse-but-real signal (mostly zero, a few small nonzero
+        # values) with the floor explicitly disabled -- reproduces the
+        # exact naive-MAD bug (median/MAD of a mostly-zero array is 0, so
+        # a 0 threshold flags every nonzero sample) and confirms the
+        # sanity check catches the resulting total collapse instead of
+        # silently returning an all-zero result.
+        signal = np.array([0.0, 0.0, 0.01, 0.0, -0.02, 0.0, 0.015])
+        with pytest.raises(TieError):
+            despike_mad(signal, threshold_n_mad=0.0, mad_floor_fraction=0.0)
+
+    def test_all_zero_input_returns_all_zero_without_raising(self):
+        signal = np.zeros(50)
+        despiked = despike_mad(signal)
+        assert np.all(despiked == 0.0)
+
+
+class TestBuildSyntheticDatumCheckAndDespike:
+    def test_datum_check_included_in_result(self):
+        depth = np.linspace(3454.0, 3480.0, 60)
+        dt = np.full(60, 90.0)
+        rhob = np.full(60, 2.4)
+        seismic_twt = np.arange(2030.0, 2030.0 + 60 * 2.0, 2.0)
+        result = build_synthetic(depth, dt, rhob, seismic_dt_ms=2.0, seismic_twt_axis_ms=seismic_twt)
+        assert result.datum_check is not None
+        assert result.datum_check.delay_ms == pytest.approx(2030.0)
+        assert result.datum_check.logged_top_depth_m == pytest.approx(3454.0)
+
+    def test_despike_disabled_skips_despiking(self):
+        depth = np.linspace(3454.0, 3480.0, 60)
+        dt = np.full(60, 90.0)
+        rhob = np.full(60, 2.4)
+        seismic_twt = np.arange(2030.0, 2030.0 + 60 * 2.0, 2.0)
+        result_despiked = build_synthetic(
+            depth, dt, rhob, seismic_dt_ms=2.0, seismic_twt_axis_ms=seismic_twt, despike=True
+        )
+        result_raw = build_synthetic(
+            depth, dt, rhob, seismic_dt_ms=2.0, seismic_twt_axis_ms=seismic_twt, despike=False
+        )
+        # Constant DT/RHOB -> zero reflectivity everywhere -- despiking is
+        # a no-op either way, but both must run without error and agree.
+        np.testing.assert_allclose(result_despiked.reflectivity, result_raw.reflectivity)

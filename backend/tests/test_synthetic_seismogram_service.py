@@ -20,6 +20,7 @@ import pytest
 
 segyio = pytest.importorskip("segyio")
 
+from app import well_seismic_tie as wst
 from app.repository import FileWellRepository
 from app.services import seismic_processor as sp
 from app.services import synthetic_seismogram_service as sss
@@ -108,6 +109,18 @@ class TestGenerate:
         # depth_to_twt/build_synthetic's t0_ms anchoring).
         assert max(abs(v) for v in result["synthetic"]) > 0.0
         assert result["reflectivity_twt_ms"][0] == pytest.approx(2030.0, abs=1.0)
+        # Fixes #7/#8/#9: datum plausibility check, bulk-shift search
+        # range, and boundary-pinned reliability flag are all surfaced,
+        # not just the raw correlation number.
+        assert result["max_shift_ms"] == wst.DEFAULT_MAX_SHIFT_MS
+        assert isinstance(result["boundary_pinned"], bool)
+        assert result["datum_check"]["delay_ms"] == pytest.approx(2030.0)
+        assert isinstance(result["datum_check"]["plausible"], bool)
+
+    def test_generate_accepts_custom_max_shift_ms(self, aligned_well):
+        result = sss.generate(aligned_well.well_id, max_shift_ms=50.0)
+        assert result["max_shift_ms"] == 50.0
+        assert abs(result["best_shift_ms"]) <= 50.0 + 1e-6
 
     def test_statistical_wavelet(self, aligned_well):
         result = sss.generate(aligned_well.well_id, wavelet_method="statistical", density_method="rhob")

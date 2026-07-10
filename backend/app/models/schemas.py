@@ -244,6 +244,10 @@ class WellSeismicTieResponse(BaseModel):
     real_trace: list[float]
     best_shift_ms: float
     correlation: float
+    max_shift_ms: float = Field(300.0, description="Bulk-shift search range half-width used, ms")
+    boundary_pinned: bool = Field(
+        False, description="True if best_shift_ms landed within ~5% of max_shift_ms -- diagnostic of a spurious match, not a genuine tie"
+    )
     geometry_warning: str | None = None
 
 # -----------------------------------------------------------------------------
@@ -487,6 +491,15 @@ class TiePointModel(BaseModel):
     time_shift_ms: float
 
 
+class DatumCheckModel(BaseModel):
+    delay_ms: float
+    implied_depth_m: float = Field(..., description="Depth implied by the delay at a plausible average overburden velocity")
+    logged_top_depth_m: float
+    relative_error: float
+    avg_velocity_m_s: float
+    plausible: bool = Field(..., description="False if implied_depth_m is wildly off from the logged interval's top")
+
+
 class SyntheticSeismogramResponse(BaseModel):
     well_id: str
     well_header: WellHeaderQc
@@ -524,6 +537,11 @@ class SyntheticSeismogramResponse(BaseModel):
     real_trace: list[float]
     best_shift_ms: float
     correlation: float
+    max_shift_ms: float = Field(..., description="Bulk-shift search range half-width used, ms")
+    boundary_pinned: bool = Field(
+        ..., description="True if best_shift_ms landed within ~5% of max_shift_ms -- diagnostic of a spurious match, not a genuine tie"
+    )
+    datum_check: DatumCheckModel
     applied_tie_points: list[TiePointModel]
 
 

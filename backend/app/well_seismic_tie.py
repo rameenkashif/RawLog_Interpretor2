@@ -38,6 +38,7 @@ class SyntheticResult:
     synthetic: np.ndarray       # synthetic amplitude values
     reflectivity_twt_ms: np.ndarray
     reflectivity: np.ndarray
+    datum_check: "DatumCheckResult | None" = None
 
 
 def depth_to_twt(
@@ -281,6 +282,115 @@ def washout_qc_flag(
     return flag & valid
 
 
+DEFAULT_OVERBURDEN_VELOCITY_M_S = 3000.0
+DATUM_CHECK_MAX_RELATIVE_ERROR = 0.5
+
+
+@dataclass
+class DatumCheckResult:
+    delay_ms: float
+    implied_depth_m: float
+    logged_top_depth_m: float
+    relative_error: float
+    avg_velocity_m_s: float
+    plausible: bool
+
+
+def cross_check_delay_datum(
+    delay_ms: float,
+    logged_top_depth_m: float,
+    avg_velocity_m_s: float = DEFAULT_OVERBURDEN_VELOCITY_M_S,
+    max_relative_error: float = DATUM_CHECK_MAX_RELATIVE_ERROR,
+) -> DatumCheckResult:
+    """Sanity-check the "seed the sonic integration at DelayRecordingTime"
+    datum assumption (see depth_to_twt's t0_ms): convert the seismic
+    survey's recording delay to an implied depth using a plausible average
+    overburden velocity, and compare against the LOGGED interval's own top
+    depth. These LAS files only log a partial reservoir interval (not from
+    surface), so a 0-based sonic-integration datum is physically wrong on
+    its own -- anchoring at the delay instead is a reasonable approximation
+    ONLY if the delay actually corresponds to roughly "surface to the top
+    of the logged interval". This is NOT a real calibration (a single
+    average velocity is a rough stand-in for a geologically complex,
+    unknown overburden) -- it exists to catch the case where that
+    assumption is wildly wrong (e.g. the delay reflects something else
+    entirely, like a processing static) rather than silently proceeding
+    with a datum that doesn't mean what it's assumed to mean.
+    """
+    one_way_time_s = (delay_ms / 1000.0) / 2.0
+    implied_depth_m = one_way_time_s * avg_velocity_m_s
+    if logged_top_depth_m > 0:
+        relative_error = abs(implied_depth_m - logged_top_depth_m) / logged_top_depth_m
+    else:
+        relative_error = float("inf")
+    return DatumCheckResult(
+        delay_ms=delay_ms,
+        implied_depth_m=implied_depth_m,
+        logged_top_depth_m=logged_top_depth_m,
+        relative_error=relative_error,
+        avg_velocity_m_s=avg_velocity_m_s,
+        plausible=relative_error <= max_relative_error,
+    )
+
+
+DEFAULT_MAD_THRESHOLD = 5.0
+DEFAULT_MAD_FLOOR_FRACTION = 0.15
+
+
+def despike_mad(
+    signal: np.ndarray,
+    threshold_n_mad: float = DEFAULT_MAD_THRESHOLD,
+    mad_floor_fraction: float = DEFAULT_MAD_FLOOR_FRACTION,
+) -> np.ndarray:
+    """Remove spikes from a signal via a MAD (median absolute deviation)
+    threshold, floored at mad_floor_fraction of the signal's own RMS
+    amplitude. A naive MAD threshold (no floor) degenerates to ~0 on
+    sparse signals -- like a reflectivity series, which is mostly
+    near-zero between reflectors -- which would flag almost every
+    nonzero sample as a "spike" and zero it out, silently destroying the
+    signal before correlation/QC even runs. Flooring the MAD keeps the
+    threshold from collapsing on sparse-but-real signals, so only genuine
+    outliers get removed.
+
+    Returns a copy of signal with flagged samples set to 0. Raises
+    TieError if despiking collapses the signal to zero variance (while
+    the input had real variance) -- a sanity check that catches this
+    class of bug at the source instead of surfacing downstream as an
+    unexplained zero-correlation result.
+    """
+    signal = np.asarray(signal, dtype=float)
+    finite = np.isfinite(signal)
+    if not finite.any():
+        return signal.copy()
+
+    median = np.median(signal[finite])
+    mad = np.median(np.abs(signal[finite] - median))
+    rms = np.sqrt(np.mean(signal[finite] ** 2))
+    effective_mad = max(mad, mad_floor_fraction * rms)
+
+    # No special-case for effective_mad == 0 -- that's exactly the naive
+    # bug this function fixes (an unfloored MAD degenerates to 0 on a
+    # sparse signal, so a 0 threshold flags every nonzero sample as a
+    # "spike"). Let it compute naturally; the post-despike variance check
+    # below is what actually catches an over-aggressive result, so a
+    # deliberately-disabled floor is still observable instead of silently
+    # masked.
+    despiked = signal.copy()
+    with np.errstate(invalid="ignore"):
+        is_spike = finite & (np.abs(signal - median) > threshold_n_mad * effective_mad)
+    despiked[is_spike] = 0.0
+
+    input_std = float(np.std(signal[finite]))
+    despiked_std = float(np.std(despiked[finite]))
+    if input_std > 0 and despiked_std == 0:
+        raise TieError(
+            "Despiking collapsed the signal to zero variance -- the spike threshold was too "
+            "aggressive for this (likely sparse) signal. Check mad_floor_fraction/threshold_n_mad "
+            "rather than trusting downstream correlation/QC on this result."
+        )
+    return despiked
+
+
 def build_synthetic(
     depth_m: np.ndarray,
     dt_log: np.ndarray,
@@ -290,18 +400,30 @@ def build_synthetic(
     wavelet_freq_hz: float = 30.0,
     dt_unit: str = "us_per_ft",
     t0_ms: float | None = None,
+    despike: bool = True,
+    avg_overburden_velocity_m_s: float = DEFAULT_OVERBURDEN_VELOCITY_M_S,
 ) -> SyntheticResult:
     """Full pipeline: sonic integration -> impedance -> reflectivity ->
-    convolve with Ricker wavelet -> resample onto the seismic's own time axis.
+    (optional) despike -> convolve with Ricker wavelet -> resample onto the
+    seismic's own time axis.
 
     t0_ms: starting two-way time for the sonic-integrated curve (see
     depth_to_twt's docstring for why this matters). Defaults to
-    seismic_twt_axis_ms[0] -- without an anchor, the well's own integrated
-    curve starts at 0 ms and, resampled onto a real seismic survey's
-    non-zero-delay time axis, has NO overlap and silently produces an
-    all-zero synthetic (correlation 0). Anchoring to the seismic axis's own
-    start is an arbitrary but non-degenerate default; refine it with manual
-    stretch/squeeze (apply_stretch_squeeze) once a real tie is available.
+    seismic_twt_axis_ms[0] (the seismic survey's own DelayRecordingTime) --
+    without an anchor, the well's own integrated curve starts at 0 ms and,
+    resampled onto a real seismic survey's non-zero-delay time axis, has NO
+    overlap and silently produces an all-zero synthetic (correlation 0).
+    This is only a reasonable datum if the delay actually corresponds to
+    roughly "surface to the top of the logged interval" -- see
+    cross_check_delay_datum, run automatically here and returned as
+    SyntheticResult.datum_check so callers can flag rather than silently
+    trust it. Refine further with manual stretch/squeeze
+    (apply_stretch_squeeze) once a real tie is available.
+
+    despike: apply despike_mad to the reflectivity series before
+    convolution (default True) -- a reflectivity series is sparse
+    (near-zero between reflectors), which a naive spike threshold can
+    mistake for "all outliers" and zero out entirely; see despike_mad.
     """
     valid = np.isfinite(depth_m) & np.isfinite(dt_log) & np.isfinite(rhob) & (dt_log > 0) & (rhob > 0)
     depth_m, dt_log, rhob = depth_m[valid], dt_log[valid], rhob[valid]
@@ -312,9 +434,15 @@ def build_synthetic(
     if t0_ms is None:
         t0_ms = float(seismic_twt_axis_ms[0]) if len(seismic_twt_axis_ms) else 0.0
 
+    datum_check = cross_check_delay_datum(
+        delay_ms=t0_ms, logged_top_depth_m=float(depth_m[0]), avg_velocity_m_s=avg_overburden_velocity_m_s
+    )
+
     twt_ms = depth_to_twt(depth_m, dt_log, dt_unit=dt_unit, t0_ms=t0_ms)
     ai = acoustic_impedance(dt_log, rhob, dt_unit=dt_unit)
     refl = reflectivity_series(ai)
+    if despike:
+        refl = despike_mad(refl)
     refl_twt_ms = (twt_ms[1:] + twt_ms[:-1]) / 2.0  # midpoints, matches refl length
 
     # Resample reflectivity onto a regular grid at the seismic's sample rate
@@ -340,6 +468,7 @@ def build_synthetic(
         synthetic=synthetic_on_seismic_axis,
         reflectivity_twt_ms=refl_twt_ms,
         reflectivity=refl,
+        datum_check=datum_check,
     )
 
 
@@ -384,9 +513,35 @@ def apply_stretch_squeeze(
     return twt_ms + shift_at_depth
 
 
-def cross_correlate_and_shift(synthetic: np.ndarray, real: np.ndarray, dt_ms: float) -> dict:
-    """Cross-correlates synthetic vs. real trace, finds the best-fit lag,
-    and reports Pearson correlation at that alignment."""
+DEFAULT_MAX_SHIFT_MS = 300.0
+BOUNDARY_PINNED_FRACTION = 0.05
+
+
+def cross_correlate_and_shift(
+    synthetic: np.ndarray, real: np.ndarray, dt_ms: float, max_shift_ms: float = DEFAULT_MAX_SHIFT_MS
+) -> dict:
+    """Cross-correlates synthetic vs. real trace, finds the best-fit lag
+    WITHIN +/-max_shift_ms, and reports Pearson correlation at that
+    alignment.
+
+    max_shift_ms bounds the search range -- default +/-300ms. With no
+    checkshot, the sonic-derived time-depth curve can be off from the
+    seismic by 100-300ms even after anchoring at the delay datum (see
+    build_synthetic's t0_ms/cross_check_delay_datum); a narrow window
+    (e.g. +/-40ms) can silently return ~0 correlation for every well if
+    the true answer sits just outside it, looking exactly like a broken
+    tie rather than a search-range problem. Widen or narrow this per
+    well/field as appropriate (e.g. narrower once a real checkshot
+    constrains the answer).
+
+    Also flags boundary_pinned: True if the best-fit shift lands within
+    ~5% of the search range's edge. That's diagnostic of a spurious
+    correlation match against noise -- the "best" shift keeps drifting
+    toward the edge of the search window as you widen it, rather than
+    converging to a stable interior value -- not a genuine tie.
+    Boundary-pinned results should be excluded from aggregate statistics
+    (mean correlation, ML training sets) by default.
+    """
     synthetic = np.nan_to_num(synthetic)
     real = np.nan_to_num(real)
 
@@ -395,7 +550,17 @@ def cross_correlate_and_shift(synthetic: np.ndarray, real: np.ndarray, dt_ms: fl
 
     xcorr = correlate(real_n, syn_n, mode="full")
     lags = np.arange(-len(syn_n) + 1, len(real_n))
-    best_lag = int(lags[np.argmax(xcorr)])
+
+    max_shift_samples = max_shift_ms / dt_ms if dt_ms > 0 else np.inf
+    within_range = np.abs(lags) <= max_shift_samples
+    if not within_range.any():
+        raise TieError(
+            f"max_shift_ms={max_shift_ms:g} (+/-{max_shift_samples:.1f} samples at dt_ms={dt_ms:g}) "
+            "excludes every possible lag -- widen max_shift_ms or check dt_ms."
+        )
+    xcorr_bounded = np.where(within_range, xcorr, -np.inf)
+
+    best_lag = int(lags[np.argmax(xcorr_bounded)])
     best_shift_ms = best_lag * dt_ms
 
     shifted_syn = np.roll(synthetic, best_lag)
@@ -412,8 +577,12 @@ def cross_correlate_and_shift(synthetic: np.ndarray, real: np.ndarray, dt_ms: fl
         if not np.isfinite(correlation):
             correlation = 0.0
 
+    boundary_pinned = bool(abs(best_shift_ms) >= (1.0 - BOUNDARY_PINNED_FRACTION) * max_shift_ms)
+
     return {
         "best_shift_ms": best_shift_ms,
         "correlation": correlation,
         "shifted_synthetic": shifted_syn,
+        "max_shift_ms": max_shift_ms,
+        "boundary_pinned": boundary_pinned,
     }

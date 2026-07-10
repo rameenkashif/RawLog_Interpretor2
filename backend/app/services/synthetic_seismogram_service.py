@@ -120,6 +120,7 @@ def generate(
     wavelet_freq_hz: float = 25.0,
     density_method: str = "rhob",
     apply_saved_tie: bool = True,
+    max_shift_ms: float = wst.DEFAULT_MAX_SHIFT_MS,
 ) -> dict:
     if wavelet_method not in VALID_WAVELET_METHODS:
         raise SyntheticSeismogramError(
@@ -178,14 +179,23 @@ def generate(
         )
 
     # Anchor the well's own (0-based) sonic-integrated TWT to the seismic
-    # volume's own first sample time -- without this, the well's curve and
-    # the seismic's real (non-zero-delay) time axis have no overlap at all,
-    # and resampling later would silently produce an all-zero synthetic.
-    # This is an arbitrary but non-degenerate default; manual stretch/
-    # squeeze (applied below) refines it once a real tie is available.
-    twt_ms = wst.depth_to_twt(depth_v, dt_v, dt_unit="us_per_ft", t0_ms=float(volume.twt_axis_ms[0]))
+    # volume's own first sample time (its DelayRecordingTime) -- without
+    # this, the well's curve and the seismic's real (non-zero-delay) time
+    # axis have no overlap at all, and resampling later would silently
+    # produce an all-zero synthetic. This is only a reasonable datum if
+    # the delay actually corresponds to roughly "surface to the top of
+    # the logged interval" -- see cross_check_delay_datum, surfaced below
+    # as datum_check rather than silently trusted. Manual stretch/squeeze
+    # (applied below) refines it once a real tie is available.
+    t0_ms = float(volume.twt_axis_ms[0])
+    datum_check = wst.cross_check_delay_datum(delay_ms=t0_ms, logged_top_depth_m=float(depth_v[0]))
+    twt_ms = wst.depth_to_twt(depth_v, dt_v, dt_unit="us_per_ft", t0_ms=t0_ms)
     ai = wst.acoustic_impedance(dt_v, density_v, dt_unit="us_per_ft")
     refl = wst.reflectivity_series(ai)
+    # Reflectivity is sparse (near-zero between reflectors) -- despike
+    # with a RMS-floored MAD threshold, not a naive one, so genuine
+    # outliers are removed without collapsing the real signal (fix #10).
+    refl = wst.despike_mad(refl)
     refl_twt_ms = (twt_ms[1:] + twt_ms[:-1]) / 2.0
     refl_depth_m = (depth_v[1:] + depth_v[:-1]) / 2.0
 
@@ -208,7 +218,7 @@ def generate(
         volume.twt_axis_ms, reg_twt_ms, synthetic_reg, left=0.0, right=0.0
     )
 
-    tie = wst.cross_correlate_and_shift(synthetic_on_seismic_axis, real_trace, dt_ms)
+    tie = wst.cross_correlate_and_shift(synthetic_on_seismic_axis, real_trace, dt_ms, max_shift_ms=max_shift_ms)
 
     return {
         "well_id": well_id,
@@ -251,6 +261,16 @@ def generate(
         "real_trace": real_trace.tolist(),
         "best_shift_ms": tie["best_shift_ms"],
         "correlation": tie["correlation"],
+        "max_shift_ms": tie["max_shift_ms"],
+        "boundary_pinned": tie["boundary_pinned"],
+        "datum_check": {
+            "delay_ms": datum_check.delay_ms,
+            "implied_depth_m": datum_check.implied_depth_m,
+            "logged_top_depth_m": datum_check.logged_top_depth_m,
+            "relative_error": datum_check.relative_error,
+            "avg_velocity_m_s": datum_check.avg_velocity_m_s,
+            "plausible": datum_check.plausible,
+        },
         "applied_tie_points": [{"md_m": p.md_m, "time_shift_ms": p.time_shift_ms} for p in tie_points],
     }
 
