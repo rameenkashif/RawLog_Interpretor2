@@ -128,3 +128,89 @@ class TestUnitStandardization:
         # of the conversion, so assert it rather than just the raw math.
         assert 363124.0 <= m.well_x <= 370654.0
         assert 2949830.0 <= m.well_y <= 2957150.0
+
+
+def _write_las_with_dt(dt_values: list[float], dt_unit_declared: str = "") -> Path:
+    """Build a minimal LAS file with custom DT values/declared unit, to
+    exercise curve unit inference (see _resolve_and_normalize_curve_units)
+    independent of the fixed MINIMAL_CURVES sample data above."""
+    rows = "\n".join(
+        f" {100.0 + i * 0.5:.1f}   50.0   10.0   2.4   0.2   {dt:.2f}" for i, dt in enumerate(dt_values)
+    )
+    text = (
+        "~Version ---------------------------------------------------\n"
+        "VERS.   2.0 :\n"
+        "WRAP.    NO :\n"
+        "~Well ------------------------------------------------------\n"
+        f"STRT.m {100.0:.1f} : START DEPTH\n"
+        f"STOP.m {100.0 + (len(dt_values) - 1) * 0.5:.1f} : STOP DEPTH\n"
+        "STEP.m   0.5 : STEP\n"
+        "NULL.    -9999.25 : NULL VALUE\n"
+        "WELL.        TEST-1 :\n"
+        "~Curve Information -----------------------------------------\n"
+        "DEPT.m  :\n"
+        "GR      .   :\n"
+        "RESISTIVITY.   :\n"
+        "RHOB    .   :\n"
+        "NPHI    .   :\n"
+        f"DT      .{dt_unit_declared}   :\n"
+        "~ASCII -----------------------------------------------------\n"
+        f"{rows}\n"
+    )
+    tmp = tempfile.NamedTemporaryFile(suffix=".las", delete=False, mode="w")
+    tmp.write(text)
+    tmp.close()
+    return Path(tmp.name)
+
+
+class TestCurveUnitInference:
+    def test_dt_in_us_per_ft_range_not_converted(self):
+        # Real-field-like values (~48-97), unambiguously us/ft, blank unit.
+        path = _write_las_with_dt([48.0, 65.0, 97.0])
+        loaded = load_las_file(path)
+        dt_info = next(c for c in loaded.metadata.curve_units if c.curve == "DT")
+        assert dt_info.resolved_unit == "us_per_ft"
+        assert dt_info.inferred is True
+        assert dt_info.conversion_applied is False
+        assert loaded.df["DT"].tolist() == pytest.approx([48.0, 65.0, 97.0])
+
+    def test_dt_in_us_per_m_range_converted_to_us_per_ft(self):
+        # Values >160 fall outside the us/ft range entirely -- unambiguous us/m.
+        path = _write_las_with_dt([300.0, 350.0, 400.0])
+        loaded = load_las_file(path)
+        dt_info = next(c for c in loaded.metadata.curve_units if c.curve == "DT")
+        assert dt_info.resolved_unit == "us_per_m"
+        assert dt_info.conversion_applied is True
+        from app.las_loader import FT_TO_M
+
+        expected = [v * FT_TO_M for v in (300.0, 350.0, 400.0)]
+        assert loaded.df["DT"].tolist() == pytest.approx(expected)
+
+    def test_declared_unit_string_is_trusted_over_inference(self):
+        # Value (140) sits in the DT us/ft-us/m overlap zone -- an explicit
+        # declared unit should be trusted rather than the inference's
+        # us/ft-first tiebreak.
+        path = _write_las_with_dt([140.0, 141.0, 142.0], dt_unit_declared="US/M")
+        loaded = load_las_file(path)
+        dt_info = next(c for c in loaded.metadata.curve_units if c.curve == "DT")
+        assert dt_info.resolved_unit == "us_per_m"
+        assert dt_info.inferred is False
+        assert dt_info.conversion_applied is True
+
+    def test_declared_us_per_ft_not_converted(self):
+        path = _write_las_with_dt([90.0, 91.0, 92.0], dt_unit_declared="US/F")
+        loaded = load_las_file(path)
+        dt_info = next(c for c in loaded.metadata.curve_units if c.curve == "DT")
+        assert dt_info.resolved_unit == "us_per_ft"
+        assert dt_info.inferred is False
+        assert dt_info.conversion_applied is False
+        assert loaded.df["DT"].tolist() == pytest.approx([90.0, 91.0, 92.0])
+
+    def test_real_z02_dt_inferred_as_us_per_ft_no_conversion(self):
+        """End-to-end check: the real field's actual DT values (~48-97)
+        must resolve to us_per_ft and NOT get double-converted."""
+        real_path = Path(__file__).resolve().parents[1] / "data" / "raw" / "Z-02_raw.las"
+        loaded = load_las_file(real_path)
+        dt_info = next(c for c in loaded.metadata.curve_units if c.curve == "DT")
+        assert dt_info.resolved_unit == "us_per_ft"
+        assert dt_info.conversion_applied is False

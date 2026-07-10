@@ -11,6 +11,7 @@ the Anthropic agent's tool functions).
 from __future__ import annotations
 
 import io
+from dataclasses import asdict, is_dataclass
 from typing import Any
 
 import numpy as np
@@ -125,6 +126,10 @@ def _build_well_summary(metadata: WellMetadata, df: pd.DataFrame) -> WellSummary
         coordinate_unit_detected=metadata.coordinate_unit_detected,
         unit_conversion_applied=metadata.unit_conversion_applied,
         td_stop_ratio=metadata.td_stop_ratio,
+        # curve_units round-trips through the repository as plain JSON, so
+        # a reloaded WellMetadata has dicts here, not CurveUnitInfo
+        # dataclass instances -- normalize either shape.
+        curve_units=[asdict(info) if is_dataclass(info) else dict(info) for info in metadata.curve_units],
     )
 
 

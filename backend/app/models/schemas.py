@@ -16,6 +16,15 @@ from pydantic import BaseModel, Field
 # -----------------------------------------------------------------------------
 # Wells
 # -----------------------------------------------------------------------------
+class CurveUnitInfo(BaseModel):
+    curve: str
+    declared_unit_raw: str | None = None
+    resolved_unit: str | None = None
+    inferred: bool = Field(..., description="True if resolved_unit came from value-range inference, not the LAS header")
+    value_range_used: tuple[float, float] | None = None
+    conversion_applied: bool = Field(False, description="True if the curve's values were converted in place (DT only, us/m -> us/ft)")
+
+
 class WellSummary(BaseModel):
     well_id: str
     well_name: str
@@ -55,6 +64,10 @@ class WellSummary(BaseModel):
     )
     td_stop_ratio: float | None = Field(
         None, description="TD/STOP ratio used to detect feet-vs-meters (~3.28 indicates feet)"
+    )
+    curve_units: list[CurveUnitInfo] = Field(
+        default_factory=list,
+        description="Per-curve unit provenance (declared vs. inferred from value range) for DT/RHOB/GR/NPHI",
     )
 
 

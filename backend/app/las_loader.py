@@ -32,6 +32,22 @@ class LasValidationError(ValueError):
 
 
 @dataclass
+class CurveUnitInfo:
+    """Per-curve unit provenance: what the LAS header declared (if
+    anything) vs. what was inferred from the curve's own value range when
+    the header was blank, and whether that inference was actually used.
+    See _resolve_curve_unit() -- surfaced so a user can see why DT was (or
+    wasn't) unit-converted, not just the resulting numbers."""
+
+    curve: str
+    declared_unit_raw: str | None
+    resolved_unit: str | None
+    inferred: bool
+    value_range_used: tuple[float, float] | None = None
+    conversion_applied: bool = False
+
+
+@dataclass
 class WellMetadata:
     """Summary metadata describing one loaded well."""
 
@@ -51,6 +67,7 @@ class WellMetadata:
     coordinate_unit_detected: str | None = None  # "feet", "meters", or None if unvalidated
     unit_conversion_applied: bool = False
     td_stop_ratio: float | None = None
+    curve_units: list[CurveUnitInfo] = field(default_factory=list)
 
 
 @dataclass
@@ -175,6 +192,99 @@ def _standardize_well_header(
     return result
 
 
+# DT unit ambiguity is the one that actually matters for downstream
+# physics (time-depth conversion, velocity, acoustic impedance -- see
+# well_seismic_tie.py): a blank LAS unit field is common, and the raw
+# values alone (~48-97 for a real DT curve seen in this field) look
+# unremarkable but are meaningless without knowing us/ft vs us/m. Ranges
+# below are deliberately ordered with the far more common industry
+# convention (us/ft) checked first, so a value in the ambiguous overlap
+# (100-160) resolves to us/ft rather than us/m absent other evidence.
+# The other curves' ranges exist mainly for QC/display (this app doesn't
+# multi-unit-handle RHOB/GR/NPHI elsewhere), but are inferred the same way
+# for consistency and so a genuinely wrong-range value is visible.
+_VALUE_RANGE_UNITS: dict[str, list[tuple[str, float, float]]] = {
+    "DT": [("us_per_ft", 20.0, 160.0), ("us_per_m", 100.0, 550.0)],
+    "RHOB": [("g_cc", 1.0, 3.2)],
+    "GR": [("api", 0.0, 300.0)],
+    "NPHI": [("v_v", 0.0, 1.0)],
+}
+
+_DECLARED_UNIT_ALIASES: dict[str, str] = {
+    "us/f": "us_per_ft", "usec/f": "us_per_ft", "us/ft": "us_per_ft", "usec/ft": "us_per_ft",
+    "us/m": "us_per_m", "usec/m": "us_per_m",
+    "g/c3": "g_cc", "g/cc": "g_cc", "gm/cc": "g_cc", "gcc": "g_cc", "k/m3": "kg_m3",
+    "api": "api", "gapi": "api",
+    "v/v": "v_v", "frac": "v_v", "fraction": "v_v", "dec": "v_v", "vol/vol": "v_v",
+}
+
+FT_TO_M_TIME_FACTOR = FT_TO_M  # us_per_ft = us_per_m * FT_TO_M (see acoustic_impedance in well_seismic_tie.py)
+
+
+def _infer_unit_from_values(canonical: str, values: np.ndarray) -> tuple[str | None, tuple[float, float] | None]:
+    """Infer a curve's unit from its own median value falling inside a
+    known plausible range. Ranges are checked in the order given in
+    _VALUE_RANGE_UNITS (first match wins), so overlapping ranges (DT's
+    us_per_ft/us_per_m) resolve deterministically rather than ambiguously."""
+    ranges = _VALUE_RANGE_UNITS.get(canonical)
+    if not ranges:
+        return None, None
+    valid = values[np.isfinite(values)] if len(values) else values
+    if valid.size == 0:
+        return None, None
+    median = float(np.nanmedian(valid))
+    for unit, lo, hi in ranges:
+        if lo <= median <= hi:
+            return unit, (lo, hi)
+    return None, None
+
+
+def _resolve_curve_unit(canonical: str, declared_unit_raw: str | None, values: np.ndarray) -> CurveUnitInfo:
+    """Resolve a curve's unit: trust a recognized declared LAS unit field
+    first, and only fall back to value-range inference when the header is
+    blank or the declared string isn't one of the recognized aliases
+    (garbage/unfamiliar unit strings are common in vendor exports)."""
+    declared_norm = _DECLARED_UNIT_ALIASES.get((declared_unit_raw or "").strip().lower())
+    if declared_norm:
+        return CurveUnitInfo(
+            curve=canonical, declared_unit_raw=declared_unit_raw, resolved_unit=declared_norm, inferred=False
+        )
+    inferred_unit, value_range = _infer_unit_from_values(canonical, values)
+    return CurveUnitInfo(
+        curve=canonical,
+        declared_unit_raw=declared_unit_raw,
+        resolved_unit=inferred_unit,
+        inferred=True,
+        value_range_used=value_range,
+    )
+
+
+def _resolve_and_normalize_curve_units(
+    las: lasio.LASFile, df: pd.DataFrame, resolved_mnemonics: dict[str, str]
+) -> list[CurveUnitInfo]:
+    """Resolve units for every curve with a known value-range profile, and
+    normalize DT to us_per_ft IN PLACE on df if it resolved to us_per_m --
+    everything downstream (well_seismic_tie.py's depth_to_twt/
+    acoustic_impedance) assumes DT is already us_per_ft. Other curves are
+    resolved for QC/display only (this app doesn't unit-convert
+    RHOB/GR/NPHI elsewhere, so there's nothing further to normalize)."""
+    infos: list[CurveUnitInfo] = []
+    for canonical in _VALUE_RANGE_UNITS:
+        if canonical not in df.columns:
+            continue
+        mnemonic = resolved_mnemonics.get(canonical, canonical)
+        curve_item = las.curves.get(mnemonic) if mnemonic in las.curves else None
+        declared_unit_raw = (curve_item.unit if curve_item is not None else None) or None
+        info = _resolve_curve_unit(canonical, declared_unit_raw, df[canonical].to_numpy(dtype=float))
+
+        if canonical == "DT" and info.resolved_unit == "us_per_m":
+            df["DT"] = df["DT"] * FT_TO_M_TIME_FACTOR
+            info.conversion_applied = True
+
+        infos.append(info)
+    return infos
+
+
 def load_las_file(
     source: str | Path | BinaryIO, filename: str | None = None
 ) -> LoadedWell:
@@ -272,6 +382,11 @@ def load_las_file(
             f"LAS file '{filename}' has no valid depth samples after cleaning."
         )
 
+    # Resolve (and, for DT, normalize) curve units AFTER null cleaning --
+    # a raw -9999.25 sentinel would badly skew the median used for
+    # value-range inference.
+    curve_units = _resolve_and_normalize_curve_units(las, df, resolved)
+
     depths = df["DEPT"].to_numpy()
     start_depth = float(depths[0])
     stop_depth = float(depths[-1])
@@ -304,6 +419,7 @@ def load_las_file(
         coordinate_unit_detected=standardized["coordinate_unit_detected"],
         unit_conversion_applied=standardized["unit_conversion_applied"],
         td_stop_ratio=standardized["td_stop_ratio"],
+        curve_units=curve_units,
     )
 
     return LoadedWell(metadata=metadata, df=df)
