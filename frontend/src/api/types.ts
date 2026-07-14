@@ -435,6 +435,9 @@ export interface SyntheticSeismogramResponse {
   synthetic: number[];
   shifted_synthetic: number[];
   real_trace: number[];
+  trace_spectrum_freq_hz: number[];
+  real_trace_spectrum_amplitude: number[];
+  synthetic_spectrum_amplitude: number[];
   best_shift_ms: number;
   correlation: number;
   max_shift_ms: number;

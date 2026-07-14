@@ -220,6 +220,14 @@ def generate(
 
     tie = wst.cross_correlate_and_shift(synthetic_on_seismic_axis, real_trace, dt_ms, max_shift_ms=max_shift_ms)
 
+    # Frequency-domain view of the same real-vs-synthetic comparison shown
+    # in the time-domain overlay -- reuses wavelet_spectra (a generic FFT
+    # amplitude/phase helper, not wavelet-specific) rather than duplicating
+    # the FFT logic. Both traces share seismic_twt_ms/dt_ms, so one freq
+    # axis covers both.
+    real_trace_spectrum = wst.wavelet_spectra(real_trace, dt_ms)
+    synthetic_spectrum = wst.wavelet_spectra(tie["shifted_synthetic"], dt_ms)
+
     return {
         "well_id": well_id,
         "well_header": {
@@ -259,6 +267,9 @@ def generate(
         "synthetic": synthetic_on_seismic_axis.tolist(),
         "shifted_synthetic": tie["shifted_synthetic"].tolist(),
         "real_trace": real_trace.tolist(),
+        "trace_spectrum_freq_hz": real_trace_spectrum["freq_hz"].tolist(),
+        "real_trace_spectrum_amplitude": real_trace_spectrum["amplitude"].tolist(),
+        "synthetic_spectrum_amplitude": synthetic_spectrum["amplitude"].tolist(),
         "best_shift_ms": tie["best_shift_ms"],
         "correlation": tie["correlation"],
         "max_shift_ms": tie["max_shift_ms"],

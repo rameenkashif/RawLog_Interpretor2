@@ -570,6 +570,9 @@ class SyntheticSeismogramResponse(BaseModel):
     synthetic: list[float]
     shifted_synthetic: list[float]
     real_trace: list[float]
+    trace_spectrum_freq_hz: list[float]
+    real_trace_spectrum_amplitude: list[float]
+    synthetic_spectrum_amplitude: list[float]
     best_shift_ms: float
     correlation: float
     max_shift_ms: float = Field(..., description="Bulk-shift search range half-width used, ms")

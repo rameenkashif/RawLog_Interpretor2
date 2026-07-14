@@ -98,6 +98,13 @@ class TestGenerate:
         assert len(result["washout_flag"]) == len(result["washout_depth_m"])
         assert len(result["seismic_twt_ms"]) == len(result["synthetic"]) == len(result["real_trace"])
         assert len(result["wavelet_spectrum_freq_hz"]) == len(result["wavelet_spectrum_amplitude"])
+        # Frequency-domain view of the real-vs-synthetic overlay: one freq
+        # axis (both traces share seismic_twt_ms/dt_ms) sized like an rfft
+        # of a real_trace-length signal, with matching amplitude arrays.
+        assert len(result["trace_spectrum_freq_hz"]) == len(result["real_trace_spectrum_amplitude"])
+        assert len(result["trace_spectrum_freq_hz"]) == len(result["synthetic_spectrum_amplitude"])
+        assert len(result["trace_spectrum_freq_hz"]) == len(result["real_trace"]) // 2 + 1
+        assert all(f >= 0 for f in result["trace_spectrum_freq_hz"])
         assert result["applied_tie_points"] == []
         assert "sonic" in result["time_depth_note"].lower()
         assert "vertical" in result["vertical_assumption_note"].lower()
