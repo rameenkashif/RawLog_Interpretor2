@@ -25,8 +25,10 @@ import type {
   SpectralDecompositionResponse,
   SpectralFrequencySliceResponse,
   SpectralMethod,
+  SpectralSwtSliceResponse,
   SpectralTraceResponse,
   SurveyInfoResponse,
+  SwtWavelet,
   SyntheticSeismogramResponse,
   TiePointsResponse,
   TimeSliceResponse,
@@ -285,6 +287,22 @@ export async function getSpectralDecompositionTrace(
   const { data } = await http.get<SpectralTraceResponse>(
     "/api/seismic/spectral-decomp/trace",
     { params: { inline_number: inlineNumber, crossline_number: crosslineNumber, method } },
+  );
+  return data;
+}
+
+/** SWT (Stationary Wavelet Transform) single-level envelope slice across an
+ * inline -- the SWT equivalent of getSpectralFrequencySlice's fast path
+ * (same section-position shape), addressed by discrete level (1-6) rather
+ * than a continuous frequency. */
+export async function getSpectralSwtSlice(
+  inlineNumber: number,
+  level: number,
+  wavelet: SwtWavelet,
+): Promise<SpectralSwtSliceResponse> {
+  const { data } = await http.get<SpectralSwtSliceResponse>(
+    `/api/seismic/spectral-decomp/inline/${inlineNumber}`,
+    { params: { method: "swt", level, wavelet } },
   );
   return data;
 }

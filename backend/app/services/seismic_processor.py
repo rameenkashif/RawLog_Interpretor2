@@ -40,8 +40,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pywt
 import segyio
-from scipy.signal import fftconvolve, stft
+from scipy.signal import fftconvolve, hilbert, stft
 
 from app import segy_header_parser as shp
 from app import well_seismic_tie as wst
@@ -75,12 +76,32 @@ STFT_OVERLAP_FRACTION = 0.75
 CWT_MORLET_W0 = 6.0
 CWT_DEFAULT_FREQS_HZ: tuple[float, ...] = tuple(float(f) for f in range(5, 101, 5))
 
+# SWT (Stationary/"undecimated" Wavelet Transform, via PyWavelets): unlike
+# STFT/CWT's continuous frequency axis, SWT decomposes into a fixed set of
+# discrete detail levels, each covering a dyadic (octave) frequency band --
+# level N covers approximately [Nyquist/2^N, Nyquist/2^(N-1)] (level 1 =
+# highest-frequency/finest-scale band, closest to Nyquist; higher levels
+# step down an octave at a time). sym8 (Symlet-8) is the default: smoother
+# and closer to linear phase than shorter wavelets, which matters for
+# picking bed-boundary edges without introducing much phase distortion.
+# coif3 (Coiflet-3) is offered as an alternative with a different
+# smoothness/support tradeoff. Both are real, orthogonal wavelets (unlike
+# the complex Morlet used for CWT), so amplitude here is the Hilbert
+# envelope of the detail coefficients rather than |complex coefficient| --
+# the seismic "instantaneous amplitude" convention, and visually comparable
+# to STFT/CWT's smooth energy maps rather than a raw jagged coefficient.
+SWT_DEFAULT_WAVELET = "sym8"
+VALID_SWT_WAVELETS = ("sym8", "coif3")
+SWT_MIN_LEVEL = 1
+SWT_MAX_LEVEL = 6
+SWT_DEFAULT_LEVEL = 3
+
 # Typical usable seismic bandwidth, returned alongside the full frequency
 # axis so the frontend can highlight/default-zoom to this band rather than
 # the full 0-Nyquist range.
 TYPICAL_USEFUL_BAND_HZ = (5.0, 80.0)
 
-VALID_SPECTRAL_METHODS = ("stft", "cwt")
+VALID_SPECTRAL_METHODS = ("stft", "cwt", "swt")
 
 
 def _validate_spectral_method(method: str) -> str:
@@ -91,6 +112,24 @@ def _validate_spectral_method(method: str) -> str:
             f"{VALID_SPECTRAL_METHODS}."
         )
     return method
+
+
+def _validate_swt_wavelet(wavelet: str) -> str:
+    wavelet = wavelet.lower()
+    if wavelet not in VALID_SWT_WAVELETS:
+        raise SegyVolumeError(
+            f"Unknown SWT wavelet '{wavelet}' -- expected one of {VALID_SWT_WAVELETS}."
+        )
+    return wavelet
+
+
+def _validate_swt_level(level: int) -> int:
+    level = int(level)
+    if not (SWT_MIN_LEVEL <= level <= SWT_MAX_LEVEL):
+        raise SegyVolumeError(
+            f"SWT level {level} out of range -- expected {SWT_MIN_LEVEL}-{SWT_MAX_LEVEL}."
+        )
+    return level
 
 
 def _morlet_wavelet(freq_hz: float, dt_s: float, w0: float = CWT_MORLET_W0) -> np.ndarray:
@@ -495,22 +534,98 @@ class SegyVolume:
 
         return freqs, self.twt_axis_ms.copy(), energy.transpose(2, 1, 0)  # (n_time, n_freq, n_pos)
 
+    def _swt_band_hz(self, level: int) -> tuple[float, float]:
+        """Approximate dyadic frequency band for an SWT detail level, from
+        this survey's own Nyquist frequency: level N ~= [Nyquist/2^N,
+        Nyquist/2^(N-1)]. Just a labeling convenience for the UI -- unlike
+        STFT/CWT's FFT-derived bins, this isn't an exact per-bin frequency,
+        it's the nominal octave band a dyadic wavelet decomposition splits
+        out at that level."""
+        nyquist = self._nyquist_hz
+        return nyquist / (2**level), nyquist / (2 ** (level - 1))
+
+    def _decompose_swt(
+        self, traces: np.ndarray, wavelet: str = SWT_DEFAULT_WAVELET
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Stationary (undecimated) Wavelet Transform via PyWavelets.
+        traces: (n_pos, n_samples). Returns (bands_hz, time_ms, energy)
+        where bands_hz has shape (SWT_MAX_LEVEL, 2) -- one [lo, hi] Hz pair
+        per level, see _swt_band_hz -- and energy has shape
+        (n_time, n_level, n_pos), at the trace's native sample resolution
+        (shift-invariant/no decimation, unlike a plain DWT).
+
+        pywt.swt requires the transformed axis length to be a multiple of
+        2**level; traces are reflect-padded up to the next multiple of
+        2**SWT_MAX_LEVEL (covering every level up to the max in one call)
+        and trimmed back to the original length afterward -- padding is
+        appended only at the end, so trimming is a plain slice, no
+        left-edge bookkeeping needed.
+
+        Amplitude is the Hilbert envelope of each level's detail
+        coefficients (cD), not a raw |coefficient| -- the standard seismic
+        "instantaneous amplitude" convention, and visually consistent with
+        STFT/CWT's smooth energy maps rather than a jagged real-valued
+        wavelet coefficient.
+        """
+        n_pos, n_samples = traces.shape
+        multiple = 2**SWT_MAX_LEVEL
+        pad_len = (multiple - (n_samples % multiple)) % multiple
+
+        if pad_len == 0:
+            padded = traces
+        else:
+            # reflect-padding can't exceed the signal's own length; fall
+            # back to edge-padding for a pathologically short trace rather
+            # than letting numpy raise.
+            pad_mode = "reflect" if pad_len < n_samples else "edge"
+            padded = np.pad(traces, ((0, 0), (0, pad_len)), mode=pad_mode)
+
+        # trim_approx=True -> [cA_max, cD_max, cD_(max-1), ..., cD_1], so
+        # detail coefficients for level L sit at index (SWT_MAX_LEVEL+1-L).
+        coeffs = pywt.swt(padded, wavelet, level=SWT_MAX_LEVEL, axis=-1, trim_approx=True)
+
+        energy = np.empty((n_pos, SWT_MAX_LEVEL, n_samples), dtype=float)
+        bands_hz = np.empty((SWT_MAX_LEVEL, 2), dtype=float)
+        for level in range(SWT_MIN_LEVEL, SWT_MAX_LEVEL + 1):
+            cD = coeffs[SWT_MAX_LEVEL + 1 - level][:, :n_samples]  # trim padding back off
+            energy[:, level - 1, :] = np.abs(hilbert(cD, axis=-1))
+            bands_hz[level - 1] = self._swt_band_hz(level)
+
+        return bands_hz, self.twt_axis_ms.copy(), energy.transpose(2, 1, 0)  # (n_time, n_level, n_pos)
+
     def _decompose(self, traces: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         return self._decompose_stft(traces) if method == "stft" else self._decompose_cwt(traces)
 
     def get_spectral_decomposition_inline(
-        self, inline_number: int, method: str = "stft", frequency_hz: float | None = None
+        self,
+        inline_number: int,
+        method: str = "stft",
+        frequency_hz: float | None = None,
+        level: int | None = None,
+        wavelet: str = SWT_DEFAULT_WAVELET,
     ) -> dict:
         """Time-frequency decomposition for every trace along an inline.
 
-        With frequency_hz omitted, returns the full (time x freq x position)
-        volume -- heavier, meant for an initial load or export. With
-        frequency_hz given, returns just that single frequency's energy
-        across the section (time x position, same shape convention as
-        get_inline_section's "amplitude") -- this is the fast path meant for
-        a frontend frequency slider, and reuses the cached full decomposition
-        after the first call for a given (inline, method) rather than
-        recomputing the STFT/CWT on every slider tick.
+        For method='stft'/'cwt': with frequency_hz omitted, returns the
+        full (time x freq x position) volume -- heavier, meant for an
+        initial load or export. With frequency_hz given, returns just that
+        single frequency's energy across the section (time x position,
+        same shape convention as get_inline_section's "amplitude") -- the
+        fast path meant for a frontend frequency slider, reusing the
+        cached full decomposition after the first call for a given
+        (inline, method) rather than recomputing the STFT/CWT on every
+        slider tick.
+
+        For method='swt': always returns a single level's detail-
+        coefficient envelope (same "amplitude" shape as the STFT/CWT fast
+        path above) -- SWT has no continuous frequency axis to browse the
+        "full volume" of, only a handful of discrete dyadic levels (see
+        _decompose_swt), so there's no heavier all-levels response to
+        return here. level defaults to SWT_DEFAULT_LEVEL if omitted. All
+        SWT_MAX_LEVEL levels are computed and cached together on first
+        call per (inline, wavelet) -- cheap, since pywt.swt computes every
+        level in one pass -- so switching levels on a slider is also just
+        a cache slice, not a recompute.
         """
         method = _validate_spectral_method(method)
         idx = self._inline_index.get(int(inline_number))
@@ -518,6 +633,35 @@ class SegyVolume:
             raise SegyVolumeError(
                 f"Inline {inline_number} not found. Valid range: {self.inline_min}-{self.inline_max}."
             )
+
+        if method == "swt":
+            wavelet = _validate_swt_wavelet(wavelet)
+            cache_key = (int(inline_number), method, wavelet)
+            cached = self._spectral_cache.get(cache_key)
+            if cached is None:
+                bands_hz, time_ms, energy = self._decompose_swt(self._traces[idx].astype(float), wavelet)
+                cached = {
+                    "crossline_axis": self.crossline[idx].tolist(),
+                    "bands_hz": bands_hz,  # (SWT_MAX_LEVEL, 2)
+                    "time_ms": time_ms,
+                    "energy": energy,  # (n_time, n_level, n_pos)
+                }
+                self._spectral_cache[cache_key] = cached
+
+            lvl = _validate_swt_level(level if level is not None else SWT_DEFAULT_LEVEL)
+            band = cached["bands_hz"][lvl - 1]
+            amplitude_slice = cached["energy"][:, lvl - 1, :]  # (n_time, n_pos)
+            return {
+                "inline_number": int(inline_number),
+                "method": method,
+                "level": lvl,
+                "wavelet": wavelet,
+                "band_hz": [float(band[0]), float(band[1])],
+                "nyquist_hz": self._nyquist_hz,
+                "crossline_axis": cached["crossline_axis"],
+                "time_ms": cached["time_ms"].tolist(),
+                "amplitude": amplitude_slice.tolist(),
+            }
 
         cache_key = (int(inline_number), method)
         cached = self._spectral_cache.get(cache_key)
@@ -557,10 +701,12 @@ class SegyVolume:
         }
 
     def get_spectral_decomposition_trace(
-        self, inline_number: int, crossline_number: int, method: str = "stft"
+        self, inline_number: int, crossline_number: int, method: str = "stft", wavelet: str = SWT_DEFAULT_WAVELET
     ) -> dict:
         """Time-frequency decomposition for a single trace, e.g. for a
-        trace-inspection view or well-tie context."""
+        trace-inspection view or well-tie context. For method='swt', energy
+        covers all SWT_MAX_LEVEL levels (there's no frequency slider to
+        page through here, so the full small set is returned directly)."""
         method = _validate_spectral_method(method)
         idx = self._inline_index.get(int(inline_number))
         if idx is None:
@@ -576,6 +722,23 @@ class SegyVolume:
         trace_idx = int(idx[match[0]])
 
         trace = self._traces[trace_idx : trace_idx + 1].astype(float)  # (1, n_samples)
+
+        if method == "swt":
+            wavelet = _validate_swt_wavelet(wavelet)
+            bands_hz, time_ms, energy = self._decompose_swt(trace, wavelet)
+            energy_2d = energy[:, :, 0]  # (n_time, n_level)
+            return {
+                "inline_number": int(inline_number),
+                "crossline_number": int(crossline_number),
+                "method": method,
+                "wavelet": wavelet,
+                "time_ms": time_ms.tolist(),
+                "levels": list(range(SWT_MIN_LEVEL, SWT_MAX_LEVEL + 1)),
+                "bands_hz": bands_hz.tolist(),
+                "nyquist_hz": self._nyquist_hz,
+                "energy": energy_2d.tolist(),
+            }
+
         freq_hz, time_ms, energy = self._decompose(trace, method)
         energy_2d = energy[:, :, 0]  # (n_time, n_freq)
 

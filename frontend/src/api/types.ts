@@ -288,7 +288,8 @@ export interface AmplitudeSpectrumResponse {
   snr_proxy: number | null;
 }
 
-export type SpectralMethod = "stft" | "cwt";
+export type SpectralMethod = "stft" | "cwt" | "swt";
+export type SwtWavelet = "sym8" | "coif3";
 
 export interface SpectralDecompositionResponse {
   inline_number: number;
@@ -320,6 +321,30 @@ export interface SpectralTraceResponse {
   nyquist_hz: number;
   typical_band_hz: [number, number];
   energy: number[][]; // shape (n_time, n_freq)
+}
+
+export interface SpectralSwtSliceResponse {
+  inline_number: number;
+  method: SpectralMethod;
+  level: number;
+  wavelet: SwtWavelet;
+  band_hz: [number, number];
+  nyquist_hz: number;
+  crossline_axis: number[];
+  time_ms: number[];
+  amplitude: number[][]; // shape (n_time, n_traces_in_line), same convention as InlineSectionResponse
+}
+
+export interface SpectralSwtTraceResponse {
+  inline_number: number;
+  crossline_number: number;
+  method: SpectralMethod;
+  wavelet: SwtWavelet;
+  time_ms: number[];
+  levels: number[];
+  bands_hz: [number, number][];
+  nyquist_hz: number;
+  energy: number[][]; // shape (n_time, n_level)
 }
 
 export const CURVE_NAMES = [

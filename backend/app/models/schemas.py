@@ -465,6 +465,41 @@ class SpectralTraceResponse(BaseModel):
     energy: list[list[float]] = Field(..., description="Shape (n_time, n_freq)")
 
 
+class SpectralSwtSliceResponse(BaseModel):
+    """A single SWT detail level's envelope across an inline section -- the
+    SWT equivalent of SpectralFrequencySliceResponse (same section-position
+    shape convention, so the same heatmap renderer works unchanged). SWT
+    has no continuous frequency axis to browse a "full volume" of, only a
+    handful of discrete dyadic levels, so this fast-path shape is the only
+    response SWT ever returns for an inline."""
+
+    inline_number: int
+    method: str = Field("swt", description="Always 'swt'")
+    level: int = Field(..., description="Decomposition level actually used, 1-6")
+    wavelet: str = Field(..., description="'sym8' or 'coif3'")
+    band_hz: list[float] = Field(..., description="[lo, hi] Hz -- approximate dyadic band for this level")
+    nyquist_hz: float
+    crossline_axis: list[int]
+    time_ms: list[float]
+    amplitude: list[list[float]] = Field(
+        ..., description="Shape (n_time, n_traces_in_line), Hilbert-envelope amplitude of the level's detail coefficients"
+    )
+
+
+class SpectralSwtTraceResponse(BaseModel):
+    """SWT decomposition (all levels) for a single trace."""
+
+    inline_number: int
+    crossline_number: int
+    method: str = Field("swt", description="Always 'swt'")
+    wavelet: str = Field(..., description="'sym8' or 'coif3'")
+    time_ms: list[float]
+    levels: list[int] = Field(..., description="1-6")
+    bands_hz: list[list[float]] = Field(..., description="Shape (n_level, 2), [lo, hi] Hz per level")
+    nyquist_hz: float
+    energy: list[list[float]] = Field(..., description="Shape (n_time, n_level)")
+
+
 # -----------------------------------------------------------------------------
 # Synthetic Seismogram module (/api/synthetic/*)
 # -----------------------------------------------------------------------------

@@ -445,6 +445,122 @@ class TestSpectralDecomposition:
         assert wide_volume._spectral_cache[cache_key]["energy"] is cached_energy
 
 
+class TestSwtSpectralDecomposition:
+    """SWT (Stationary Wavelet Transform, via PyWavelets) -- a third
+    spectral decomposition method alongside STFT/CWT, with a discrete
+    level (not continuous frequency) axis. See seismic_processor.py's
+    _decompose_swt for the padding/level/band-mapping rationale."""
+
+    @pytest.fixture
+    def wide_volume(self, tmp_path) -> sp.SegyVolume:
+        path = tmp_path / "wide_survey.sgy"
+        _write_synthetic_segy(path, n_samples=80, interval_ms=2)
+        return sp.SegyVolume(path)
+
+    def test_default_level_and_wavelet(self, wide_volume):
+        result = wide_volume.get_spectral_decomposition_inline(384, method="swt")
+        assert result["level"] == sp.SWT_DEFAULT_LEVEL == 3
+        assert result["wavelet"] == sp.SWT_DEFAULT_WAVELET == "sym8"
+
+    def test_band_hz_matches_formula(self, wide_volume):
+        # Nyquist here is 250 Hz (2 ms interval) -- level N band should be
+        # [Nyquist/2^N, Nyquist/2^(N-1)].
+        for level in range(1, 7):
+            result = wide_volume.get_spectral_decomposition_inline(384, method="swt", level=level)
+            lo, hi = result["band_hz"]
+            assert lo == pytest.approx(250.0 / (2**level))
+            assert hi == pytest.approx(250.0 / (2 ** (level - 1)))
+
+    def test_band_hz_decreases_as_level_increases(self, wide_volume):
+        # Level 1 = finest scale = closest to Nyquist (highest band);
+        # level 6 = coarsest = lowest band.
+        bands = [
+            wide_volume.get_spectral_decomposition_inline(384, method="swt", level=lvl)["band_hz"]
+            for lvl in range(1, 7)
+        ]
+        highs = [b[1] for b in bands]
+        assert highs == sorted(highs, reverse=True)
+
+    def test_coif3_wavelet_selectable(self, wide_volume):
+        result = wide_volume.get_spectral_decomposition_inline(384, method="swt", wavelet="coif3")
+        assert result["wavelet"] == "coif3"
+
+    def test_unknown_wavelet_raises(self, wide_volume):
+        with pytest.raises(sp.SegyVolumeError):
+            wide_volume.get_spectral_decomposition_inline(384, method="swt", wavelet="bogus")
+
+    def test_level_out_of_range_raises(self, wide_volume):
+        with pytest.raises(sp.SegyVolumeError):
+            wide_volume.get_spectral_decomposition_inline(384, method="swt", level=7)
+        with pytest.raises(sp.SegyVolumeError):
+            wide_volume.get_spectral_decomposition_inline(384, method="swt", level=0)
+
+    def test_amplitude_matches_inline_section_position_shape(self, wide_volume):
+        section = wide_volume.get_inline_section(384)
+        result = wide_volume.get_spectral_decomposition_inline(384, method="swt", level=2)
+        assert result["crossline_axis"] == section["crossline_axis"]
+        n_pos = len(section["crossline_axis"])
+        assert all(len(row) == n_pos for row in result["amplitude"])
+        # Time axis must match the trace's own native sample resolution
+        # (no windowing loss, like CWT) -- same length as the section.
+        assert len(result["time_ms"]) == len(section["twt_axis_ms"])
+        assert len(result["amplitude"]) == len(result["time_ms"])
+
+    def test_amplitude_is_non_negative(self, wide_volume):
+        # Hilbert-envelope amplitude, not a raw signed coefficient.
+        result = wide_volume.get_spectral_decomposition_inline(384, method="swt")
+        assert all(v >= 0.0 for row in result["amplitude"] for v in row)
+
+    def test_full_decomposition_is_cached_across_levels(self, wide_volume):
+        wide_volume.get_spectral_decomposition_inline(384, method="swt", level=1)
+        cache_key = (384, "swt", "sym8")
+        assert cache_key in wide_volume._spectral_cache
+        cached_energy = wide_volume._spectral_cache[cache_key]["energy"]
+        # Switching levels must reuse the cached all-levels array, not
+        # recompute pywt.swt from scratch.
+        wide_volume.get_spectral_decomposition_inline(384, method="swt", level=5)
+        assert wide_volume._spectral_cache[cache_key]["energy"] is cached_energy
+
+    def test_different_wavelets_cached_separately(self, wide_volume):
+        wide_volume.get_spectral_decomposition_inline(384, method="swt", wavelet="sym8")
+        wide_volume.get_spectral_decomposition_inline(384, method="swt", wavelet="coif3")
+        assert (384, "swt", "sym8") in wide_volume._spectral_cache
+        assert (384, "swt", "coif3") in wide_volume._spectral_cache
+
+    def test_trace_decomposition_returns_all_levels(self, wide_volume):
+        result = wide_volume.get_spectral_decomposition_trace(384, 47, method="swt")
+        assert result["levels"] == [1, 2, 3, 4, 5, 6]
+        assert len(result["bands_hz"]) == 6
+        n_time = len(result["time_ms"])
+        assert len(result["energy"]) == n_time
+        assert all(len(row) == 6 for row in result["energy"])
+
+    def test_short_trace_falls_back_to_edge_padding(self, tmp_path):
+        # The base fixture's 6-sample trace is far shorter than 2**6=64,
+        # so reflect-padding (which can't exceed the signal's own length)
+        # isn't possible -- must fall back to edge-padding rather than
+        # raising.
+        path = tmp_path / "short_survey.sgy"
+        _write_synthetic_segy(path)  # default N_SAMPLES = 6
+        volume = sp.SegyVolume(path)
+        result = volume.get_spectral_decomposition_inline(384, method="swt", level=1)
+        assert len(result["time_ms"]) == N_SAMPLES
+        assert all(len(row) == len(result["amplitude"][0]) for row in result["amplitude"])
+
+    def test_nan_trace_does_not_crash(self, wide_volume):
+        # Mirrors how STFT/CWT are exercised -- no special NaN masking,
+        # just confirms it propagates without raising.
+        volume = wide_volume
+        idx = volume._inline_index[384]
+        volume._traces[idx[0], 5] = np.nan
+        result = volume.get_spectral_decomposition_inline(384, method="swt")
+        assert len(result["amplitude"]) > 0
+
+    def test_unknown_method_still_raises(self, wide_volume):
+        with pytest.raises(sp.SegyVolumeError):
+            wide_volume.get_spectral_decomposition_inline(384, method="bogus")
+
+
 class TestSegyVolumeSingleton:
     def test_no_file_raises_not_found(self, tmp_path, monkeypatch):
         monkeypatch.setattr(sp, "RAW_SEISMIC_DIR", tmp_path)

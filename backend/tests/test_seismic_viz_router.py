@@ -157,6 +157,61 @@ class TestSpectralDecompEndpoints:
         )
         assert resp.status_code == 422
 
+    def test_swt_inline_default_level_and_wavelet(self, wide_client):
+        resp = wide_client.get("/api/seismic/spectral-decomp/inline/384", params={"method": "swt"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["method"] == "swt"
+        assert body["level"] == 3
+        assert body["wavelet"] == "sym8"
+        assert "amplitude" in body and "energy" not in body
+        assert len(body["band_hz"]) == 2
+
+    def test_swt_inline_custom_level_and_wavelet(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/inline/384",
+            params={"method": "swt", "level": 5, "wavelet": "coif3"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["level"] == 5
+        assert body["wavelet"] == "coif3"
+
+    def test_swt_amplitude_matches_inline_section_shape(self, wide_client):
+        section = wide_client.get("/api/seismic/inline/384").json()
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/inline/384", params={"method": "swt", "level": 2}
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["crossline_axis"] == section["crossline_axis"]
+        n_pos = len(section["crossline_axis"])
+        assert all(len(row) == n_pos for row in body["amplitude"])
+
+    def test_swt_bad_level_is_422(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/inline/384", params={"method": "swt", "level": 9}
+        )
+        assert resp.status_code == 422
+
+    def test_swt_bad_wavelet_is_422(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/inline/384", params={"method": "swt", "wavelet": "bogus"}
+        )
+        assert resp.status_code == 422
+
+    def test_swt_trace_decomposition_returns_all_levels(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/trace",
+            params={"inline_number": 384, "crossline_number": 47, "method": "swt"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["levels"] == [1, 2, 3, 4, 5, 6]
+        assert len(body["bands_hz"]) == 6
+        assert len(body["energy"]) == len(body["time_ms"])
+        assert all(len(row) == 6 for row in body["energy"])
+
 
 class TestWellTieEndpoint:
     def test_unknown_well_is_404(self, client):

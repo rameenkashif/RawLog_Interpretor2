@@ -26,6 +26,8 @@ from app.models.schemas import (
     RecalibrateResponse,
     SpectralDecompositionResponse,
     SpectralFrequencySliceResponse,
+    SpectralSwtSliceResponse,
+    SpectralSwtTraceResponse,
     SpectralTraceResponse,
     SurveyInfoResponse,
     TimeSliceResponse,
@@ -200,25 +202,34 @@ async def spectrum(
 
 @router.get(
     "/spectral-decomp/inline/{inline_number}",
-    response_model=SpectralDecompositionResponse | SpectralFrequencySliceResponse,
+    response_model=SpectralDecompositionResponse | SpectralFrequencySliceResponse | SpectralSwtSliceResponse,
 )
 async def spectral_decomp_inline(
     inline_number: int,
-    method: str = Query("stft", description="'stft' or 'cwt'"),
+    method: str = Query("stft", description="'stft', 'cwt', or 'swt'"),
     frequency_hz: float | None = Query(
         None,
         description=(
-            "If given, return just this frequency's energy across the section (fast path for "
-            "a frontend slider). If omitted, return the full time x freq x position volume "
-            "(heavier -- initial load or export)."
+            "STFT/CWT only. If given, return just this frequency's energy across the section "
+            "(fast path for a frontend slider). If omitted, return the full time x freq x "
+            "position volume (heavier -- initial load or export)."
         ),
     ),
-) -> SpectralDecompositionResponse | SpectralFrequencySliceResponse:
+    level: int | None = Query(
+        None,
+        description="SWT only. Decomposition level, 1-6 (default 3). Ignored for 'stft'/'cwt'.",
+    ),
+    wavelet: str = Query(
+        sp.SWT_DEFAULT_WAVELET, description="SWT only. 'sym8' (Symlet-8, default) or 'coif3' (Coiflet-3)."
+    ),
+) -> SpectralDecompositionResponse | SpectralFrequencySliceResponse | SpectralSwtSliceResponse:
     try:
         volume = sp.get_segy_volume()
         result = volume.get_spectral_decomposition_inline(
-            inline_number, method=method, frequency_hz=frequency_hz
+            inline_number, method=method, frequency_hz=frequency_hz, level=level, wavelet=wavelet
         )
+        if method.lower() == "swt":
+            return SpectralSwtSliceResponse(**result)
         if frequency_hz is None:
             return SpectralDecompositionResponse(**result)
         return SpectralFrequencySliceResponse(**result)
@@ -226,16 +237,25 @@ async def spectral_decomp_inline(
         _handle(exc)
 
 
-@router.get("/spectral-decomp/trace", response_model=SpectralTraceResponse)
+@router.get(
+    "/spectral-decomp/trace",
+    response_model=SpectralTraceResponse | SpectralSwtTraceResponse,
+)
 async def spectral_decomp_trace(
     inline_number: int,
     crossline_number: int,
-    method: str = Query("stft", description="'stft' or 'cwt'"),
-) -> SpectralTraceResponse:
+    method: str = Query("stft", description="'stft', 'cwt', or 'swt'"),
+    wavelet: str = Query(
+        sp.SWT_DEFAULT_WAVELET, description="SWT only. 'sym8' (Symlet-8, default) or 'coif3' (Coiflet-3)."
+    ),
+) -> SpectralTraceResponse | SpectralSwtTraceResponse:
     try:
         volume = sp.get_segy_volume()
-        return SpectralTraceResponse(
-            **volume.get_spectral_decomposition_trace(inline_number, crossline_number, method=method)
+        result = volume.get_spectral_decomposition_trace(
+            inline_number, crossline_number, method=method, wavelet=wavelet
         )
+        if method.lower() == "swt":
+            return SpectralSwtTraceResponse(**result)
+        return SpectralTraceResponse(**result)
     except Exception as exc:  # noqa: BLE001
         _handle(exc)
