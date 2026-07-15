@@ -26,6 +26,7 @@ from app.models.schemas import (
     RecalibrateResponse,
     SpectralDecompositionResponse,
     SpectralFrequencySliceResponse,
+    SpectralPetroCorrelationResponse,
     SpectralSwtSliceResponse,
     SpectralSwtTraceResponse,
     SpectralTraceResponse,
@@ -41,6 +42,7 @@ from app.coordinate_calibration import CoordinateCalibrationError
 from app.coordinate_tie_override_repository import WellTraceOverride, get_coordinate_tie_override_repository
 from app.services import coordinate_calibration_service as ccs
 from app.services import seismic_processor as sp
+from app.services import spectral_petro_correlation_service as spc
 from app.services import well_zone_tie_service as wzt
 from app.services.well_service import WellNotFoundError
 
@@ -257,5 +259,33 @@ async def spectral_decomp_trace(
         if method.lower() == "swt":
             return SpectralSwtTraceResponse(**result)
         return SpectralTraceResponse(**result)
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/spectral-petro-correlation", response_model=SpectralPetroCorrelationResponse)
+async def spectral_petro_correlation(
+    well_id: str | None = Query(None, description="Required unless all_wells=true."),
+    all_wells: bool = Query(
+        False,
+        description="Loop over every well with a resolvable tie and DT/petrophysical logs, plus an averaged summary. well_id is ignored if true.",
+    ),
+    swt_level: int = Query(
+        sp.SWT_DEFAULT_LEVEL,
+        description="SWT decomposition level, 1-6 (default 3) -- also fixes the matched CWT comparison frequency (this level's dyadic band center).",
+    ),
+    wavelet: str = Query(
+        sp.SWT_DEFAULT_WAVELET, description="SWT only. 'sym8' (Symlet-8, default) or 'coif3' (Coiflet-3)."
+    ),
+) -> SpectralPetroCorrelationResponse:
+    """"CWT vs SWT -- Petrophysical Correlation": at a matched frequency
+    band (CWT sampled at the SWT level's own band-center frequency),
+    Pearson-correlates each spectral method's amplitude against VSH/PHIE/
+    SWE over a well's tie interval -- see spectral_petro_correlation_service
+    for why this is a like-for-like comparison rather than CWT's adaptive
+    peak frequency against a fixed SWT level."""
+    try:
+        result = spc.get_correlation(well_id=well_id, all_wells=all_wells, swt_level=swt_level, wavelet=wavelet)
+        return SpectralPetroCorrelationResponse(**result)
     except Exception as exc:  # noqa: BLE001
         _handle(exc)

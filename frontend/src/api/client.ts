@@ -25,6 +25,7 @@ import type {
   SpectralDecompositionResponse,
   SpectralFrequencySliceResponse,
   SpectralMethod,
+  SpectralPetroCorrelationResponse,
   SpectralSwtSliceResponse,
   SpectralTraceResponse,
   SurveyInfoResponse,
@@ -303,6 +304,23 @@ export async function getSpectralSwtSlice(
   const { data } = await http.get<SpectralSwtSliceResponse>(
     `/api/seismic/spectral-decomp/inline/${inlineNumber}`,
     { params: { method: "swt", level, wavelet } },
+  );
+  return data;
+}
+
+export async function getSpectralPetroCorrelation(
+  opts: { wellId?: string; allWells?: boolean; swtLevel?: number; wavelet?: SwtWavelet } = {},
+): Promise<SpectralPetroCorrelationResponse> {
+  const { data } = await http.get<SpectralPetroCorrelationResponse>(
+    "/api/seismic/spectral-petro-correlation",
+    {
+      params: {
+        well_id: opts.wellId,
+        all_wells: opts.allWells,
+        swt_level: opts.swtLevel,
+        wavelet: opts.wavelet,
+      },
+    },
   );
   return data;
 }

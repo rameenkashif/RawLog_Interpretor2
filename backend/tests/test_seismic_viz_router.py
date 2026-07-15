@@ -213,6 +213,48 @@ class TestSpectralDecompEndpoints:
         assert all(len(row) == 6 for row in body["energy"])
 
 
+class TestSpectralPetroCorrelationEndpoint:
+    """HTTP-level validation tests only -- exercising a successful
+    correlation needs a well tied into the survey via the real well
+    repository (see test_spectral_petro_correlation_service.py for the
+    full functional coverage with an isolated, monkeypatched well_repo);
+    same convention already used by TestWellTieEndpoint below, which also
+    only covers the unhappy paths at this HTTP layer."""
+
+    def test_missing_well_id_without_all_wells_is_422(self, wide_client):
+        resp = wide_client.get("/api/seismic/spectral-petro-correlation")
+        assert resp.status_code == 422
+
+    def test_unknown_well_is_404(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-petro-correlation", params={"well_id": "DOES_NOT_EXIST"}
+        )
+        assert resp.status_code == 404
+
+    def test_bad_swt_level_is_422(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-petro-correlation",
+            params={"well_id": "DOES_NOT_EXIST", "swt_level": 9},
+        )
+        assert resp.status_code == 422
+
+    def test_bad_wavelet_is_422(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-petro-correlation",
+            params={"well_id": "DOES_NOT_EXIST", "wavelet": "bogus"},
+        )
+        assert resp.status_code == 422
+
+    def test_all_wells_true_does_not_require_well_id(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-petro-correlation", params={"all_wells": True}
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["mode"] == "all_wells"
+        assert isinstance(body["wells"], list)
+
+
 class TestWellTieEndpoint:
     def test_unknown_well_is_404(self, client):
         resp = client.get("/api/seismic/well-tie/DOES_NOT_EXIST")

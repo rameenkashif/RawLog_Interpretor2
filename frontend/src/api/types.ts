@@ -347,6 +347,48 @@ export interface SpectralSwtTraceResponse {
   energy: number[][]; // shape (n_time, n_level)
 }
 
+export interface PetroCorrelationPair {
+  cwt_r: number | null;
+  cwt_n: number;
+  swt_r: number | null;
+  swt_n: number;
+}
+
+export interface SpectralPetroCorrelationWellResult {
+  well_id: string;
+  nearest_inline: number;
+  nearest_crossline: number;
+  distance_m: number | null;
+  tie_method: string;
+  vsh: PetroCorrelationPair;
+  phie: PetroCorrelationPair;
+  swe: PetroCorrelationPair;
+  low_sample_warning: boolean;
+}
+
+export interface PetroCorrelationAverage {
+  cwt_r: number | null;
+  swt_r: number | null;
+  n_wells: number;
+}
+
+export interface SpectralPetroCorrelationAverages {
+  vsh: PetroCorrelationAverage;
+  phie: PetroCorrelationAverage;
+  swe: PetroCorrelationAverage;
+}
+
+export interface SpectralPetroCorrelationResponse {
+  mode: "single" | "all_wells";
+  swt_level: number;
+  swt_band_hz: [number, number];
+  cwt_frequency_hz: number;
+  wavelet: SwtWavelet;
+  wells: SpectralPetroCorrelationWellResult[];
+  skipped_well_ids: string[];
+  averages: SpectralPetroCorrelationAverages | null;
+}
+
 export const CURVE_NAMES = [
   "DEPT",
   "GR",

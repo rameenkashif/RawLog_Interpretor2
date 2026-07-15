@@ -500,6 +500,60 @@ class SpectralSwtTraceResponse(BaseModel):
     energy: list[list[float]] = Field(..., description="Shape (n_time, n_level)")
 
 
+class PetroCorrelationPair(BaseModel):
+    """One property's correlation against CWT (at the matched frequency)
+    and SWT (at the requested level), over one well's tie interval."""
+
+    cwt_r: float | None = Field(
+        None, description="Pearson r between CWT amplitude and this property; None if too few valid samples or a constant series"
+    )
+    cwt_n: int = Field(..., description="Sample count used for the CWT correlation")
+    swt_r: float | None = Field(None, description="Pearson r between SWT amplitude and this property")
+    swt_n: int = Field(..., description="Sample count used for the SWT correlation")
+
+
+class SpectralPetroCorrelationWellResult(BaseModel):
+    well_id: str
+    nearest_inline: int
+    nearest_crossline: int
+    distance_m: float | None = None
+    tie_method: str = Field(..., description="'calibrated_fit' or 'manual_override'")
+    vsh: PetroCorrelationPair
+    phie: PetroCorrelationPair
+    swe: PetroCorrelationPair
+    low_sample_warning: bool = Field(
+        ..., description="True if any correlation pair's sample count is below the reliability threshold (20)"
+    )
+
+
+class PetroCorrelationAverage(BaseModel):
+    cwt_r: float | None = None
+    swt_r: float | None = None
+    n_wells: int = Field(..., description="Number of wells contributing a non-null correlation to this average")
+
+
+class SpectralPetroCorrelationAverages(BaseModel):
+    vsh: PetroCorrelationAverage
+    phie: PetroCorrelationAverage
+    swe: PetroCorrelationAverage
+
+
+class SpectralPetroCorrelationResponse(BaseModel):
+    mode: str = Field(..., description="'single' or 'all_wells'")
+    swt_level: int = Field(..., description="1-6")
+    swt_band_hz: list[float] = Field(..., description="[lo, hi] Hz -- this level's dyadic band")
+    cwt_frequency_hz: float = Field(..., description="CWT frequency matched to the SWT band's center")
+    wavelet: str = Field(..., description="'sym8' or 'coif3'")
+    wells: list[SpectralPetroCorrelationWellResult]
+    skipped_well_ids: list[str] = Field(
+        default_factory=list,
+        description="all_wells mode only: wells excluded (no resolvable tie, missing DT, no overlap, etc.)",
+    )
+    averages: SpectralPetroCorrelationAverages | None = Field(
+        None, description="all_wells mode only: mean correlation per property across contributing wells"
+    )
+
+
 # -----------------------------------------------------------------------------
 # Synthetic Seismogram module (/api/synthetic/*)
 # -----------------------------------------------------------------------------
