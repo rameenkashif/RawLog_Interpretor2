@@ -463,6 +463,16 @@ class SpectralTraceResponse(BaseModel):
     nyquist_hz: float
     typical_band_hz: list[float]
     energy: list[list[float]] = Field(..., description="Shape (n_time, n_freq)")
+    sswt_freq_hz: list[float] | None = Field(
+        None,
+        description="CWT + include_sswt=true only: Synchrosqueezed Wavelet Transform frequency axis (Hz), via ssqueezepy's ssq_cwt",
+    )
+    sswt_amplitude: list[list[float]] | None = Field(
+        None, description="Shape (n_time, n_sswt_freq) -- |Tx| from ssq_cwt, the sharpened/reassigned CWT"
+    )
+    sswt_compute_ms: float | None = Field(
+        None, description="Wall-clock time to compute the SSWT for this trace, ms -- see backend log for a side-by-side comparison against the plain CWT's own compute time"
+    )
 
 
 class SpectralSwtSliceResponse(BaseModel):

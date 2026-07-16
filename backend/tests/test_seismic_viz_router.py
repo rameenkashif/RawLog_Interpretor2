@@ -142,6 +142,36 @@ class TestSpectralDecompEndpoints:
         assert len(body["energy"]) == len(body["time_ms"])
         assert len(body["energy"][0]) == len(body["freq_hz"])
 
+    def test_trace_decomposition_cwt_with_sswt(self, wide_client):
+        pytest.importorskip("ssqueezepy")
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/trace",
+            params={"inline_number": 384, "crossline_number": 47, "method": "cwt", "include_sswt": True},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["sswt_amplitude"]) == len(body["time_ms"])
+        assert len(body["sswt_amplitude"][0]) == len(body["sswt_freq_hz"])
+        assert body["sswt_compute_ms"] > 0
+
+    def test_trace_decomposition_cwt_without_sswt_omits_fields(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/trace",
+            params={"inline_number": 384, "crossline_number": 47, "method": "cwt"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["sswt_freq_hz"] is None
+        assert body["sswt_amplitude"] is None
+
+    def test_trace_decomposition_stft_ignores_include_sswt(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-decomp/trace",
+            params={"inline_number": 384, "crossline_number": 47, "method": "stft", "include_sswt": True},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["sswt_freq_hz"] is None
+
     def test_bad_inline_is_422(self, wide_client):
         resp = wide_client.get("/api/seismic/spectral-decomp/inline/9999", params={"method": "stft"})
         assert resp.status_code == 422

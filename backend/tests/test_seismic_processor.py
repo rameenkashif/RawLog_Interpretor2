@@ -445,6 +445,92 @@ class TestSpectralDecomposition:
         assert wide_volume._spectral_cache[cache_key]["energy"] is cached_energy
 
 
+class TestSswtSpectralDecomposition:
+    """SSWT (Synchrosqueezed Wavelet Transform, via ssqueezepy's ssq_cwt) --
+    an opt-in, trace-level-only sharpening of the existing hand-rolled CWT
+    (see seismic_processor.py's _decompose_sswt for the compute-cost
+    rationale). Skipped entirely if ssqueezepy isn't installed, same as
+    every other optional-dependency test in this suite."""
+
+    ssqueezepy = pytest.importorskip("ssqueezepy")
+
+    @pytest.fixture
+    def wide_volume(self, tmp_path) -> sp.SegyVolume:
+        path = tmp_path / "wide_survey.sgy"
+        _write_synthetic_segy(path, n_samples=80, interval_ms=2)
+        return sp.SegyVolume(path)
+
+    def test_not_included_by_default(self, wide_volume):
+        result = wide_volume.get_spectral_decomposition_trace(384, 47, method="cwt")
+        assert "sswt_freq_hz" not in result
+        assert "sswt_amplitude" not in result
+        assert "sswt_compute_ms" not in result
+
+    def test_included_when_requested(self, wide_volume):
+        result = wide_volume.get_spectral_decomposition_trace(384, 47, method="cwt", include_sswt=True)
+        assert "sswt_freq_hz" in result
+        assert "sswt_amplitude" in result
+        assert result["sswt_compute_ms"] > 0
+
+    def test_amplitude_shape_matches_time_axis_like_existing_cwt(self, wide_volume):
+        # Confirms the (n_time, n_freq) shape convention SSWT shares with
+        # every other decomposition method -- the frontend assumption this
+        # feature depends on for reusing the existing heatmap component.
+        result = wide_volume.get_spectral_decomposition_trace(384, 47, method="cwt", include_sswt=True)
+        n_time = len(result["time_ms"])
+        assert len(result["energy"]) == n_time  # existing plain CWT
+        assert len(result["sswt_amplitude"]) == n_time  # SSWT, same time axis length
+        n_sswt_freq = len(result["sswt_freq_hz"])
+        assert all(len(row) == n_sswt_freq for row in result["sswt_amplitude"])
+
+    def test_frequency_axis_ascending_and_within_nyquist(self, wide_volume):
+        result = wide_volume.get_spectral_decomposition_trace(384, 47, method="cwt", include_sswt=True)
+        freqs = result["sswt_freq_hz"]
+        assert all(freqs[i] <= freqs[i + 1] for i in range(len(freqs) - 1))
+        assert max(freqs) <= result["nyquist_hz"] + 1e-6
+        assert min(freqs) >= 0.0
+
+    def test_amplitude_is_non_negative(self, wide_volume):
+        result = wide_volume.get_spectral_decomposition_trace(384, 47, method="cwt", include_sswt=True)
+        assert all(v >= 0.0 for row in result["sswt_amplitude"] for v in row)
+
+    def test_ignored_for_stft(self, wide_volume):
+        result = wide_volume.get_spectral_decomposition_trace(384, 47, method="stft", include_sswt=True)
+        assert "sswt_freq_hz" not in result
+
+    def test_ignored_for_swt(self, wide_volume):
+        result = wide_volume.get_spectral_decomposition_trace(384, 47, method="swt", include_sswt=True)
+        assert "sswt_freq_hz" not in result
+
+    def test_short_trace_raises(self, tmp_path):
+        # Base fixture default is N_SAMPLES=6, below SSWT_MIN_SAMPLES=8.
+        path = tmp_path / "short_survey.sgy"
+        _write_synthetic_segy(path)
+        volume = sp.SegyVolume(path)
+        with pytest.raises(sp.SegyVolumeError):
+            volume.get_spectral_decomposition_trace(384, 47, method="cwt", include_sswt=True)
+
+    def test_nan_trace_does_not_crash(self, wide_volume):
+        idx = wide_volume._inline_index[384]
+        wide_volume._traces[idx[0], 5] = np.nan
+        result = wide_volume.get_spectral_decomposition_trace(384, 47, method="cwt", include_sswt=True)
+        assert len(result["sswt_amplitude"]) > 0
+
+    def test_missing_dependency_raises_segy_volume_error(self, wide_volume, monkeypatch):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "ssqueezepy":
+                raise ImportError("simulated missing dependency")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        with pytest.raises(sp.SegyVolumeError, match="ssqueezepy is not installed"):
+            wide_volume.get_spectral_decomposition_trace(384, 47, method="cwt", include_sswt=True)
+
+
 class TestSwtSpectralDecomposition:
     """SWT (Stationary Wavelet Transform, via PyWavelets) -- a third
     spectral decomposition method alongside STFT/CWT, with a discrete

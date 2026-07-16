@@ -284,10 +284,18 @@ export async function getSpectralDecompositionTrace(
   inlineNumber: number,
   crosslineNumber: number,
   method: SpectralMethod,
+  includeSswt: boolean = false,
 ): Promise<SpectralTraceResponse> {
   const { data } = await http.get<SpectralTraceResponse>(
     "/api/seismic/spectral-decomp/trace",
-    { params: { inline_number: inlineNumber, crossline_number: crosslineNumber, method } },
+    {
+      params: {
+        inline_number: inlineNumber,
+        crossline_number: crosslineNumber,
+        method,
+        include_sswt: includeSswt,
+      },
+    },
   );
   return data;
 }

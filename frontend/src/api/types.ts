@@ -321,6 +321,9 @@ export interface SpectralTraceResponse {
   nyquist_hz: number;
   typical_band_hz: [number, number];
   energy: number[][]; // shape (n_time, n_freq)
+  sswt_freq_hz: number[] | null; // CWT + include_sswt=true only
+  sswt_amplitude: number[][] | null; // shape (n_time, n_sswt_freq)
+  sswt_compute_ms: number | null;
 }
 
 export interface SpectralSwtSliceResponse {

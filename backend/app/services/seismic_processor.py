@@ -35,7 +35,9 @@ segyio's f.samples to have picked it up correctly.
 
 from __future__ import annotations
 
+import logging
 import struct
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,6 +45,8 @@ import numpy as np
 import pywt
 import segyio
 from scipy.signal import fftconvolve, hilbert, stft
+
+logger = logging.getLogger("uvicorn.error")
 
 from app import segy_header_parser as shp
 from app import well_seismic_tie as wst
@@ -95,6 +99,23 @@ VALID_SWT_WAVELETS = ("sym8", "coif3")
 SWT_MIN_LEVEL = 1
 SWT_MAX_LEVEL = 6
 SWT_DEFAULT_LEVEL = 3
+
+# SSWT (Synchrosqueezed Wavelet Transform, via ssqueezepy's ssq_cwt): a
+# post-processing reassignment of the CWT's coefficients to their true
+# instantaneous frequency, sharpening the same time-frequency smearing the
+# hand-rolled Morlet CWT above shows -- useful for resolving closely-spaced
+# thin-bed frequency signatures that blur together in a plain CWT. Kept
+# strictly opt-in (include_sswt query flag, CWT only) and trace-level only
+# -- ssq_cwt operates on a single 1D signal and costs roughly an order of
+# magnitude more than the existing per-trace CWT even after numba's one-time
+# JIT warm-up (much worse on a cold process), so it is NOT wired into the
+# inline/full-volume decomposition path or the XGBoost feature pipeline;
+# see _decompose_sswt's benchmark log. ssqueezepy is imported lazily inside
+# _decompose_sswt (not at module load time) so a missing/broken install only
+# disables this one opt-in feature instead of the whole Spectral
+# Decomposition module -- easy to rip out entirely if the compute cost
+# proves impractical.
+SSWT_MIN_SAMPLES = 8
 
 # Typical usable seismic bandwidth, returned alongside the full frequency
 # axis so the frontend can highlight/default-zoom to this band rather than
@@ -596,6 +617,51 @@ class SegyVolume:
     def _decompose(self, traces: np.ndarray, method: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         return self._decompose_stft(traces) if method == "stft" else self._decompose_cwt(traces)
 
+    def _decompose_sswt(self, trace_1d: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+        """Synchrosqueezed Wavelet Transform of a SINGLE trace (1D array),
+        via ssqueezepy's ssq_cwt -- see the SSWT_MIN_SAMPLES comment above
+        for why this stays trace-level-only and opt-in rather than joining
+        _decompose/_decompose_cwt's batched, cached inline path.
+
+        Returns (freq_hz, amplitude, compute_seconds) where amplitude has
+        shape (n_time, n_freq): ssq_cwt itself returns Tx with shape
+        (n_freq, n_time) and frequencies DESCENDING from Nyquist, both
+        transposed/reversed here to match every other decomposition
+        method's (n_time, n_freq) ascending-frequency convention.
+        """
+        try:
+            from ssqueezepy import ssq_cwt
+        except ImportError as exc:
+            raise SegyVolumeError(
+                "ssqueezepy is not installed -- SSWT (include_sswt=true) is an optional, opt-in "
+                "dependency, separate from the rest of Spectral Decomposition. Run `pip install "
+                "-r requirements.txt` (or `pip install ssqueezepy`) to enable it."
+            ) from exc
+
+        n_samples = trace_1d.shape[-1]
+        if n_samples < SSWT_MIN_SAMPLES:
+            raise SegyVolumeError(
+                f"Trace too short ({n_samples} samples) for SSWT -- need >= {SSWT_MIN_SAMPLES}."
+            )
+
+        # ssq_cwt zeroes NaN/inf itself (with a printed warning) rather than
+        # raising, but do it explicitly first so behavior doesn't depend on
+        # that internal, undocumented fallback.
+        clean_trace = np.nan_to_num(trace_1d, nan=0.0, posinf=0.0, neginf=0.0)
+        fs = 1000.0 / self.sample_interval_ms
+
+        t0 = time.perf_counter()
+        Tx, _Wx, ssq_freqs, _scales = ssq_cwt(clean_trace, wavelet="morlet", fs=fs)
+        compute_s = time.perf_counter() - t0
+
+        amplitude = np.abs(Tx).T  # (n_freq, n_time) -> (n_time, n_freq)
+        freq_hz = np.asarray(ssq_freqs, dtype=float)
+        if freq_hz.size > 1 and freq_hz[0] > freq_hz[-1]:
+            freq_hz = freq_hz[::-1]
+            amplitude = amplitude[:, ::-1]
+
+        return freq_hz, amplitude, compute_s
+
     def get_spectral_decomposition_inline(
         self,
         inline_number: int,
@@ -701,12 +767,28 @@ class SegyVolume:
         }
 
     def get_spectral_decomposition_trace(
-        self, inline_number: int, crossline_number: int, method: str = "stft", wavelet: str = SWT_DEFAULT_WAVELET
+        self,
+        inline_number: int,
+        crossline_number: int,
+        method: str = "stft",
+        wavelet: str = SWT_DEFAULT_WAVELET,
+        include_sswt: bool = False,
     ) -> dict:
         """Time-frequency decomposition for a single trace, e.g. for a
         trace-inspection view or well-tie context. For method='swt', energy
         covers all SWT_MAX_LEVEL levels (there's no frequency slider to
-        page through here, so the full small set is returned directly)."""
+        page through here, so the full small set is returned directly).
+
+        include_sswt (CWT only, ignored otherwise): additionally compute
+        the Synchrosqueezed Wavelet Transform (see _decompose_sswt) and
+        return it as extra sswt_freq_hz/sswt_amplitude/sswt_compute_ms
+        fields ALONGSIDE the existing freq_hz/energy (the plain CWT) --
+        additive, not a replacement, so existing CWT-only callers are
+        unaffected. Logs a compute-time comparison against the plain CWT
+        call, since SSWT is meaningfully more expensive (see module-level
+        SSWT_MIN_SAMPLES comment) and that cost needs to be visible before
+        anyone considers it for a full-volume or model-feature path.
+        """
         method = _validate_spectral_method(method)
         idx = self._inline_index.get(int(inline_number))
         if idx is None:
@@ -739,10 +821,12 @@ class SegyVolume:
                 "energy": energy_2d.tolist(),
             }
 
+        cwt_t0 = time.perf_counter()
         freq_hz, time_ms, energy = self._decompose(trace, method)
+        cwt_elapsed_s = time.perf_counter() - cwt_t0
         energy_2d = energy[:, :, 0]  # (n_time, n_freq)
 
-        return {
+        result = {
             "inline_number": int(inline_number),
             "crossline_number": int(crossline_number),
             "method": method,
@@ -752,6 +836,23 @@ class SegyVolume:
             "typical_band_hz": list(TYPICAL_USEFUL_BAND_HZ),
             "energy": energy_2d.tolist(),
         }
+
+        if method == "cwt" and include_sswt:
+            sswt_freq_hz, sswt_amplitude, sswt_compute_s = self._decompose_sswt(trace[0])
+            logger.info(
+                "SSWT benchmark -- trace inline=%s crossline=%s (%d samples): existing CWT "
+                "(%d freq bins) took %.4fs, SSWT/ssq_cwt (%d freq bins) took %.4fs (%.1fx as long). "
+                "Note: ssq_cwt's first call in a fresh process is far slower than this due to "
+                "one-time numba JIT compilation.",
+                inline_number, crossline_number, trace.shape[-1],
+                len(freq_hz), cwt_elapsed_s, len(sswt_freq_hz), sswt_compute_s,
+                sswt_compute_s / max(cwt_elapsed_s, 1e-9),
+            )
+            result["sswt_freq_hz"] = sswt_freq_hz.tolist()
+            result["sswt_amplitude"] = sswt_amplitude.tolist()
+            result["sswt_compute_ms"] = sswt_compute_s * 1000.0
+
+        return result
 
     def get_grid_geometry(self) -> dict:
         """Public accessor for the internal dense (inline, crossline) ->

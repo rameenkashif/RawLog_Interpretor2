@@ -250,11 +250,20 @@ async def spectral_decomp_trace(
     wavelet: str = Query(
         sp.SWT_DEFAULT_WAVELET, description="SWT only. 'sym8' (Symlet-8, default) or 'coif3' (Coiflet-3)."
     ),
+    include_sswt: bool = Query(
+        False,
+        description=(
+            "CWT only, ignored for 'stft'/'swt'. If true, also compute and return the "
+            "Synchrosqueezed Wavelet Transform (SSWT) of this trace via ssqueezepy -- sharpens the "
+            "plain CWT's time-frequency smearing, but costs roughly an order of magnitude more "
+            "(see backend log); opt-in, additive to the existing CWT fields, not a replacement."
+        ),
+    ),
 ) -> SpectralTraceResponse | SpectralSwtTraceResponse:
     try:
         volume = sp.get_segy_volume()
         result = volume.get_spectral_decomposition_trace(
-            inline_number, crossline_number, method=method, wavelet=wavelet
+            inline_number, crossline_number, method=method, wavelet=wavelet, include_sswt=include_sswt
         )
         if method.lower() == "swt":
             return SpectralSwtTraceResponse(**result)

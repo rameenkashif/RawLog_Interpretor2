@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import { AxiosError } from "axios";
-import { getSpectralFrequencySlice, getSpectralSwtSlice } from "@/api/client";
+import { getSpectralDecompositionTrace, getSpectralFrequencySlice, getSpectralSwtSlice } from "@/api/client";
 import type {
   SpectralFrequencySliceResponse,
   SpectralMethod,
@@ -12,6 +12,7 @@ import type {
   SwtWavelet,
 } from "@/api/types";
 import { colors } from "@/styles/tokens";
+import TraceScalogramView from "./TraceScalogramView";
 
 const AXIS_STYLE = {
   gridcolor: colors.gridLine,
@@ -235,6 +236,8 @@ export default function SpectralDecompView({ surveyInfo }: { surveyInfo: SurveyI
           />
         </div>
       )}
+
+      {method === "cwt" && <TraceScalogramView surveyInfo={surveyInfo} />}
     </div>
   );
 }
@@ -247,10 +250,20 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
 }
 
-function buildFigure(
-  crosslineAxis: number[],
+/**
+ * Shared heatmap builder for every (n_time, n_x) energy/amplitude map in
+ * this view: the inline-section slices (x=crossline) above, and the
+ * single-trace scalogram (x=frequency) below -- same data shape
+ * convention (z is time-major, matching Plotly's z[row]=y-axis
+ * requirement when y=timeMs), just a different x-axis and its label.
+ * Exported so other trace-level views (e.g. a future well-tie scalogram)
+ * can reuse it instead of duplicating the heatmap styling.
+ */
+export function buildFigure(
+  xAxis: number[],
   timeMs: number[],
-  energy: number[][], // (n_time, n_traces)
+  energy: number[][], // (n_time, n_x)
+  xAxisLabel: string = "Crossline",
 ): { data: Data[]; layout: Partial<Layout> } {
   let maxVal = 1e-6;
   for (const row of energy) {
@@ -261,7 +274,7 @@ function buildFigure(
 
   const trace = {
     type: "heatmap",
-    x: crosslineAxis,
+    x: xAxis,
     y: timeMs,
     z: energy,
     zmin: 0,
@@ -275,7 +288,7 @@ function buildFigure(
     plot_bgcolor: colors.surface,
     font: { color: colors.ink, family: "Inter, system-ui, sans-serif" },
     margin: { t: 20, r: 20, b: 40, l: 60 },
-    xaxis: { title: { text: "Crossline" }, ...AXIS_STYLE },
+    xaxis: { title: { text: xAxisLabel }, ...AXIS_STYLE },
     yaxis: { title: { text: "Two-Way Time (ms)" }, autorange: "reversed", ...AXIS_STYLE },
   };
 
