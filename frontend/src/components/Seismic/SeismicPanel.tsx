@@ -18,7 +18,7 @@ const TABS = [
   { id: "coordcal", label: "Coordinate Calibration" },
   { id: "spectrum", label: "Amplitude Spectrum" },
   { id: "spectral", label: "Spectral Decomposition" },
-  { id: "petrocorr", label: "CWT vs SWT Correlation" },
+  { id: "petrocorr", label: "Spectral Petro Correlation" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];

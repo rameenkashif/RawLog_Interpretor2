@@ -564,6 +564,58 @@ class SpectralPetroCorrelationResponse(BaseModel):
     )
 
 
+class SswtCorrelationPair(BaseModel):
+    """One property's correlation against CWT and SSWT, both sampled at
+    the same matched frequency, over one well's tie interval."""
+
+    cwt_r: float | None = Field(None, description="Pearson r between CWT amplitude and this property")
+    cwt_n: int = Field(..., description="Sample count used for the CWT correlation")
+    sswt_r: float | None = Field(None, description="Pearson r between SSWT amplitude and this property")
+    sswt_n: int = Field(..., description="Sample count used for the SSWT correlation")
+
+
+class SswtPetroCorrelationWellResult(BaseModel):
+    well_id: str
+    nearest_inline: int
+    nearest_crossline: int
+    distance_m: float | None = None
+    tie_method: str = Field(..., description="'calibrated_fit', 'manual_override', or 'direct_unvalidated'")
+    vsh: SswtCorrelationPair
+    phie: SswtCorrelationPair
+    swe: SswtCorrelationPair
+    low_sample_warning: bool = Field(
+        ..., description="True if any correlation pair's sample count is below the reliability threshold (20)"
+    )
+
+
+class SswtCorrelationAverage(BaseModel):
+    cwt_r: float | None = None
+    sswt_r: float | None = None
+    n_wells: int = Field(..., description="Number of wells contributing a non-null correlation to this average")
+
+
+class SswtPetroCorrelationAverages(BaseModel):
+    vsh: SswtCorrelationAverage
+    phie: SswtCorrelationAverage
+    swe: SswtCorrelationAverage
+
+
+class SswtPetroCorrelationResponse(BaseModel):
+    mode: str = Field(..., description="'single' or 'all_wells'")
+    requested_frequency_hz: float
+    cwt_frequency_hz: float = Field(..., description="Nearest available CWT frequency bin to requested_frequency_hz")
+    sswt_frequency_hz: float = Field(..., description="Nearest available SSWT frequency bin to requested_frequency_hz")
+    nyquist_hz: float
+    wells: list[SswtPetroCorrelationWellResult]
+    skipped_well_ids: list[str] = Field(
+        default_factory=list,
+        description="all_wells mode only: wells excluded (no resolvable tie, missing DT, no overlap, etc.)",
+    )
+    averages: SswtPetroCorrelationAverages | None = Field(
+        None, description="all_wells mode only: mean correlation per property across contributing wells"
+    )
+
+
 # -----------------------------------------------------------------------------
 # Synthetic Seismogram module (/api/synthetic/*)
 # -----------------------------------------------------------------------------

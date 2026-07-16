@@ -251,3 +251,115 @@ class TestPearsonHelper:
         y = np.array([1.0, 2.0, 3.0, np.nan])
         r, n = spc._pearson(x, y)
         assert n == 2
+
+
+class TestSingleWellSswtCorrelation:
+    ssqueezepy = pytest.importorskip("ssqueezepy")
+
+    def test_basic_shape(self, aligned_well):
+        result = spc.get_sswt_correlation(well_id=aligned_well.well_id, all_wells=False)
+        assert result["mode"] == "single"
+        assert len(result["wells"]) == 1
+        well = result["wells"][0]
+        assert well["well_id"] == aligned_well.well_id
+        assert well["nearest_inline"] in INLINES
+        assert well["nearest_crossline"] in CROSSLINES
+        assert result["skipped_well_ids"] == []
+        assert result["averages"] is None
+
+        for curve in ("vsh", "phie", "swe"):
+            pair = well[curve]
+            assert pair["cwt_n"] >= 0
+            assert pair["sswt_n"] >= 0
+            if pair["cwt_r"] is not None:
+                assert -1.0 - 1e-9 <= pair["cwt_r"] <= 1.0 + 1e-9
+            if pair["sswt_r"] is not None:
+                assert -1.0 - 1e-9 <= pair["sswt_r"] <= 1.0 + 1e-9
+
+    def test_default_frequency(self, aligned_well):
+        result = spc.get_sswt_correlation(well_id=aligned_well.well_id, all_wells=False)
+        assert result["requested_frequency_hz"] == pytest.approx(spc.DEFAULT_SSWT_COMPARISON_FREQUENCY_HZ)
+
+    def test_cwt_and_sswt_snap_independently_to_requested_frequency(self, aligned_well):
+        # volume fixture: n_samples=80, interval_ms=2 -> Nyquist = 250 Hz.
+        # CWT's grid is fixed 5 Hz steps (5, 10, ..., 100) -- 47 Hz snaps
+        # exactly to 45; SSWT's grid is much finer, so it should land
+        # closer to the requested value than CWT's coarser grid does.
+        result = spc.get_sswt_correlation(well_id=aligned_well.well_id, all_wells=False, frequency_hz=47.0)
+        assert result["cwt_frequency_hz"] == pytest.approx(45.0)
+        assert abs(result["sswt_frequency_hz"] - 47.0) < abs(result["cwt_frequency_hz"] - 47.0)
+
+    def test_out_of_range_frequency_raises(self, aligned_well):
+        with pytest.raises(sp.SegyVolumeError):
+            spc.get_sswt_correlation(well_id=aligned_well.well_id, all_wells=False, frequency_hz=9999.0)
+
+    def test_negative_frequency_raises(self, aligned_well):
+        with pytest.raises(sp.SegyVolumeError):
+            spc.get_sswt_correlation(well_id=aligned_well.well_id, all_wells=False, frequency_hz=-5.0)
+
+    def test_missing_well_id_without_all_wells_raises(self):
+        with pytest.raises(sp.SegyVolumeError):
+            spc.get_sswt_correlation(well_id=None, all_wells=False)
+
+    def test_unknown_well_raises(self):
+        with pytest.raises(well_service.WellNotFoundError):
+            spc.get_sswt_correlation(well_id="DOES_NOT_EXIST", all_wells=False)
+
+    def test_missing_dt_raises_missing_curve(self, aligned_well, well_repo):
+        metadata, df = well_repo.get_well(aligned_well.well_id)
+        df["DT"] = np.nan
+        well_repo.save_well(metadata, df)
+        with pytest.raises(sp.MissingCurveError) as exc_info:
+            spc.get_sswt_correlation(well_id=aligned_well.well_id, all_wells=False)
+        assert exc_info.value.curve == "DT"
+
+    def test_crs_mismatch_raises(self, well_repo):
+        las_bytes = Z02_PATH.read_bytes()
+        result = well_service.process_and_store_las_bytes(las_bytes, "Z-02_raw.las", repo=well_repo)
+        with pytest.raises(sp.CrsMismatchError):
+            spc.get_sswt_correlation(well_id=result.well_id, all_wells=False)
+
+
+class TestAllWellsSswtCorrelation:
+    ssqueezepy = pytest.importorskip("ssqueezepy")
+
+    def test_single_aligned_well_averages_equal_its_own_values(self, aligned_well):
+        result = spc.get_sswt_correlation(well_id=None, all_wells=True)
+        assert result["mode"] == "all_wells"
+        assert len(result["wells"]) == 1
+        assert result["skipped_well_ids"] == []
+        assert result["averages"] is not None
+
+        well = result["wells"][0]
+        for curve in ("vsh", "phie", "swe"):
+            avg = result["averages"][curve]
+            if well[curve]["cwt_r"] is not None:
+                assert avg["cwt_r"] == pytest.approx(well[curve]["cwt_r"])
+                assert avg["n_wells"] >= 1
+            else:
+                assert avg["cwt_r"] is None
+
+    def test_two_aligned_wells_both_present(self, aligned_well, aligned_well_2):
+        result = spc.get_sswt_correlation(well_id=None, all_wells=True)
+        well_ids = {w["well_id"] for w in result["wells"]}
+        assert well_ids == {aligned_well.well_id, aligned_well_2.well_id}
+        assert result["skipped_well_ids"] == []
+
+    def test_well_without_dt_log_is_skipped_not_raised(self, aligned_well, aligned_well_2, well_repo):
+        metadata, df = well_repo.get_well(aligned_well_2.well_id)
+        df["DT"] = np.nan
+        well_repo.save_well(metadata, df)
+
+        result = spc.get_sswt_correlation(well_id=None, all_wells=True)
+        well_ids = {w["well_id"] for w in result["wells"]}
+        assert aligned_well_2.well_id in result["skipped_well_ids"]
+        assert aligned_well_2.well_id not in well_ids
+        assert aligned_well.well_id in well_ids
+
+    def test_no_wells_resolve_gives_empty_results_and_no_averages(self, well_repo):
+        las_bytes = Z02_PATH.read_bytes()
+        well_service.process_and_store_las_bytes(las_bytes, "Z-02_raw.las", repo=well_repo)
+        result = spc.get_sswt_correlation(well_id=None, all_wells=True)
+        assert result["wells"] == []
+        assert result["averages"] is None
+        assert len(result["skipped_well_ids"]) == 1

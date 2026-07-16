@@ -392,6 +392,48 @@ export interface SpectralPetroCorrelationResponse {
   averages: SpectralPetroCorrelationAverages | null;
 }
 
+export interface SswtCorrelationPair {
+  cwt_r: number | null;
+  cwt_n: number;
+  sswt_r: number | null;
+  sswt_n: number;
+}
+
+export interface SswtPetroCorrelationWellResult {
+  well_id: string;
+  nearest_inline: number;
+  nearest_crossline: number;
+  distance_m: number | null;
+  tie_method: string;
+  vsh: SswtCorrelationPair;
+  phie: SswtCorrelationPair;
+  swe: SswtCorrelationPair;
+  low_sample_warning: boolean;
+}
+
+export interface SswtCorrelationAverage {
+  cwt_r: number | null;
+  sswt_r: number | null;
+  n_wells: number;
+}
+
+export interface SswtPetroCorrelationAverages {
+  vsh: SswtCorrelationAverage;
+  phie: SswtCorrelationAverage;
+  swe: SswtCorrelationAverage;
+}
+
+export interface SswtPetroCorrelationResponse {
+  mode: "single" | "all_wells";
+  requested_frequency_hz: number;
+  cwt_frequency_hz: number;
+  sswt_frequency_hz: number;
+  nyquist_hz: number;
+  wells: SswtPetroCorrelationWellResult[];
+  skipped_well_ids: string[];
+  averages: SswtPetroCorrelationAverages | null;
+}
+
 export const CURVE_NAMES = [
   "DEPT",
   "GR",

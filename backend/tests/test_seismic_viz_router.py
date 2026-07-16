@@ -285,6 +285,44 @@ class TestSpectralPetroCorrelationEndpoint:
         assert isinstance(body["wells"], list)
 
 
+class TestSswtPetroCorrelationEndpoint:
+    """HTTP-level validation tests only -- same convention as
+    TestSpectralPetroCorrelationEndpoint above. Every call here needs
+    ssqueezepy (even the unhappy paths -- the CWT/SSWT frequency match is
+    resolved before well validation), so the whole class is skipped if
+    it's not installed."""
+
+    ssqueezepy = pytest.importorskip("ssqueezepy")
+
+    def test_missing_well_id_without_all_wells_is_422(self, wide_client):
+        resp = wide_client.get("/api/seismic/spectral-petro-correlation-sswt")
+        assert resp.status_code == 422
+
+    def test_unknown_well_is_404(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-petro-correlation-sswt", params={"well_id": "DOES_NOT_EXIST"}
+        )
+        assert resp.status_code == 404
+
+    def test_out_of_range_frequency_is_422(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-petro-correlation-sswt",
+            params={"well_id": "DOES_NOT_EXIST", "frequency_hz": 9999.0},
+        )
+        assert resp.status_code == 422
+
+    def test_all_wells_true_does_not_require_well_id(self, wide_client):
+        resp = wide_client.get(
+            "/api/seismic/spectral-petro-correlation-sswt", params={"all_wells": True}
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["mode"] == "all_wells"
+        assert isinstance(body["wells"], list)
+        assert body["cwt_frequency_hz"] is not None
+        assert body["sswt_frequency_hz"] is not None
+
+
 class TestWellTieEndpoint:
     def test_unknown_well_is_404(self, client):
         resp = client.get("/api/seismic/well-tie/DOES_NOT_EXIST")

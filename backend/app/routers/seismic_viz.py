@@ -30,6 +30,7 @@ from app.models.schemas import (
     SpectralSwtSliceResponse,
     SpectralSwtTraceResponse,
     SpectralTraceResponse,
+    SswtPetroCorrelationResponse,
     SurveyInfoResponse,
     TimeSliceResponse,
     WellCalibrationReportItem,
@@ -296,5 +297,33 @@ async def spectral_petro_correlation(
     try:
         result = spc.get_correlation(well_id=well_id, all_wells=all_wells, swt_level=swt_level, wavelet=wavelet)
         return SpectralPetroCorrelationResponse(**result)
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/spectral-petro-correlation-sswt", response_model=SswtPetroCorrelationResponse)
+async def spectral_petro_correlation_sswt(
+    well_id: str | None = Query(None, description="Required unless all_wells=true."),
+    all_wells: bool = Query(
+        False,
+        description="Loop over every well with a resolvable tie and DT/petrophysical logs, plus an averaged summary. well_id is ignored if true.",
+    ),
+    frequency_hz: float = Query(
+        spc.DEFAULT_SSWT_COMPARISON_FREQUENCY_HZ,
+        description="Comparison frequency, Hz -- CWT and SSWT are each independently snapped to their own nearest available frequency bin to this value.",
+    ),
+) -> SswtPetroCorrelationResponse:
+    """"CWT vs SSWT -- Petrophysical Correlation": unlike CWT-vs-SWT (which
+    matches CWT to a fixed SWT octave band), both CWT and SSWT have a
+    continuous frequency axis, so both are snapped to their own nearest
+    bin to the SAME requested frequency and Pearson-correlated against
+    VSH/PHIE/SWE over a well's tie interval -- see
+    spectral_petro_correlation_service.get_sswt_correlation. SSWT costs
+    roughly an order of magnitude more than the plain CWT per trace (see
+    seismic_processor._decompose_sswt), so this stays a per-well/per-trace
+    comparison, same as the CWT-vs-SWT endpoint above."""
+    try:
+        result = spc.get_sswt_correlation(well_id=well_id, all_wells=all_wells, frequency_hz=frequency_hz)
+        return SswtPetroCorrelationResponse(**result)
     except Exception as exc:  # noqa: BLE001
         _handle(exc)
