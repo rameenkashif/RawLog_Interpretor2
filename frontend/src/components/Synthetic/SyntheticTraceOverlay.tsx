@@ -52,6 +52,9 @@ export default function SyntheticTraceOverlay({ result }: { result: SyntheticSei
           <span className={result.correlation > 0.5 ? "text-green-600" : "text-orange-600"}>
             Correlation: {result.correlation.toFixed(3)}
           </span>
+          {result.polarity === -1 && (
+            <span className="text-orange-600">Polarity: reversed</span>
+          )}
         </div>
 
         <div className="flex gap-1.5">
@@ -70,6 +73,12 @@ export default function SyntheticTraceOverlay({ result }: { result: SyntheticSei
           ))}
         </div>
       </div>
+
+      {result.tie_search_note && (
+        <div className="border border-accent/30 bg-accent-soft/40 text-accent-strong text-xs rounded-xl px-4 py-2.5 leading-relaxed">
+          {result.tie_search_note}
+        </div>
+      )}
 
       <div className="bg-surface border border-border rounded-xl p-4 shadow-card">
         <ResponsiveContainer width="100%" height={380}>

@@ -129,6 +129,51 @@ class TestGenerate:
         assert result["max_shift_ms"] == 50.0
         assert abs(result["best_shift_ms"]) <= 50.0 + 1e-6
 
+    def test_auto_optimize_tie_default_off(self, aligned_well):
+        result = sss.generate(aligned_well.well_id, wavelet_method="ricker", wavelet_freq_hz=25.0)
+        assert result["auto_optimize_tie"] is False
+        assert result["polarity"] == 1
+        assert result["tie_search_note"] is None
+        assert result["wavelet_freq_hz"] == 25.0  # unchanged -- no search happened
+
+    def test_auto_optimize_tie_ricker_can_override_requested_frequency(self, aligned_well):
+        result = sss.generate(
+            aligned_well.well_id, wavelet_method="ricker", wavelet_freq_hz=25.0, auto_optimize_tie=True
+        )
+        assert result["auto_optimize_tie"] is True
+        assert result["wavelet_freq_hz"] in wst.DEFAULT_CANDIDATE_FREQS_HZ
+        assert result["polarity"] in (1, -1)
+        assert result["tie_search_note"] is not None
+        assert "Auto-optimized" in result["tie_search_note"]
+        # A search can never do worse than not searching -- it always
+        # includes the originally-requested frequency/normal-polarity as
+        # one of its own candidates.
+        baseline = sss.generate(aligned_well.well_id, wavelet_method="ricker", wavelet_freq_hz=25.0)
+        assert result["correlation"] >= baseline["correlation"] - 1e-9
+
+    def test_auto_optimize_tie_statistical_searches_polarity_only(self, aligned_well):
+        result = sss.generate(
+            aligned_well.well_id, wavelet_method="statistical", auto_optimize_tie=True
+        )
+        assert result["auto_optimize_tie"] is True
+        assert result["wavelet_method"] == "statistical"
+        assert result["polarity"] in (1, -1)
+        assert "statistical wavelet" in result["tie_search_note"]
+
+    def test_auto_optimize_tie_wavelet_amplitude_matches_reported_polarity(self, aligned_well):
+        result = sss.generate(
+            aligned_well.well_id, wavelet_method="ricker", wavelet_freq_hz=25.0, auto_optimize_tie=True
+        )
+        # If polarity ended up reversed, the returned wavelet_amplitude
+        # peak should be negative (a normal Ricker's peak is positive) --
+        # confirms the response's wavelet matches what was actually used
+        # to build the returned synthetic, not the pre-search one.
+        amp = np.array(result["wavelet_amplitude"])
+        if result["polarity"] == -1:
+            assert amp[np.argmax(np.abs(amp))] < 0
+        else:
+            assert amp[np.argmax(np.abs(amp))] > 0
+
     def test_statistical_wavelet(self, aligned_well):
         result = sss.generate(aligned_well.well_id, wavelet_method="statistical", density_method="rhob")
         assert result["wavelet_method"] == "statistical"

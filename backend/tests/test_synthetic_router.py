@@ -83,6 +83,24 @@ class TestGenerateEndpoint:
         assert body["density_method"] == "gardner"
         assert body["gardner_coefficients"] is not None
 
+    def test_auto_optimize_tie_ok(self, client):
+        resp = client.get(
+            "/api/synthetic/Z-02_RAW/generate",
+            params={"wavelet_method": "ricker", "wavelet_freq_hz": 25, "auto_optimize_tie": True},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["auto_optimize_tie"] is True
+        assert body["polarity"] in (1, -1)
+        assert body["tie_search_note"] is not None
+
+    def test_auto_optimize_tie_default_off(self, client):
+        resp = client.get("/api/synthetic/Z-02_RAW/generate")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["auto_optimize_tie"] is False
+        assert body["tie_search_note"] is None
+
     def test_unknown_well_is_404(self, client):
         resp = client.get("/api/synthetic/DOES_NOT_EXIST/generate")
         assert resp.status_code == 404

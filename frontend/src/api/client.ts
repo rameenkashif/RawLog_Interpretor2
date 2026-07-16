@@ -355,7 +355,13 @@ export async function getSswtPetroCorrelation(
 // -----------------------------------------------------------------------------
 export async function generateSyntheticSeismogram(
   wellId: string,
-  opts: { waveletMethod?: WaveletMethod; waveletFreqHz?: number; densityMethod?: DensityMethod; applySavedTie?: boolean } = {},
+  opts: {
+    waveletMethod?: WaveletMethod;
+    waveletFreqHz?: number;
+    densityMethod?: DensityMethod;
+    applySavedTie?: boolean;
+    autoOptimizeTie?: boolean;
+  } = {},
 ): Promise<SyntheticSeismogramResponse> {
   const { data } = await http.get<SyntheticSeismogramResponse>(
     `/api/synthetic/${wellId}/generate`,
@@ -365,6 +371,7 @@ export async function generateSyntheticSeismogram(
         wavelet_freq_hz: opts.waveletFreqHz,
         density_method: opts.densityMethod,
         apply_saved_tie: opts.applySavedTie,
+        auto_optimize_tie: opts.autoOptimizeTie,
       },
     },
   );
@@ -396,12 +403,18 @@ export async function deleteSyntheticTiePoints(wellId: string): Promise<{ well_i
 
 export function getSyntheticExportUrl(
   wellId: string,
-  opts: { waveletMethod?: WaveletMethod; waveletFreqHz?: number; densityMethod?: DensityMethod } = {},
+  opts: {
+    waveletMethod?: WaveletMethod;
+    waveletFreqHz?: number;
+    densityMethod?: DensityMethod;
+    autoOptimizeTie?: boolean;
+  } = {},
 ): string {
   const params = new URLSearchParams();
   if (opts.waveletMethod) params.set("wavelet_method", opts.waveletMethod);
   if (opts.waveletFreqHz) params.set("wavelet_freq_hz", String(opts.waveletFreqHz));
   if (opts.densityMethod) params.set("density_method", opts.densityMethod);
+  if (opts.autoOptimizeTie) params.set("auto_optimize_tie", String(opts.autoOptimizeTie));
   return `${BASE_URL}/api/synthetic/${wellId}/export?${params.toString()}`;
 }
 

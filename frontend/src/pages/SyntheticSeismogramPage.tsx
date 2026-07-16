@@ -35,8 +35,9 @@ export default function SyntheticSeismogramPage() {
   const [waveletMethod, setWaveletMethod] = useState<WaveletMethod>("statistical");
   const [waveletFreqHz, setWaveletFreqHz] = useState(25);
   const [densityMethod, setDensityMethod] = useState<DensityMethod>("rhob");
+  const [autoOptimizeTie, setAutoOptimizeTie] = useState(false);
 
-  const queryKey = ["synthetic-generate", wellId, waveletMethod, waveletFreqHz, densityMethod];
+  const queryKey = ["synthetic-generate", wellId, waveletMethod, waveletFreqHz, densityMethod, autoOptimizeTie];
   const genQuery = useQuery({
     queryKey,
     queryFn: () =>
@@ -44,6 +45,7 @@ export default function SyntheticSeismogramPage() {
         waveletMethod,
         waveletFreqHz,
         densityMethod,
+        autoOptimizeTie,
       }),
     enabled: Boolean(wellId),
     retry: false,
@@ -108,10 +110,24 @@ export default function SyntheticSeismogramPage() {
               max={200}
               value={waveletFreqHz}
               onChange={(e) => setWaveletFreqHz(Number(e.target.value) || 25)}
-              className="w-16 text-xs border border-border-strong rounded-lg px-2 py-1"
+              disabled={autoOptimizeTie}
+              title={autoOptimizeTie ? "Ignored -- auto-optimize searches frequency instead" : undefined}
+              className="w-16 text-xs border border-border-strong rounded-lg px-2 py-1 disabled:opacity-50"
             />
           </label>
         )}
+
+        <button
+          onClick={() => setAutoOptimizeTie((v) => !v)}
+          title="Search wavelet frequency (ricker) and polarity, not just shift position, keeping whichever combination maximizes correlation -- more expensive, off by default"
+          className={`text-xs font-semibold px-3.5 py-1.5 rounded-full border transition-all ${
+            autoOptimizeTie
+              ? "bg-brand-gradient text-white border-transparent shadow-card"
+              : "bg-surface text-ink-muted border-border-strong hover:border-accent hover:text-accent"
+          }`}
+        >
+          Auto-optimize tie
+        </button>
 
         <div className="flex gap-1.5">
           {(["rhob", "gardner", "rock_physics"] as const).map((m) => (
@@ -131,7 +147,7 @@ export default function SyntheticSeismogramPage() {
 
         {wellId && (
           <a
-            href={getSyntheticExportUrl(wellId, { waveletMethod, waveletFreqHz, densityMethod })}
+            href={getSyntheticExportUrl(wellId, { waveletMethod, waveletFreqHz, densityMethod, autoOptimizeTie })}
             className="ml-auto text-xs font-semibold px-3.5 py-1.5 rounded-full border border-accent/30 bg-accent-soft text-accent-strong hover:bg-accent hover:text-white transition-colors"
           >
             Export CSV

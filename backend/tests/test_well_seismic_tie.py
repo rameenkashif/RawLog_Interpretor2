@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from app.well_seismic_tie import (
+    DEFAULT_CANDIDATE_FREQS_HZ,
     TieError,
     acoustic_impedance,
     apply_stretch_squeeze,
@@ -17,6 +18,7 @@ from app.well_seismic_tie import (
     reflectivity_series,
     ricker_wavelet,
     rock_physics_density,
+    search_best_tie,
     washout_qc_flag,
     wavelet_spectra,
 )
@@ -196,6 +198,126 @@ def test_build_synthetic_explicit_t0_ms_overrides_default():
         seismic_twt_axis_ms=twt_axis, dt_unit="us_per_ft", t0_ms=500.0,
     )
     assert result.reflectivity_twt_ms[0] == pytest.approx(500.0, abs=1.0)
+
+
+class TestSearchBestTie:
+    """search_best_tie jointly searches wavelet frequency (Ricker) and
+    polarity, not just shift position -- see well_seismic_tie.py's
+    docstring for why position search alone can't recover a tie that's
+    wrong because the assumed frequency/polarity was wrong."""
+
+    def _embed_known_wavelet(self, freq_hz: float, polarity: int, noise_std: float = 0.01, seed: int = 0):
+        """Builds a reflectivity series + a "real" trace that's exactly
+        that reflectivity convolved with a KNOWN (freq_hz, polarity)
+        Ricker wavelet plus a little noise -- so search_best_tie has a
+        ground-truth answer to recover."""
+        rng = np.random.default_rng(seed)
+        dt_ms = 2.0
+        n_samples = 300
+        seismic_twt_ms = np.arange(n_samples) * dt_ms + 2000.0
+
+        refl_reg = np.zeros(150)
+        refl_reg[[20, 50, 90, 120]] = [0.1, -0.15, 0.08, -0.05]
+        reg_twt_ms = np.arange(150) * dt_ms + 2050.0
+
+        _, true_wavelet = ricker_wavelet(freq_hz, dt_ms / 1000.0)
+        true_wavelet = polarity * true_wavelet
+        conv = np.convolve(refl_reg, true_wavelet, mode="full")
+        start = (len(conv) - len(refl_reg)) // 2
+        synthetic_reg = conv[start : start + len(refl_reg)]
+        real_trace = np.interp(seismic_twt_ms, reg_twt_ms, synthetic_reg, left=0.0, right=0.0)
+        real_trace = real_trace + rng.normal(0, noise_std, n_samples)
+
+        return refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace
+
+    def test_recovers_known_frequency_and_polarity(self):
+        refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace = self._embed_known_wavelet(
+            freq_hz=35.0, polarity=-1
+        )
+        result = search_best_tie(refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace)
+        assert result.wavelet_freq_hz == 35.0
+        assert result.polarity == -1
+        assert result.correlation > 0.9
+
+    def test_normal_polarity_recovered_too(self):
+        refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace = self._embed_known_wavelet(
+            freq_hz=20.0, polarity=1
+        )
+        result = search_best_tie(refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace)
+        assert result.wavelet_freq_hz == 20.0
+        assert result.polarity == 1
+        assert result.correlation > 0.9
+
+    def test_beats_a_wrong_fixed_frequency_and_polarity(self):
+        refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace = self._embed_known_wavelet(
+            freq_hz=35.0, polarity=-1
+        )
+        # A single fixed (wrong) candidate, via the plain position-only search.
+        _, wrong_wavelet = ricker_wavelet(15.0, dt_ms / 1000.0)  # wrong freq, wrong (normal) polarity
+        conv = np.convolve(refl_reg, wrong_wavelet, mode="full")
+        start = (len(conv) - len(refl_reg)) // 2
+        synthetic_reg = conv[start : start + len(refl_reg)]
+        synthetic_on_axis = np.interp(seismic_twt_ms, reg_twt_ms, synthetic_reg, left=0.0, right=0.0)
+        wrong_tie = cross_correlate_and_shift(synthetic_on_axis, real_trace, dt_ms)
+
+        result = search_best_tie(refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace)
+        assert result.correlation > wrong_tie["correlation"]
+
+    def test_n_candidates_tried_matches_freqs_times_polarities(self):
+        refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace = self._embed_known_wavelet(
+            freq_hz=25.0, polarity=1
+        )
+        result = search_best_tie(refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace)
+        assert result.n_candidates_tried == len(DEFAULT_CANDIDATE_FREQS_HZ) * 2
+
+    def test_search_polarity_false_only_tries_normal_polarity(self):
+        refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace = self._embed_known_wavelet(
+            freq_hz=25.0, polarity=1
+        )
+        result = search_best_tie(
+            refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace, search_polarity=False
+        )
+        assert result.n_candidates_tried == len(DEFAULT_CANDIDATE_FREQS_HZ)
+        assert result.polarity == 1
+
+    def test_fixed_wavelet_mode_searches_polarity_only(self):
+        refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace = self._embed_known_wavelet(
+            freq_hz=30.0, polarity=-1
+        )
+        _, fixed_wavelet = ricker_wavelet(30.0, dt_ms / 1000.0)
+        result = search_best_tie(
+            refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace,
+            candidate_freqs_hz=None, fixed_wavelet=fixed_wavelet,
+        )
+        assert result.wavelet_freq_hz is None
+        assert result.polarity == -1
+        assert result.n_candidates_tried == 2
+        assert result.correlation > 0.9
+
+    def test_no_candidates_and_no_fixed_wavelet_raises(self):
+        refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace = self._embed_known_wavelet(
+            freq_hz=25.0, polarity=1
+        )
+        with pytest.raises(TieError):
+            search_best_tie(refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace, candidate_freqs_hz=None)
+
+    def test_respects_max_shift_ms(self):
+        refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace = self._embed_known_wavelet(
+            freq_hz=25.0, polarity=1
+        )
+        result = search_best_tie(
+            refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace, max_shift_ms=10.0
+        )
+        assert abs(result.best_shift_ms) <= 10.0 + 1e-9
+        assert result.max_shift_ms == 10.0
+
+    def test_shifted_synthetic_same_length_as_real_trace(self):
+        refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace = self._embed_known_wavelet(
+            freq_hz=25.0, polarity=1
+        )
+        result = search_best_tie(refl_reg, reg_twt_ms, seismic_twt_ms, dt_ms, real_trace)
+        assert len(result.shifted_synthetic) == len(real_trace)
+        assert len(result.synthetic) == len(real_trace)
 
 
 class TestFindNearestTraceIndex:

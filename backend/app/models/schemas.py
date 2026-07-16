@@ -695,6 +695,13 @@ class SyntheticSeismogramResponse(BaseModel):
     boundary_pinned: bool = Field(
         ..., description="True if best_shift_ms landed within ~5% of max_shift_ms -- diagnostic of a spurious match, not a genuine tie"
     )
+    polarity: int = Field(1, description="+1 (normal) or -1 (reversed) -- always 1 unless auto_optimize_tie found -1 better")
+    auto_optimize_tie: bool = Field(
+        False, description="True if wavelet frequency (ricker only) and polarity were searched, not fixed to the request"
+    )
+    tie_search_note: str | None = Field(
+        None, description="Set when auto_optimize_tie=true: which combination won and how many were tried"
+    )
     datum_check: DatumCheckModel
     applied_tie_points: list[TiePointModel]
 

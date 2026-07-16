@@ -529,6 +529,9 @@ export interface SyntheticSeismogramResponse {
   correlation: number;
   max_shift_ms: number;
   boundary_pinned: boolean;
+  polarity: 1 | -1;
+  auto_optimize_tie: boolean;
+  tie_search_note: string | null;
   datum_check: DatumCheckModel;
   applied_tie_points: TiePointModel[];
 }

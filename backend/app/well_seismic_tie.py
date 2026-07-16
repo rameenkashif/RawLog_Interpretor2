@@ -586,3 +586,115 @@ def cross_correlate_and_shift(
         "max_shift_ms": max_shift_ms,
         "boundary_pinned": boundary_pinned,
     }
+
+
+# Matches the field range/count a real checkshot-free tie search needs to
+# cover typical seismic bandwidth without being so dense it's mostly wasted
+# compute -- 7 candidates, 5 Hz apart, spanning the usual "reasonable
+# dominant frequency" range for this kind of survey.
+DEFAULT_CANDIDATE_FREQS_HZ: tuple[float, ...] = (15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0)
+
+
+@dataclass
+class TieSearchResult:
+    """Winning (wavelet, polarity, position) combination from
+    search_best_tie, plus the synthetic/correlation results at that
+    combination. wavelet_freq_hz is None when a fixed (e.g. statistically
+    extracted) wavelet was searched instead of a Ricker frequency grid."""
+
+    wavelet_freq_hz: float | None
+    polarity: int  # +1 or -1
+    synthetic: np.ndarray  # unshifted, on the seismic's own time axis
+    shifted_synthetic: np.ndarray
+    best_shift_ms: float
+    correlation: float
+    max_shift_ms: float
+    boundary_pinned: bool
+    n_candidates_tried: int
+
+
+def search_best_tie(
+    refl_reg: np.ndarray,
+    reg_twt_ms: np.ndarray,
+    seismic_twt_axis_ms: np.ndarray,
+    seismic_dt_ms: float,
+    real_trace: np.ndarray,
+    candidate_freqs_hz: tuple[float, ...] | None = DEFAULT_CANDIDATE_FREQS_HZ,
+    search_polarity: bool = True,
+    max_shift_ms: float = DEFAULT_MAX_SHIFT_MS,
+    fixed_wavelet: np.ndarray | None = None,
+) -> TieSearchResult:
+    """Jointly searches wavelet frequency and polarity -- not just position
+    (cross_correlate_and_shift's own +/-max_shift_ms search) -- keeping
+    whichever (frequency, polarity, position) combination maximizes
+    correlation against the real trace.
+
+    Addresses a DIFFERENT failure mode than simply widening max_shift_ms:
+    a synthetic built at the wrong dominant frequency or wrong polarity
+    can look uncorrelated with the real trace at every possible shift, no
+    matter how wide the position search is -- widening the shift range
+    alone can't fix a wavelet assumption that's just wrong. Without a
+    checkshot, neither the true dominant frequency nor the true polarity
+    is known in advance, so both are search parameters here rather than
+    fixed inputs.
+
+    candidate_freqs_hz: Ricker frequencies to try (default
+    DEFAULT_CANDIDATE_FREQS_HZ, 15-45 Hz). Pass None (with fixed_wavelet
+    given instead) to search polarity only against ONE fixed wavelet --
+    e.g. a statistically-extracted wavelet, which has no frequency
+    parameter to sweep but is just as subject to a 180-degree polarity
+    ambiguity as a Ricker wavelet is.
+
+    search_polarity: try both the wavelet and its negation for every
+    frequency candidate (2x the candidates) -- polarity is a genuine
+    unknown without a known-polarity checkshot/VSP tie.
+
+    NOT wired into any default path -- opt-in only (see
+    synthetic_seismogram_service.generate's auto_optimize_tie), since
+    this changes what "the" tie for a well is (which frequency, which
+    polarity), not just how wide a position search runs.
+    """
+    if candidate_freqs_hz is None:
+        if fixed_wavelet is None:
+            raise TieError("search_best_tie needs either candidate_freqs_hz or fixed_wavelet.")
+        candidates: list[tuple[float | None, np.ndarray]] = [(None, fixed_wavelet)]
+    else:
+        candidates = [(f, ricker_wavelet(f, seismic_dt_ms / 1000.0)[1]) for f in candidate_freqs_hz]
+
+    polarities = (1, -1) if search_polarity else (1,)
+
+    best: TieSearchResult | None = None
+    n_tried = 0
+    for freq_hz, base_wavelet in candidates:
+        for polarity in polarities:
+            n_tried += 1
+            wavelet = polarity * base_wavelet
+            full_conv = np.convolve(refl_reg, wavelet, mode="full")
+            # See build_synthetic's identical crop -- np.convolve's "same"
+            # mode isn't used because it returns max(len(a), len(v)) rather
+            # than always len(a), which breaks for short well intervals
+            # where the wavelet is longer than the reflectivity series.
+            start = (len(full_conv) - len(refl_reg)) // 2
+            synthetic_reg = full_conv[start : start + len(refl_reg)]
+            synthetic_on_seismic_axis = np.interp(
+                seismic_twt_axis_ms, reg_twt_ms, synthetic_reg, left=0.0, right=0.0
+            )
+            tie = cross_correlate_and_shift(
+                synthetic_on_seismic_axis, real_trace, seismic_dt_ms, max_shift_ms=max_shift_ms
+            )
+            if best is None or tie["correlation"] > best.correlation:
+                best = TieSearchResult(
+                    wavelet_freq_hz=freq_hz,
+                    polarity=polarity,
+                    synthetic=synthetic_on_seismic_axis,
+                    shifted_synthetic=tie["shifted_synthetic"],
+                    best_shift_ms=tie["best_shift_ms"],
+                    correlation=tie["correlation"],
+                    max_shift_ms=tie["max_shift_ms"],
+                    boundary_pinned=tie["boundary_pinned"],
+                    n_candidates_tried=0,  # filled in once, below, after the loop finishes
+                )
+
+    assert best is not None  # candidates always has >= 1 entry
+    best.n_candidates_tried = n_tried
+    return best

@@ -62,6 +62,14 @@ async def generate(
         wst.DEFAULT_MAX_SHIFT_MS, gt=0,
         description="Bulk-shift correlation search range half-width, ms -- widen for checkshot-free wells whose sonic-derived time-depth curve may be off by 100-300ms",
     ),
+    auto_optimize_tie: bool = Query(
+        False,
+        description=(
+            "If true, also search wavelet frequency (ricker: 15-45Hz, 7 candidates) and polarity "
+            "(+1/-1), not just shift position -- keeps whichever combination maximizes correlation. "
+            "wavelet_freq_hz in the response then reflects the WINNING frequency, not the request."
+        ),
+    ),
 ) -> SyntheticSeismogramResponse:
     try:
         result = sss.generate(
@@ -71,6 +79,7 @@ async def generate(
             density_method=density_method,
             apply_saved_tie=apply_saved_tie,
             max_shift_ms=max_shift_ms,
+            auto_optimize_tie=auto_optimize_tie,
         )
         return SyntheticSeismogramResponse(**result)
     except Exception as exc:  # noqa: BLE001
@@ -134,6 +143,7 @@ async def export_tie_report(
     wavelet_method: str = Query("statistical"),
     wavelet_freq_hz: float = Query(25.0, gt=0),
     density_method: str = Query("rhob"),
+    auto_optimize_tie: bool = Query(False),
 ) -> StreamingResponse:
     """CSV export: per-sample synthetic vs. real trace (on the seismic's
     time axis) plus a short tie-quality/QC summary header block."""
@@ -143,6 +153,7 @@ async def export_tie_report(
             wavelet_method=wavelet_method,
             wavelet_freq_hz=wavelet_freq_hz,
             density_method=density_method,
+            auto_optimize_tie=auto_optimize_tie,
         )
     except Exception as exc:  # noqa: BLE001
         _handle(exc)
@@ -159,10 +170,15 @@ async def export_tie_report(
     writer.writerow(["# best_shift_ms", f"{result['best_shift_ms']:.2f}"])
     writer.writerow(["# max_shift_ms", f"{result['max_shift_ms']:.2f}"])
     writer.writerow(["# boundary_pinned", result["boundary_pinned"]])
+    writer.writerow(["# polarity", result["polarity"]])
+    writer.writerow(["# auto_optimize_tie", result["auto_optimize_tie"]])
+    if result["tie_search_note"]:
+        writer.writerow(["# tie_search_note", result["tie_search_note"]])
     writer.writerow(["# datum_check_plausible", result["datum_check"]["plausible"]])
     writer.writerow(["# density_method", result["density_method"]])
     writer.writerow(["# density_note", result["density_note"]])
     writer.writerow(["# wavelet_method", result["wavelet_method"]])
+    writer.writerow(["# wavelet_freq_hz", result["wavelet_freq_hz"]])
     writer.writerow(["# vertical_assumption", result["vertical_assumption_note"]])
     writer.writerow(["# time_depth_note", result["time_depth_note"]])
     writer.writerow([])

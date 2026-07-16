@@ -121,6 +121,7 @@ def generate(
     density_method: str = "rhob",
     apply_saved_tie: bool = True,
     max_shift_ms: float = wst.DEFAULT_MAX_SHIFT_MS,
+    auto_optimize_tie: bool = False,
 ) -> dict:
     if wavelet_method not in VALID_WAVELET_METHODS:
         raise SyntheticSeismogramError(
@@ -211,14 +212,55 @@ def generate(
 
     reg_twt_ms = np.arange(refl_twt_ms[0], refl_twt_ms[-1], dt_ms)
     refl_reg = np.interp(reg_twt_ms, refl_twt_ms, refl)
-    full_conv = np.convolve(refl_reg, wavelet, mode="full")
-    start = (len(full_conv) - len(refl_reg)) // 2
-    synthetic_reg = full_conv[start : start + len(refl_reg)]
-    synthetic_on_seismic_axis = np.interp(
-        volume.twt_axis_ms, reg_twt_ms, synthetic_reg, left=0.0, right=0.0
-    )
 
-    tie = wst.cross_correlate_and_shift(synthetic_on_seismic_axis, real_trace, dt_ms, max_shift_ms=max_shift_ms)
+    polarity = 1
+    tie_search_note: str | None = None
+    if auto_optimize_tie:
+        # Jointly searches wavelet frequency (ricker only -- statistical
+        # has none to sweep) and polarity, not just shift position -- see
+        # well_seismic_tie.search_best_tie for why position search alone
+        # can't fix a wrong frequency/polarity assumption. Opt-in: leaves
+        # the non-search path below completely unchanged when False, so
+        # this can't alter any existing tie unless explicitly requested.
+        search = wst.search_best_tie(
+            refl_reg,
+            reg_twt_ms,
+            volume.twt_axis_ms,
+            dt_ms,
+            real_trace,
+            candidate_freqs_hz=wst.DEFAULT_CANDIDATE_FREQS_HZ if wavelet_method == "ricker" else None,
+            fixed_wavelet=None if wavelet_method == "ricker" else wavelet,
+            search_polarity=True,
+            max_shift_ms=max_shift_ms,
+        )
+        polarity = search.polarity
+        if wavelet_method == "ricker":
+            wavelet_freq_hz = search.wavelet_freq_hz  # report the winning frequency, not the requested one
+            _, wavelet = wst.ricker_wavelet(wavelet_freq_hz, dt_ms / 1000.0)
+        wavelet = polarity * wavelet  # keep wavelet_amplitude/spectra consistent with the winning polarity
+        spectra = wst.wavelet_spectra(wavelet, dt_ms)
+        synthetic_on_seismic_axis = search.synthetic
+        tie = {
+            "shifted_synthetic": search.shifted_synthetic,
+            "best_shift_ms": search.best_shift_ms,
+            "correlation": search.correlation,
+            "max_shift_ms": search.max_shift_ms,
+            "boundary_pinned": search.boundary_pinned,
+        }
+        freq_desc = f"{wavelet_freq_hz:g} Hz Ricker" if wavelet_method == "ricker" else "statistical wavelet"
+        tie_search_note = (
+            f"Auto-optimized: searched {search.n_candidates_tried} (frequency, polarity) combinations "
+            f"within +/-{max_shift_ms:g}ms -- best fit is {freq_desc} at "
+            f"{'reversed' if polarity < 0 else 'normal'} polarity (r={search.correlation:.3f})."
+        )
+    else:
+        full_conv = np.convolve(refl_reg, wavelet, mode="full")
+        start = (len(full_conv) - len(refl_reg)) // 2
+        synthetic_reg = full_conv[start : start + len(refl_reg)]
+        synthetic_on_seismic_axis = np.interp(
+            volume.twt_axis_ms, reg_twt_ms, synthetic_reg, left=0.0, right=0.0
+        )
+        tie = wst.cross_correlate_and_shift(synthetic_on_seismic_axis, real_trace, dt_ms, max_shift_ms=max_shift_ms)
 
     # Frequency-domain view of the same real-vs-synthetic comparison shown
     # in the time-domain overlay -- reuses wavelet_spectra (a generic FFT
@@ -274,6 +316,9 @@ def generate(
         "correlation": tie["correlation"],
         "max_shift_ms": tie["max_shift_ms"],
         "boundary_pinned": tie["boundary_pinned"],
+        "polarity": polarity,
+        "auto_optimize_tie": auto_optimize_tie,
+        "tie_search_note": tie_search_note,
         "datum_check": {
             "delay_ms": datum_check.delay_ms,
             "implied_depth_m": datum_check.implied_depth_m,
