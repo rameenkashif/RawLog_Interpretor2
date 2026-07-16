@@ -3,6 +3,20 @@ import { useQuery } from "@tanstack/react-query";
 import Plot from "react-plotly.js";
 import { getWellSeismicTie, listSeismic, listWells } from "@/api/client";
 
+/** RMS of a numeric array, floored to avoid a divide-by-zero blowup on a
+ * degenerate all-zero trace (dead trace, or a synthetic with no overlap).
+ * Same fix as SyntheticTraceOverlay.tsx / WellTieView.tsx: the synthetic
+ * and the raw SEG-Y trace have no reason to share an amplitude scale, and
+ * on a shared axis one routinely dwarfs the other into a flat line, even
+ * when the underlying tie correlation (computed on zero-mean/unit-std
+ * normalized copies, unaffected by this) is good. Normalized for DISPLAY
+ * only -- the API keeps returning raw, unnormalized values. */
+function rms(values: number[]): number {
+  const meanSq = values.reduce((sum, v) => sum + v * v, 0) / (values.length || 1);
+  const r = Math.sqrt(meanSq);
+  return r > 1e-12 ? r : 1;
+}
+
 export default function WellSeismicTie() {
   const wellsQuery = useQuery({ queryKey: ["wells"], queryFn: listWells });
   const datasetsQuery = useQuery({ queryKey: ["seismic-datasets"], queryFn: listSeismic });
@@ -15,6 +29,9 @@ export default function WellSeismicTie() {
     queryFn: () => getWellSeismicTie(wellId!, datasetId!),
     enabled: Boolean(wellId && datasetId),
   });
+
+  const realRms = tieQuery.data ? rms(tieQuery.data.real_trace) : 1;
+  const synRms = tieQuery.data ? rms(tieQuery.data.shifted_synthetic) : 1;
 
   return (
     <div className="space-y-4">
@@ -89,7 +106,7 @@ export default function WellSeismicTie() {
             data={[
               {
                 x: tieQuery.data.twt_ms,
-                y: tieQuery.data.real_trace,
+                y: tieQuery.data.real_trace.map((v) => v / realRms),
                 type: "scatter",
                 mode: "lines",
                 name: "Real seismic trace",
@@ -97,7 +114,7 @@ export default function WellSeismicTie() {
               },
               {
                 x: tieQuery.data.twt_ms,
-                y: tieQuery.data.shifted_synthetic,
+                y: tieQuery.data.shifted_synthetic.map((v) => v / synRms),
                 type: "scatter",
                 mode: "lines",
                 name: "Synthetic (shifted)",
@@ -108,7 +125,7 @@ export default function WellSeismicTie() {
   autosize: true,
   height: 420,
   xaxis: { title: { text: "Two-Way Time (ms)" } },
-  yaxis: { title: { text: "Amplitude" } },
+  yaxis: { title: { text: "Amplitude (RMS-normalized)" } },
   legend: { orientation: "h" },
   margin: { t: 20 },
 }}
