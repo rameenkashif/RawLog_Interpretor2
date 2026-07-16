@@ -14,25 +14,47 @@ import { colors } from "@/styles/tokens";
 
 type Domain = "time" | "frequency";
 
+/** RMS of a numeric array, floored to avoid a divide-by-zero blowup on a
+ * degenerate all-zero trace (dead trace, or a synthetic with no overlap). */
+function rms(values: number[]): number {
+  const meanSq = values.reduce((sum, v) => sum + v * v, 0) / (values.length || 1);
+  const r = Math.sqrt(meanSq);
+  return r > 1e-12 ? r : 1;
+}
+
 /** Synthetic-vs-real trace overlay + tie quality stats, same chart pattern
  * as the Seismic Visualization module's WellTieView.tsx. Toggles between
  * the time-domain trace overlay and the frequency-domain amplitude
  * spectrum of the same two traces (real_trace / shifted_synthetic) --
  * same underlying convolution result, just two ways to look at it (see
  * synthetic_seismogram_service.py's real_trace_spectrum/synthetic_spectrum,
- * an FFT of the exact arrays plotted in the time-domain view). */
+ * an FFT of the exact arrays plotted in the time-domain view).
+ *
+ * The synthetic (reflectivity convolved with a wavelet) and the real SEG-Y
+ * trace (whatever raw recording/processing gain the vendor's file uses)
+ * have no reason to share an amplitude scale -- on the same shared axis one
+ * routinely dwarfs the other into a visually flat line even when the
+ * underlying tie correlation is good (cross_correlate_and_shift already
+ * zero-means/unit-normalizes both before computing correlation, so that
+ * number is unaffected). Each curve is independently divided by its own
+ * RMS here purely for DISPLAY -- the raw, unnormalized values are what's
+ * actually returned by the API (CSV export, any future tool) so nothing
+ * downstream of this component is affected. */
 export default function SyntheticTraceOverlay({ result }: { result: SyntheticSeismogramResponse }) {
   const [domain, setDomain] = useState<Domain>("time");
 
+  const realRms = rms(result.real_trace);
+  const synRms = rms(result.shifted_synthetic);
+
   const timeData = result.seismic_twt_ms.map((t, i) => ({
     x: t,
-    synthetic: result.shifted_synthetic[i],
-    real: result.real_trace[i],
+    synthetic: result.shifted_synthetic[i] / synRms,
+    real: result.real_trace[i] / realRms,
   }));
   const freqData = result.trace_spectrum_freq_hz.map((f, i) => ({
     x: f,
-    synthetic: result.synthetic_spectrum_amplitude[i],
-    real: result.real_trace_spectrum_amplitude[i],
+    synthetic: result.synthetic_spectrum_amplitude[i] / synRms,
+    real: result.real_trace_spectrum_amplitude[i] / realRms,
   }));
   const chartData = domain === "time" ? timeData : freqData;
 
@@ -99,7 +121,7 @@ export default function SyntheticTraceOverlay({ result }: { result: SyntheticSei
               stroke={colors.borderStrong}
               tick={{ fill: colors.inkMuted, fontSize: 11 }}
               label={{
-                value: domain === "time" ? "Amplitude" : "Spectral Amplitude",
+                value: domain === "time" ? "Amplitude (RMS-normalized)" : "Spectral Amplitude (RMS-normalized)",
                 angle: -90,
                 position: "insideLeft",
                 fill: colors.inkMuted,

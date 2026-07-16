@@ -22,6 +22,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
 }
 
+/** RMS of a numeric array, floored to avoid a divide-by-zero blowup on a
+ * degenerate all-zero trace (dead trace, or a synthetic with no overlap). */
+function rms(values: number[]): number {
+  const meanSq = values.reduce((sum, v) => sum + v * v, 0) / (values.length || 1);
+  const r = Math.sqrt(meanSq);
+  return r > 1e-12 ? r : 1;
+}
+
 /**
  * Synthetic-vs-real trace overlay for a well tie computed directly against
  * the SEG-Y volume (app/services/seismic_processor.py get_well_tie) --
@@ -29,6 +37,11 @@ function errorMessage(error: unknown): string {
  * (WellSeismicTie.tsx / /tie/{well_id}), which ties against a manually
  * uploaded+processed dataset instead of this feature's single active
  * volume. A 1D line overlay fits Recharts fine, unlike the 2D sections.
+ *
+ * Each curve is independently RMS-normalized for DISPLAY only (see
+ * SyntheticTraceOverlay.tsx's identical fix) -- the synthetic and the raw
+ * SEG-Y trace have no reason to share an amplitude scale, and on a shared
+ * axis one routinely dwarfs the other into a flat line.
  */
 export default function WellTieView() {
   const wellsQuery = useQuery({ queryKey: ["wells"], queryFn: listWells });
@@ -42,10 +55,12 @@ export default function WellTieView() {
     retry: false,
   });
 
+  const realRms = tieQuery.data ? rms(tieQuery.data.real_trace) : 1;
+  const synRms = tieQuery.data ? rms(tieQuery.data.synthetic) : 1;
   const chartData = tieQuery.data?.twt_ms.map((t, i) => ({
     twt_ms: t,
-    synthetic: tieQuery.data!.synthetic[i],
-    real: tieQuery.data!.real_trace[i],
+    synthetic: tieQuery.data!.synthetic[i] / synRms,
+    real: tieQuery.data!.real_trace[i] / realRms,
   }));
 
   return (
@@ -121,7 +136,7 @@ export default function WellTieView() {
                 <YAxis
                   stroke={colors.borderStrong}
                   tick={{ fill: colors.inkMuted, fontSize: 11 }}
-                  label={{ value: "Amplitude", angle: -90, position: "insideLeft", fill: colors.inkMuted }}
+                  label={{ value: "Amplitude (RMS-normalized)", angle: -90, position: "insideLeft", fill: colors.inkMuted }}
                 />
                 <Tooltip
                   contentStyle={{ backgroundColor: colors.surface, border: `1px solid ${colors.border}` }}
