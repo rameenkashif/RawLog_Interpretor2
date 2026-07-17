@@ -219,9 +219,28 @@ def load_segy_file(
                     f"SEG-Y file '{filename}' contains no samples."
                 )
 
-            sample_interval_ms = float(
-                segyio.tools.dt(f) / 1000.0
-            )  # dt() returns microseconds
+            # Read the binary header's sample interval directly at its
+            # standard byte location (segyio.BinField.Interval == byte 17 of
+            # the binary header) rather than trusting segyio.tools.dt(): that
+            # helper cross-checks against each trace's OWN (non-standard-
+            # position-vulnerable, per-trace) interval field, and silently
+            # falls back to a hardcoded 4000us default when the two disagree
+            # -- confirmed by reproducing it with a synthetic file. A vendor
+            # export with a non-standard trace-header layout (see
+            # segy_header_parser.py's module docstring -- this dataset's own
+            # inline/crossline live at non-standard trace-header bytes) can
+            # easily hit exactly that mismatch, silently corrupting the
+            # sample rate used everywhere downstream (including the well-tie
+            # search's time axis). The binary header's declared interval is
+            # the one authoritative value the SEG-Y rev1 spec ties every
+            # trace's sample rate to; reading it directly (like the raw
+            # textual-header read in segy_header_parser.py) sidesteps the
+            # per-trace inconsistency entirely.
+            bin_interval_us = f.bin[segyio.BinField.Interval]
+            if bin_interval_us and bin_interval_us > 0:
+                sample_interval_ms = float(bin_interval_us) / 1000.0
+            else:
+                sample_interval_ms = float(segyio.tools.dt(f) / 1000.0)  # dt() returns microseconds
 
             # Explicit DelayRecordingTime read rather than trusting
             # f.samples to have picked it up -- the actual start of the
