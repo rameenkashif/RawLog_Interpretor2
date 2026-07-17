@@ -87,6 +87,70 @@ class TestTraceCoordinates:
         assert loaded.trace_y.shape == (7,)
 
 
+class TestSampleInterval:
+    """sample_interval_ms is read directly from the binary header's standard
+    byte location (segyio.BinField.Interval) rather than via
+    segyio.tools.dt(), which cross-checks against each trace's own
+    per-trace interval field and silently falls back to a hardcoded 4000us
+    default when the two disagree -- exactly the failure mode a vendor file
+    with a non-standard trace-header layout can trigger (see
+    segy_header_parser.py's docstring: this dataset's own inline/crossline
+    live at non-standard trace-header bytes), and exactly what broke the
+    well-tie search downstream (a wrong sample_interval_ms feeds directly
+    into well_seismic_tie.reflectivity_from_time_axis's grid spacing)."""
+
+    def test_reads_binary_header_interval_directly(self, tmp_path):
+        headers = [{segyio.TraceField.SourceGroupScalar: 1} for _ in range(3)]
+        loaded = load_segy_file(_write_segy(tmp_path, headers))
+        assert loaded.metadata.sample_interval_ms == 2.0  # _write_segy sets bin Interval to 2000us
+
+    def test_ignores_conflicting_per_trace_interval_field(self, tmp_path):
+        # segyio.tools.dt() falls back to 4ms when the binary header (2ms,
+        # set by _write_segy) disagrees with a trace's own interval field --
+        # reproduces the exact vendor-file failure mode.
+        n_traces = 3
+        path = str(tmp_path / "conflict.sgy")
+        spec = segyio.spec()
+        spec.format = 5
+        spec.samples = np.arange(10)
+        spec.tracecount = n_traces
+        with segyio.create(path, spec) as f:
+            f.bin[segyio.BinField.Interval] = 2000  # binary header: authoritative 2ms
+            for i in range(n_traces):
+                f.header[i] = {
+                    segyio.TraceField.SourceGroupScalar: 1,
+                    segyio.TraceField.TRACE_SAMPLE_INTERVAL: 25000,  # conflicting per-trace field
+                }
+                f.trace[i] = np.zeros(10, dtype=np.float32)
+
+        # Sanity-check the failure mode this guards against actually exists
+        # in the installed segyio version before asserting our fix works.
+        with segyio.open(path, "r", ignore_geometry=True) as f:
+            assert segyio.tools.dt(f) != 2000.0
+
+        loaded = load_segy_file(path)
+        assert loaded.metadata.sample_interval_ms == 2.0
+
+    def test_falls_back_to_tools_dt_when_binary_header_interval_is_zero(self, tmp_path):
+        n_traces = 3
+        path = str(tmp_path / "zero_interval.sgy")
+        spec = segyio.spec()
+        spec.format = 5
+        spec.samples = np.arange(10)
+        spec.tracecount = n_traces
+        with segyio.create(path, spec) as f:
+            f.bin[segyio.BinField.Interval] = 0  # not declared -- must fall back, not divide-by-zero
+            for i in range(n_traces):
+                f.header[i] = {
+                    segyio.TraceField.SourceGroupScalar: 1,
+                    segyio.TraceField.TRACE_SAMPLE_INTERVAL: 4000,
+                }
+                f.trace[i] = np.zeros(10, dtype=np.float32)
+
+        loaded = load_segy_file(path)
+        assert loaded.metadata.sample_interval_ms > 0
+
+
 class TestHeaderDiagnostics:
     def test_no_declaration_defaults_to_rev1_source_xy(self, tmp_path):
         headers = [{segyio.TraceField.SourceX: 111, segyio.TraceField.SourceY: 222, segyio.TraceField.SourceGroupScalar: 1}]
