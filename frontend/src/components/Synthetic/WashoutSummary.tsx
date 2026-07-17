@@ -22,7 +22,7 @@ export default function WashoutSummary({ result }: { result: SyntheticSeismogram
         unreliable interval." No CALI curve is available for these wells, so this is a soft QC proxy only.
       </p>
       {intervals.length === 0 ? (
-        <p className="text-xs text-green-700 font-semibold">No flagged intervals.</p>
+        <p className="text-xs text-success font-semibold">No flagged intervals.</p>
       ) : (
         <ul className="text-xs text-ink-muted space-y-1 max-h-40 overflow-y-auto">
           {intervals.map(([start, end], i) => (

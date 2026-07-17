@@ -9,7 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import type { WellSummary } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors } from "@/styles/tokens";
 
 /**
  * Bar/column chart comparing key metrics (avg VSH/PHIE/SWE) across wells.
@@ -18,6 +18,7 @@ import { colors } from "@/styles/tokens";
  * Blue/orange brand palette, per the product's visual theme.
  */
 export default function WellsBarChart({ wells }: { wells: WellSummary[] }) {
+  const colors = useChartColors();
   const data = wells.map((w) => ({
     name: w.well_id,
     "Avg VSH": w.avg_vsh !== null ? +(w.avg_vsh * 100).toFixed(1) : 0,

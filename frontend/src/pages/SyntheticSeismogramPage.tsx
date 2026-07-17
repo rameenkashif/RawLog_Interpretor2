@@ -52,8 +52,8 @@ export default function SyntheticSeismogramPage() {
   });
 
   return (
-    <div className="pb-24 space-y-6">
-      <div className="relative overflow-hidden rounded-2xl border border-border bg-brand-gradient-soft px-6 py-6">
+    <div className="pb-12 space-y-4">
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-brand-gradient-soft px-5 py-4">
         <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-orange/10 blur-2xl" />
         <div className="relative">
           <Link to="/" className="text-xs font-medium text-accent-strong hover:underline">
@@ -62,7 +62,7 @@ export default function SyntheticSeismogramPage() {
           <p className="text-xs font-semibold uppercase tracking-wider text-accent-strong mb-1 mt-1">
             Synthetic Seismogram Module
           </p>
-          <h1 className="text-2xl font-extrabold text-ink tracking-tight">Synthetic Seismogram &amp; Well Tie</h1>
+          <h1 className="text-xl font-extrabold text-ink tracking-tight">Synthetic Seismogram &amp; Well Tie</h1>
           <p className="text-sm text-ink-muted mt-1 max-w-2xl">
             Density → acoustic impedance → reflectivity → wavelet convolution → synthetic trace, tied against the
             nearest real seismic trace. Unit-standardized well header (X/Y/KB/TD), selectable density/wavelet, and
@@ -164,13 +164,13 @@ export default function SyntheticSeismogramPage() {
       {genQuery.isLoading && <div className="h-64 rounded-xl bg-surface-sunken animate-pulse" />}
 
       {genQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Failed to generate synthetic seismogram: {errorMessage(genQuery.error)}
         </div>
       )}
 
       {genQuery.data && (
-        <div className="space-y-6">
+        <div className="space-y-4">
           <QcBadges result={genQuery.data} />
 
           <div className="border border-accent/30 bg-accent-soft/40 text-accent-strong text-xs rounded-xl px-4 py-2.5">
@@ -184,21 +184,21 @@ export default function SyntheticSeismogramPage() {
           </div>
 
           <section>
-            <h2 className="text-sm font-semibold text-ink mb-2">Acoustic Impedance &amp; Reflectivity</h2>
+            <h2 className="text-sm font-semibold text-ink mb-1.5">Acoustic Impedance &amp; Reflectivity</h2>
             <AcousticImpedanceChart result={genQuery.data} />
           </section>
 
           <section>
-            <h2 className="text-sm font-semibold text-ink mb-2">Wavelet</h2>
+            <h2 className="text-sm font-semibold text-ink mb-1.5">Wavelet</h2>
             <WaveletView result={genQuery.data} />
           </section>
 
           <section>
-            <h2 className="text-sm font-semibold text-ink mb-2">Synthetic vs. Real Trace</h2>
+            <h2 className="text-sm font-semibold text-ink mb-1.5">Synthetic vs. Real Trace</h2>
             <SyntheticTraceOverlay result={genQuery.data} />
           </section>
 
-          <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <section className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             <WashoutSummary result={genQuery.data} />
             <StretchSqueezeControls
               wellId={wellId!}

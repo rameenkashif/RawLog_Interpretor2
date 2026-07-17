@@ -2,37 +2,108 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Force light color-scheme at the CSS level too, so form controls (date
-   pickers, checkboxes, scrollbars) rendered by the browser also stay light
-   even if the OS is set to dark mode. */
+/*
+ * Theme tokens: RGB triplets (not hex) so Tailwind's `rgb(var(--x) /
+ * <alpha-value>)` color definitions (tailwind.config.js) can apply opacity
+ * modifiers (e.g. `border-danger/30`) to CSS-variable-backed colors. Light
+ * values live under :root; dark overrides under :root.dark, toggled by
+ * src/theme/ThemeContext.tsx adding/removing the `dark` class on <html>
+ * (index.html's inline bootstrap script sets this class before first paint
+ * to avoid a flash of the wrong theme). src/styles/tokens.ts mirrors these
+ * exact values for the chart libraries (Plotly/Recharts), which can't read
+ * CSS at all -- keep both in sync by hand when either changes.
+ */
 :root {
-  color-scheme: light only;
+  color-scheme: light;
+
+  --color-surface: 255 255 255;
+  --color-surface-muted: 248 250 252;
+  --color-surface-sunken: 238 242 248;
+  --color-border: 226 232 240;
+  --color-border-strong: 203 213 225;
+  --color-ink: 15 23 42;
+  --color-ink-muted: 71 85 105;
+  --color-ink-faint: 148 163 184;
+  --color-accent: 37 99 235;
+  --color-accent-soft: 239 246 255;
+  --color-accent-strong: 29 78 216;
+  --color-accent-deep: 30 58 138;
+  --color-orange: 249 115 22;
+  --color-orange-soft: 255 243 232;
+  --color-orange-strong: 194 65 12;
+  --color-pay: 22 163 74;
+  --color-reservoir: 245 158 11;
+  --color-nonreservoir: 148 163 184;
+  --color-danger: 220 38 38;
+  --color-danger-soft: 254 242 242;
+  --color-success: 21 128 61;
+  --color-success-soft: 240 253 244;
+  --color-grid-line: 237 241 247;
+
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-card-hover: 0 4px 12px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.06);
+
+  --scrollbar-track: #f8f9fb;
+  --scrollbar-thumb: #d0d5dd;
+  --scrollbar-thumb-hover: #98a2b3;
+}
+
+:root.dark {
+  color-scheme: dark;
+
+  --color-surface: 11 18 32;
+  --color-surface-muted: 17 24 39;
+  --color-surface-sunken: 30 41 59;
+  --color-border: 30 41 59;
+  --color-border-strong: 51 65 85;
+  --color-ink: 226 232 240;
+  --color-ink-muted: 148 163 184;
+  --color-ink-faint: 100 116 139;
+  --color-accent: 59 130 246;
+  --color-accent-soft: 30 41 59;
+  --color-accent-strong: 96 165 250;
+  --color-accent-deep: 29 78 216;
+  --color-orange: 251 146 60;
+  --color-orange-soft: 63 38 17;
+  --color-orange-strong: 253 186 116;
+  --color-pay: 74 222 128;
+  --color-reservoir: 251 191 36;
+  --color-nonreservoir: 100 116 139;
+  --color-danger: 248 113 113;
+  --color-danger-soft: 60 24 24;
+  --color-success: 74 222 128;
+  --color-success-soft: 20 40 28;
+  --color-grid-line: 30 41 59;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.4);
+
+  --scrollbar-track: #0f172a;
+  --scrollbar-thumb: #334155;
+  --scrollbar-thumb-hover: #475569;
 }
 
 html,
 body,
 #root {
   height: 100%;
-  background-color: #ffffff;
 }
 
 body {
-  @apply bg-surface text-ink antialiased;
+  @apply bg-surface text-ink antialiased transition-colors duration-150;
 }
 
-/* Thin, light-themed scrollbars (WebKit) so long log tracks/chat panels
-   don't render the OS's dark-mode scrollbar. */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-track {
-  background: #f8f9fb;
+  background: var(--scrollbar-track);
 }
 ::-webkit-scrollbar-thumb {
-  background: #d0d5dd;
+  background: var(--scrollbar-thumb);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #98a2b3;
+  background: var(--scrollbar-thumb-hover);
 }

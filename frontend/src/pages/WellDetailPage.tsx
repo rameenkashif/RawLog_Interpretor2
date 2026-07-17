@@ -26,8 +26,8 @@ export default function WellDetailPage() {
   if (!wellId) return null;
 
   return (
-    <div className="pb-24 space-y-6">
-      <div className="relative overflow-hidden rounded-2xl border border-border bg-brand-gradient-soft px-6 py-5">
+    <div className="pb-12 space-y-4">
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-brand-gradient-soft px-5 py-4">
         <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-orange/10 blur-2xl" />
         <div className="relative flex items-center justify-between flex-wrap gap-4">
           <div>
@@ -37,7 +37,7 @@ export default function WellDetailPage() {
             >
               ← Back to dashboard
             </Link>
-            <h1 className="text-2xl font-extrabold text-ink tracking-tight mt-1">
+            <h1 className="text-xl font-extrabold text-ink tracking-tight mt-1">
               {wellId}
             </h1>
             <p className="text-sm text-ink-muted">
@@ -52,27 +52,27 @@ export default function WellDetailPage() {
         <div className="h-[720px] rounded-xl bg-surface-sunken animate-pulse" />
       )}
       {curvesQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Failed to load curves: {(curvesQuery.error as Error).message}
         </div>
       )}
       {curvesQuery.data && (
         <section>
-          <h2 className="text-sm font-semibold text-ink mb-2">Log Tracks</h2>
+          <h2 className="text-sm font-semibold text-ink mb-1.5">Log Tracks</h2>
           <LogTrackViewer curves={curvesQuery.data} />
         </section>
       )}
 
       {zonesQuery.data && (
         <section>
-          <h2 className="text-sm font-semibold text-ink mb-2">Zone Summary</h2>
+          <h2 className="text-sm font-semibold text-ink mb-1.5">Zone Summary</h2>
           <ZoneSummaryTable zones={zonesQuery.data} />
         </section>
       )}
 
       {curvesQuery.data && (
         <section>
-          <h2 className="text-sm font-semibold text-ink mb-2">Crossplots</h2>
+          <h2 className="text-sm font-semibold text-ink mb-1.5">Crossplots</h2>
           <CrossplotBuilder
             wellId={wellId}
             curveNames={curvesQuery.data.curve_names}

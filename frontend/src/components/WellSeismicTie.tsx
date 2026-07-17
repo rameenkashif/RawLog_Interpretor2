@@ -3,13 +3,13 @@ import { useQuery } from "@tanstack/react-query";
 import Plot from "react-plotly.js";
 import { getAllWellSeismicTies, getWellSeismicTie, listSeismic } from "@/api/client";
 import type { WellSeismicTieRow } from "@/api/types";
-import { colors, plotlyLightLayout } from "@/styles/tokens";
+import { useChartColors, usePlotlyLayout, type ChartColors } from "@/styles/tokens";
 
 /** Correlation quality tiering, matching the pay/reservoir/danger semantic
  * colors used for zone quality elsewhere in the app (styles/tokens.ts) --
  * correlation is a tie-quality signal in the same "good / marginal / poor"
  * shape as a reservoir quality flag. */
-function correlationColor(corr: number | null): string {
+function correlationColor(corr: number | null, colors: ChartColors): string {
   if (corr === null) return colors.inkFaint;
   if (corr >= 0.7) return colors.pay;
   if (corr >= 0.4) return colors.reservoir;
@@ -23,6 +23,8 @@ function fmt(v: number | null, digits = 1): string {
 type SortKey = "well_id" | "distance_m" | "best_freq_hz" | "bulk_shift_ms" | "correlation";
 
 export default function WellSeismicTie() {
+  const colors = useChartColors();
+  const plotlyLayout = usePlotlyLayout();
   const datasetsQuery = useQuery({ queryKey: ["seismic-datasets"], queryFn: listSeismic });
   const [datasetId, setDatasetId] = useState<string | null>(null);
   const [selectedWellId, setSelectedWellId] = useState<string | null>(null);
@@ -123,7 +125,7 @@ export default function WellSeismicTie() {
       )}
 
       {batchQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Batch tie failed: {(batchQuery.error as Error).message}
         </div>
       )}
@@ -182,7 +184,7 @@ export default function WellSeismicTie() {
                         <span className="inline-flex items-center gap-2">
                           <span
                             className="h-1.5 w-1.5 rounded-full"
-                            style={{ backgroundColor: correlationColor(row.correlation) }}
+                            style={{ backgroundColor: correlationColor(row.correlation, colors) }}
                           />
                           {row.well_id}
                         </span>
@@ -200,8 +202,8 @@ export default function WellSeismicTie() {
                             <span
                               className="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold"
                               style={{
-                                backgroundColor: `${correlationColor(row.correlation)}1A`,
-                                color: correlationColor(row.correlation),
+                                backgroundColor: `${correlationColor(row.correlation, colors)}1A`,
+                                color: correlationColor(row.correlation, colors),
                               }}
                             >
                               {fmt(row.correlation, 3)}
@@ -258,7 +260,7 @@ export default function WellSeismicTie() {
                     textposition: "top center" as const,
                     textfont: { size: 10, color: colors.inkMuted },
                     marker: {
-                      color: mapWells.map((w) => correlationColor(w.correlation)),
+                      color: mapWells.map((w) => correlationColor(w.correlation, colors)),
                       size: 10,
                       line: { color: colors.surface, width: 1 },
                     },
@@ -271,12 +273,12 @@ export default function WellSeismicTie() {
                   },
                 ]}
                 layout={{
-                  ...plotlyLightLayout,
+                  ...plotlyLayout,
                   autosize: true,
                   height: 420,
                   showlegend: false,
-                  xaxis: { ...plotlyLightLayout.xaxis, title: { text: "X" } },
-                  yaxis: { ...plotlyLightLayout.yaxis, title: { text: "Y" } },
+                  xaxis: { ...plotlyLayout.xaxis, title: { text: "X" } },
+                  yaxis: { ...plotlyLayout.yaxis, title: { text: "Y" } },
                   margin: { t: 10, r: 10, b: 40, l: 65 },
                 }}
                 style={{ width: "100%" }}
@@ -292,7 +294,7 @@ export default function WellSeismicTie() {
           {detailQuery.isLoading && <div className="h-96 rounded-xl bg-surface-sunken animate-pulse" />}
 
           {detailQuery.isError && (
-            <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+            <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
               Tie failed: {(detailQuery.error as Error).message}
             </div>
           )}
@@ -349,18 +351,18 @@ export default function WellSeismicTie() {
                   },
                 ]}
                 layout={{
-                  ...plotlyLightLayout,
+                  ...plotlyLayout,
                   autosize: true,
                   height: 560,
                   width: 420,
                   xaxis: {
-                    ...plotlyLightLayout.xaxis,
+                    ...plotlyLayout.xaxis,
                     title: { text: "Normalized amplitude" },
                     zeroline: true,
                     zerolinecolor: colors.borderStrong,
                   },
                   yaxis: {
-                    ...plotlyLightLayout.yaxis,
+                    ...plotlyLayout.yaxis,
                     title: { text: "Two-Way Time (ms)" },
                     autorange: "reversed",
                   },

@@ -4,7 +4,7 @@ import { AxiosError } from "axios";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { getAmplitudeSpectrum } from "@/api/client";
 import type { SurveyInfoResponse } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors } from "@/styles/tokens";
 
 function errorMessage(error: unknown): string {
   if (error instanceof AxiosError) {
@@ -21,6 +21,7 @@ function errorMessage(error: unknown): string {
  * (already used elsewhere in the app) fits fine here.
  */
 export default function AmplitudeSpectrumView({ surveyInfo }: { surveyInfo: SurveyInfoResponse }) {
+  const colors = useChartColors();
   const [scope, setScope] = useState<"volume" | "inline">("volume");
   const [inlineNumber, setInlineNumber] = useState(surveyInfo.inline_min);
 
@@ -73,7 +74,7 @@ export default function AmplitudeSpectrumView({ surveyInfo }: { surveyInfo: Surv
 
       {query.isLoading && <div className="h-64 rounded-xl bg-surface-sunken animate-pulse" />}
       {query.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Failed to load spectrum: {errorMessage(query.error)}
         </div>
       )}

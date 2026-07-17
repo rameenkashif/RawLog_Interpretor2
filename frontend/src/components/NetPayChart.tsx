@@ -9,7 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import type { WellSummary } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors } from "@/styles/tokens";
 
 /**
  * Horizontal net-pay-thickness comparison across wells -- gives an
@@ -18,6 +18,7 @@ import { colors } from "@/styles/tokens";
  * (no backend changes needed).
  */
 export default function NetPayChart({ wells }: { wells: WellSummary[] }) {
+  const colors = useChartColors();
   const data = [...wells]
     .map((w) => ({ name: w.well_id, netPay: w.net_pay_thickness ?? 0 }))
     .sort((a, b) => b.netPay - a.netPay);

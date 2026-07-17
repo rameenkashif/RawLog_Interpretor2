@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import type { SeismicSectionResponse } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors, type ChartColors } from "@/styles/tokens";
 
 /**
  * Raw seismic section display: amplitude as a function of trace index (x)
@@ -17,7 +17,8 @@ export default function SeismicSection({
 }: {
   section: SeismicSectionResponse;
 }) {
-  const { data, layout } = useMemo(() => buildFigure(section), [section]);
+  const colors = useChartColors();
+  const { data, layout } = useMemo(() => buildFigure(section, colors), [section, colors]);
 
   return (
     <div className="bg-surface border border-border rounded-xl p-2 shadow-card">
@@ -31,7 +32,10 @@ export default function SeismicSection({
   );
 }
 
-function buildFigure(section: SeismicSectionResponse): {
+function buildFigure(
+  section: SeismicSectionResponse,
+  colors: ChartColors,
+): {
   data: Data[];
   layout: Partial<Layout>;
 } {

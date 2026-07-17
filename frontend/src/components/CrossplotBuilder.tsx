@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import { getCrossplot } from "@/api/client";
-import { colors, zoneColors, zoneLabels } from "@/styles/tokens";
+import { useChartColors, useZoneColors, zoneLabels } from "@/styles/tokens";
 
 interface CrossplotBuilderProps {
   wellId: string;
@@ -93,6 +93,9 @@ export default function CrossplotBuilder({
     enabled: Boolean(xCurve && yCurve),
   });
 
+  const colors = useChartColors();
+  const zoneColors = useZoneColors();
+
   function applyPreset(preset: Preset) {
     setXCurve(preset.x);
     setYCurve(preset.y);
@@ -175,7 +178,7 @@ export default function CrossplotBuilder({
     };
 
     return { trace, layout };
-  }, [data, colorCurve, xCurve, yCurve, logX, logY, reverseY]);
+  }, [data, colorCurve, xCurve, yCurve, logX, logY, reverseY, colors, zoneColors]);
 
   return (
     <div className="bg-surface border border-border rounded-xl p-4 shadow-card space-y-4">

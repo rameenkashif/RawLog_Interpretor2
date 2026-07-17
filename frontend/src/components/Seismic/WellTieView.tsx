@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import { getWellTieViz, listWells } from "@/api/client";
-import { colors } from "@/styles/tokens";
+import { useChartColors } from "@/styles/tokens";
 
 function errorMessage(error: unknown): string {
   if (error instanceof AxiosError) {
@@ -44,6 +44,7 @@ function rms(values: number[]): number {
  * axis one routinely dwarfs the other into a flat line.
  */
 export default function WellTieView() {
+  const colors = useChartColors();
   const wellsQuery = useQuery({ queryKey: ["wells"], queryFn: listWells });
   const [wellId, setWellId] = useState<string | null>(null);
   const [waveletFreqHz, setWaveletFreqHz] = useState(25);
@@ -101,7 +102,7 @@ export default function WellTieView() {
       {tieQuery.isLoading && <div className="h-64 rounded-xl bg-surface-sunken animate-pulse" />}
 
       {tieQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Tie failed: {errorMessage(tieQuery.error)}
         </div>
       )}

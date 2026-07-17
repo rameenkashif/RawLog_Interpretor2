@@ -4,13 +4,15 @@ import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import { getTimeSlice } from "@/api/client";
 import type { SurveyInfoResponse } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors, type ChartColors } from "@/styles/tokens";
 
-const AXIS_STYLE = {
-  gridcolor: colors.gridLine,
-  linecolor: colors.borderStrong,
-  tickfont: { color: colors.inkMuted },
-};
+function axisStyle(colors: ChartColors) {
+  return {
+    gridcolor: colors.gridLine,
+    linecolor: colors.borderStrong,
+    tickfont: { color: colors.inkMuted },
+  };
+}
 
 /**
  * Map-view amplitude time slice: a fixed two-way-time cut across the
@@ -24,6 +26,7 @@ export default function TimeSliceView({ surveyInfo }: { surveyInfo: SurveyInfoRe
   // own horizon pick, so no single absolute time has every trace "on" at
   // once. best_time_ms is the sample with the fewest zero-padded traces,
   // a better default than the start of the recorded window.
+  const colors = useChartColors();
   const [timeMs, setTimeMs] = useState(surveyInfo.best_time_ms);
 
   const query = useQuery({
@@ -33,8 +36,8 @@ export default function TimeSliceView({ surveyInfo }: { surveyInfo: SurveyInfoRe
 
   const figure = useMemo(() => {
     if (!query.data) return null;
-    return buildFigure(query.data.crossline_axis, query.data.inline_axis, query.data.amplitude);
-  }, [query.data]);
+    return buildFigure(query.data.crossline_axis, query.data.inline_axis, query.data.amplitude, colors);
+  }, [query.data, colors]);
 
   return (
     <div className="space-y-3">
@@ -71,7 +74,7 @@ export default function TimeSliceView({ surveyInfo }: { surveyInfo: SurveyInfoRe
 
       {query.isLoading && <div className="h-[480px] rounded-xl bg-surface-sunken animate-pulse" />}
       {query.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Failed to load time slice: {(query.error as Error).message}
         </div>
       )}
@@ -93,7 +96,9 @@ function buildFigure(
   crosslineAxis: number[],
   inlineAxis: number[],
   amplitude: number[][], // (n_inlines, n_crosslines)
+  colors: ChartColors,
 ): { data: Data[]; layout: Partial<Layout> } {
+  const AXIS_STYLE = axisStyle(colors);
   // Backend already masks exact-zero (padding/no-data outside a trace's
   // own live window) as NaN in get_time_slice, but mask defensively here
   // too so a zero never renders as a flat mid-colorscale "gray" cell.

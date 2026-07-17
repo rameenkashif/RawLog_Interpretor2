@@ -1,5 +1,5 @@
 import type { WellZonesResponse } from "@/api/types";
-import { zoneColors } from "@/styles/tokens";
+import { useZoneColors } from "@/styles/tokens";
 
 function fmtPct(v: number | null): string {
   return v === null ? "—" : `${(v * 100).toFixed(1)}%`;
@@ -11,6 +11,7 @@ export default function ZoneSummaryTable({
 }: {
   zones: WellZonesResponse;
 }) {
+  const zoneColors = useZoneColors();
   return (
     <div className="bg-surface border border-border rounded-xl shadow-card overflow-hidden">
       <table className="w-full text-sm">

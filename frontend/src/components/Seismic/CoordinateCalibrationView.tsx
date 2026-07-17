@@ -28,13 +28,13 @@ function TrustBadge({ well }: { well: WellCalibrationReportItem }) {
   }
   if (well.trustworthy) {
     return (
-      <span className="text-xs font-semibold px-2.5 py-1 rounded-full border border-green-200 bg-green-50 text-green-700">
+      <span className="text-xs font-semibold px-2.5 py-1 rounded-full border border-success/30 bg-success-soft text-success">
         Trustworthy
       </span>
     );
   }
   return (
-    <span className="text-xs font-semibold px-2.5 py-1 rounded-full border border-red-300 bg-red-50 text-danger">
+    <span className="text-xs font-semibold px-2.5 py-1 rounded-full border border-danger/40 bg-danger-soft text-danger">
       Unresolved{well.is_extrapolated ? " — extrapolated" : " — outside bin tolerance"}
     </span>
   );
@@ -111,7 +111,7 @@ export default function CoordinateCalibrationView() {
       {reportQuery.isLoading && <div className="h-64 rounded-xl bg-surface-sunken animate-pulse" />}
 
       {reportQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Calibration unavailable: {errorMessage(reportQuery.error)}
         </div>
       )}

@@ -9,7 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import type { SyntheticSeismogramResponse } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors } from "@/styles/tokens";
 
 /**
  * Wavelet QC display: time-domain amplitude plus amplitude/phase spectra,
@@ -17,6 +17,7 @@ import { colors } from "@/styles/tokens";
  * behavior before trusting the synthetic it produces.
  */
 export default function WaveletView({ result }: { result: SyntheticSeismogramResponse }) {
+  const colors = useChartColors();
   const waveletData = result.wavelet_t_ms.map((t, i) => ({ t_ms: t, amplitude: result.wavelet_amplitude[i] }));
   const spectrumData = result.wavelet_spectrum_freq_hz.map((f, i) => ({
     freq_hz: f,

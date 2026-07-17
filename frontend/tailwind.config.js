@@ -1,59 +1,71 @@
 /** @type {import('tailwindcss').Config} */
+
+// Every entry below resolves an RGB triplet CSS custom property (defined in
+// src/styles/index.css under :root / :root.dark) rather than a flat hex
+// value, so every existing class name (bg-surface, text-ink-muted, etc.)
+// stays unchanged in every component but flips automatically when the
+// `dark` class toggles on <html> (see src/theme/ThemeContext.tsx). The
+// `rgb(var(...) / <alpha-value>)` form is required (not `rgb(var(...))`) so
+// Tailwind's opacity modifiers (e.g. `border-danger/30`) keep working.
+function withOpacity(variable) {
+  return `rgb(var(${variable}) / <alpha-value>)`;
+}
+
 export default {
-  // IMPORTANT: darkMode is intentionally left at its default ('media') OFF by
-  // never being referenced -- we do not use Tailwind's `dark:` variant
-  // anywhere in this app. The UI is light-mode only, per product requirement.
-  darkMode: ["class"], // only ever toggled manually if a future feature needs it; default state is always light
+  darkMode: ["class"],
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        // Light-theme design tokens (see src/styles/tokens.ts for the JS/TS mirror).
-        // Brand palette: blue (primary) + orange (secondary), on a white/near-white
-        // surface -- never a dark background.
         surface: {
-          DEFAULT: "#FFFFFF",
-          muted: "#F8FAFC",
-          sunken: "#EEF2F8",
+          DEFAULT: withOpacity("--color-surface"),
+          muted: withOpacity("--color-surface-muted"),
+          sunken: withOpacity("--color-surface-sunken"),
         },
         border: {
-          DEFAULT: "#E2E8F0",
-          strong: "#CBD5E1",
+          DEFAULT: withOpacity("--color-border"),
+          strong: withOpacity("--color-border-strong"),
         },
         ink: {
-          DEFAULT: "#0F172A",
-          muted: "#475569",
-          faint: "#94A3B8",
+          DEFAULT: withOpacity("--color-ink"),
+          muted: withOpacity("--color-ink-muted"),
+          faint: withOpacity("--color-ink-faint"),
         },
         accent: {
-          DEFAULT: "#2563EB",
-          soft: "#EFF6FF",
-          strong: "#1D4ED8",
-          deep: "#1E3A8A",
+          DEFAULT: withOpacity("--color-accent"),
+          soft: withOpacity("--color-accent-soft"),
+          strong: withOpacity("--color-accent-strong"),
+          deep: withOpacity("--color-accent-deep"),
         },
         orange: {
-          DEFAULT: "#F97316",
-          soft: "#FFF3E8",
-          strong: "#C2410C",
+          DEFAULT: withOpacity("--color-orange"),
+          soft: withOpacity("--color-orange-soft"),
+          strong: withOpacity("--color-orange-strong"),
         },
-        pay: "#16A34A",
-        reservoir: "#F59E0B",
-        nonreservoir: "#94A3B8",
-        danger: "#DC2626",
+        pay: withOpacity("--color-pay"),
+        reservoir: withOpacity("--color-reservoir"),
+        nonreservoir: withOpacity("--color-nonreservoir"),
+        danger: {
+          DEFAULT: withOpacity("--color-danger"),
+          soft: withOpacity("--color-danger-soft"),
+        },
+        success: {
+          DEFAULT: withOpacity("--color-success"),
+          soft: withOpacity("--color-success-soft"),
+        },
       },
       backgroundImage: {
         "brand-gradient":
           "linear-gradient(135deg, #2563EB 0%, #1D4ED8 55%, #F97316 130%)",
         "brand-gradient-soft":
-          "linear-gradient(135deg, #EFF6FF 0%, #FFF3E8 100%)",
+          "linear-gradient(135deg, rgb(var(--color-accent) / 0.08) 0%, rgb(var(--color-orange) / 0.08) 100%)",
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
       },
       boxShadow: {
-        card: "0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06)",
-        "card-hover":
-          "0 4px 12px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.06)",
+        card: "var(--shadow-card)",
+        "card-hover": "var(--shadow-card-hover)",
       },
     },
   },
