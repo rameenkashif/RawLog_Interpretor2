@@ -184,6 +184,33 @@ class TestDPTM:
         expected_increment = 100.0 * step / (2 * 3.28084 * 1e6)
         assert dptm.iloc[0] == pytest.approx(expected_increment, rel=1e-6)
 
+    def test_prefers_vendor_dptm_when_mostly_valid(self, config):
+        vendor_dptm = [2100.0, 2101.0, 2102.0, 2103.0]
+        df = pd.DataFrame({"DT": [90.0, 91.0, 92.0, 93.0], "DPTM": vendor_dptm})
+        dptm = pp.compute_dptm(df, config, step_depth=0.1524)
+        # Vendor values used verbatim, NOT the sonic-integration approximation
+        # (which would start near 0, not ~2100).
+        assert dptm.tolist() == pytest.approx(vendor_dptm)
+
+    def test_falls_back_when_vendor_dptm_mostly_invalid(self, config):
+        # Only 1 of 4 samples valid -- below the default 0.8 min-valid-fraction.
+        df = pd.DataFrame({"DT": [90.0, 91.0, 92.0, 93.0], "DPTM": [2100.0, np.nan, np.nan, np.nan]})
+        dptm = pp.compute_dptm(df, config, step_depth=0.1524)
+        assert dptm.iloc[0] != pytest.approx(2100.0)
+        assert dptm.iloc[0] == pytest.approx(90.0 * 0.1524 / (2 * 3.28084 * 1e6), rel=1e-6)
+
+    def test_vendor_min_valid_fraction_configurable(self, config):
+        df = pd.DataFrame({"DT": [90.0, 91.0, 92.0, 93.0], "DPTM": [2100.0, np.nan, np.nan, np.nan]})
+        cfg = {**config, "dptm": {"enabled": True, "vendor_min_valid_fraction": 0.2}}
+        dptm = pp.compute_dptm(df, cfg, step_depth=0.1524)
+        # 1/4 = 0.25 valid >= 0.2 threshold -- vendor curve used despite the NaNs.
+        assert dptm.iloc[0] == pytest.approx(2100.0)
+
+    def test_no_dptm_column_falls_back_to_sonic_integration(self, config):
+        df = pd.DataFrame({"DT": [90.0, 91.0, 92.0, 93.0]})
+        dptm = pp.compute_dptm(df, config, step_depth=0.1524)
+        assert dptm.iloc[0] == pytest.approx(90.0 * 0.1524 / (2 * 3.28084 * 1e6), rel=1e-6)
+
 
 # -----------------------------------------------------------------------------
 # 3.6 MD / TVD

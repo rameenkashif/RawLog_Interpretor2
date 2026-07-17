@@ -238,17 +238,62 @@ class WellSeismicTieResponse(BaseModel):
             "tie_config.yaml was used instead (no coordinates available)."
         ),
     )
-    twt_ms: list[float]
-    synthetic: list[float]
-    shifted_synthetic: list[float]
-    real_trace: list[float]
-    best_shift_ms: float
+    inline: int | None = Field(None, description="Nearest trace's inline number, if the dataset carries geometry headers")
+    crossline: int | None = Field(None, description="Nearest trace's crossline number, if the dataset carries geometry headers")
+    best_freq_hz: float = Field(..., description="Winning Ricker wavelet frequency from the full-window frequency/polarity/shift search")
+    polarity: int = Field(..., description="+1 or -1 -- winning polarity from the search")
+    bulk_shift_ms: float = Field(..., description="Winning bulk time shift from the search, ms")
     correlation: float
-    max_shift_ms: float = Field(300.0, description="Bulk-shift search range half-width used, ms")
+    max_shift_ms: float = Field(100.0, description="Bulk-shift search range half-width used, ms")
     boundary_pinned: bool = Field(
-        False, description="True if best_shift_ms landed within ~5% of max_shift_ms -- diagnostic of a spurious match, not a genuine tie"
+        False, description="True if bulk_shift_ms landed within ~5% of max_shift_ms -- diagnostic of a spurious match, not a genuine tie"
     )
+    n_used: int = Field(..., description="Number of samples actually overlapping the seismic window at the winning shift")
+    time_ms: list[float] = Field(..., description="TWT axis (already shifted by bulk_shift_ms), covering the well's own reflectivity interval only")
+    synthetic_amplitude: list[float] = Field(..., description="Normalized, polarity-applied synthetic, same length as time_ms")
+    seismic_amplitude: list[float] = Field(..., description="Real seismic trace interpolated onto time_ms and normalized")
+    reflectivity: list[float] = Field(..., description="Unshifted reflectivity series, same length as time_ms")
     geometry_warning: str | None = None
+
+
+class WellSeismicTieRow(BaseModel):
+    """One row of the all-wells tie summary table -- the batch analogue of
+    WellSeismicTieResponse's scalar fields, for GET /tie/all's results table
+    + map. error is set (with the other tie-result fields null) for a well
+    that couldn't be tied (missing curves, no coordinates, etc.), rather
+    than dropping it from the table silently."""
+
+    well_id: str
+    well_x: float | None = None
+    well_y: float | None = None
+    trace_index: int | None = None
+    trace_x: float | None = None
+    trace_y: float | None = None
+    inline: int | None = None
+    crossline: int | None = None
+    distance_m: float | None = None
+    tie_method: str | None = None
+    best_freq_hz: float | None = None
+    polarity: int | None = None
+    bulk_shift_ms: float | None = None
+    correlation: float | None = None
+    boundary_pinned: bool | None = None
+    error: str | None = None
+
+
+class SurveyFootprintPoint(BaseModel):
+    x: float
+    y: float
+
+
+class WellSeismicTieBatchResponse(BaseModel):
+    dataset_id: str
+    rows: list[WellSeismicTieRow]
+    survey_footprint: list[SurveyFootprintPoint] = Field(
+        default_factory=list,
+        description="Downsampled trace X/Y coordinates for a background map footprint; empty if the dataset has no trace coordinates.",
+    )
+    warnings: list[str] = Field(default_factory=list)
 
 # -----------------------------------------------------------------------------
 # Seismic Visualization (direct SEG-Y inline/crossline/time-slice/spectrum)

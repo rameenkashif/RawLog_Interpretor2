@@ -1,5 +1,9 @@
-wavelet_freq_hz: 30.0
-dt_unit: "us_per_ft"
+# Bulk-shift search half-width for search_best_tie_full_window's full-window
+# frequency/polarity/shift sweep, ms. Wavelet frequency candidates are
+# well_seismic_tie.DEFAULT_TIE_SEARCH_FREQS_HZ (15-45 Hz, 2.5 Hz steps) --
+# not configured here, since changing "the" frequency search space changes
+# what a tie even means, not just how far it searches for one.
+tie_search_max_shift_ms: 100
 max_tie_search_radius_m: 1000
 
 well_coordinate_overrides:

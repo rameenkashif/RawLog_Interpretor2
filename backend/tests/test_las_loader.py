@@ -214,3 +214,55 @@ class TestCurveUnitInference:
         dt_info = next(c for c in loaded.metadata.curve_units if c.curve == "DT")
         assert dt_info.resolved_unit == "us_per_ft"
         assert dt_info.conversion_applied is False
+
+
+class TestOptionalDptmCurve:
+    """DPTM is optional: loaded (and null-cleaned) like the required curves
+    when present, but its absence doesn't fail validation -- see
+    las_loader.OPTIONAL_CURVES and petrophysics.compute_dptm's preference
+    for a real vendor curve over the sonic-integration fallback."""
+
+    def test_dptm_loaded_when_present(self):
+        curves = (
+            "~Curve Information -----------------------------------------\n"
+            "DEPT.m  :\n"
+            "GR      .   :\n"
+            "RESISTIVITY.   :\n"
+            "RHOB    .   :\n"
+            "NPHI    .   :\n"
+            "DT      .   :\n"
+            "DPTM    .   :\n"
+            "~ASCII -----------------------------------------------------\n"
+            " 100.0   50.0   10.0   2.4   0.2   90.0   2100.0\n"
+            " 100.5   51.0   10.5   2.4   0.2   90.5   2101.0\n"
+            " 101.0   52.0   11.0   2.4   0.2   91.0   2102.0\n"
+        )
+        text = (
+            "~Version ---------------------------------------------------\n"
+            "VERS.   2.0 :\n"
+            "WRAP.    NO :\n"
+            "~Well ------------------------------------------------------\n"
+            "STRT.m 100.0 : START DEPTH\n"
+            "STOP.m 101.0 : STOP DEPTH\n"
+            "STEP.m   0.5 : STEP\n"
+            "NULL.    -9999.25 : NULL VALUE\n"
+            "WELL.        TEST-1 :\n" + curves
+        )
+        tmp = tempfile.NamedTemporaryFile(suffix=".las", delete=False, mode="w")
+        tmp.write(text)
+        tmp.close()
+        loaded = load_las_file(Path(tmp.name))
+        assert "DPTM" in loaded.df.columns
+        assert loaded.df["DPTM"].tolist() == pytest.approx([2100.0, 2101.0, 2102.0])
+
+    def test_dptm_absent_does_not_fail_validation(self):
+        path = _write_las("")  # MINIMAL_CURVES has no DPTM column
+        loaded = load_las_file(path)
+        assert "DPTM" not in loaded.df.columns
+
+    def test_real_z02_dptm_loaded_from_vendor_curve(self):
+        real_path = Path(__file__).resolve().parents[1] / "data" / "raw" / "Z-02_raw.las"
+        loaded = load_las_file(real_path)
+        assert "DPTM" in loaded.df.columns
+        assert loaded.df["DPTM"].notna().all()
+        assert loaded.df["DPTM"].min() > 2000.0  # real vendor TWT range, not a 0-anchored curve

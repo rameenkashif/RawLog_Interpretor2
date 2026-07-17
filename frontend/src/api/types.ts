@@ -143,15 +143,51 @@ export interface WellSeismicTieResponse {
   trace_index: number;
   distance_m: number | null;
   tie_method: "nearest_trace" | "manual_override";
-  twt_ms: number[];
-  synthetic: number[];
-  shifted_synthetic: number[];
-  real_trace: number[];
-  best_shift_ms: number;
+  inline: number | null;
+  crossline: number | null;
+  best_freq_hz: number;
+  polarity: 1 | -1;
+  bulk_shift_ms: number;
   correlation: number;
   max_shift_ms: number;
   boundary_pinned: boolean;
+  n_used: number;
+  time_ms: number[];
+  synthetic_amplitude: number[];
+  seismic_amplitude: number[];
+  reflectivity: number[];
   geometry_warning: string | null;
+}
+
+export interface WellSeismicTieRow {
+  well_id: string;
+  well_x: number | null;
+  well_y: number | null;
+  trace_index: number | null;
+  trace_x: number | null;
+  trace_y: number | null;
+  inline: number | null;
+  crossline: number | null;
+  distance_m: number | null;
+  tie_method: "nearest_trace" | "manual_override" | null;
+  best_freq_hz: number | null;
+  polarity: (1 | -1) | null;
+  bulk_shift_ms: number | null;
+  correlation: number | null;
+  boundary_pinned: boolean | null;
+  error: string | null;
+}
+
+export interface SurveyFootprintPoint {
+  x: number;
+  y: number;
+}
+
+export interface WellSeismicTieBatchResponse {
+  dataset_id: string;
+  rows: WellSeismicTieRow[];
+  survey_footprint: SurveyFootprintPoint[];
+  warnings: string[];
 }
 
 // -----------------------------------------------------------------------------
