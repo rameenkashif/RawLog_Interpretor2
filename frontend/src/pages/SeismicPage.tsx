@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { getSeismicAttributes, getSeismicExportUrl, getSeismicSection, listSeismic } from "@/api/client";
+import { getSeismicExportUrl, listSeismic } from "@/api/client";
 import SeismicUpload from "@/components/SeismicUpload";
-import SeismicSection from "@/components/SeismicSection";
-import SeismicAttributesChart from "@/components/SeismicAttributesChart";
 import WellSeismicTie from "@/components/WellSeismicTie";
 import SeismicPanel from "@/components/Seismic/SeismicPanel";
 
@@ -13,10 +11,9 @@ function fmtPct(v: number | null): string {
 }
 
 /**
- * Seismic module (SEG-Y): upload, dataset picker, raw amplitude section
- * display, and computed attribute trends including the heuristic
- * VSH/PHIE/SWE seismic proxies. Linked from the dashboard's "Seismic Data"
- * summary card.
+ * Seismic module (SEG-Y): upload, dataset picker, well-to-seismic tie, and
+ * the inline/crossline/time-slice/spectrum visualization panel. Linked from
+ * the dashboard's "Seismic Data" summary card.
  */
 export default function SeismicPage() {
   const datasetsQuery = useQuery({ queryKey: ["seismic-datasets"], queryFn: listSeismic });
@@ -27,18 +24,6 @@ export default function SeismicPage() {
       setSelectedId(datasetsQuery.data[0].dataset_id);
     }
   }, [datasetsQuery.data, selectedId]);
-
-  const sectionQuery = useQuery({
-    queryKey: ["seismic-section", selectedId],
-    queryFn: () => getSeismicSection(selectedId!),
-    enabled: Boolean(selectedId),
-  });
-
-  const attributesQuery = useQuery({
-    queryKey: ["seismic-attributes", selectedId],
-    queryFn: () => getSeismicAttributes(selectedId!),
-    enabled: Boolean(selectedId),
-  });
 
   const selectedSummary = datasetsQuery.data?.find((d) => d.dataset_id === selectedId);
 
@@ -56,8 +41,8 @@ export default function SeismicPage() {
             </p>
             <h1 className="text-2xl font-extrabold text-ink tracking-tight">Seismic Data</h1>
             <p className="text-sm text-ink-muted mt-1 max-w-xl">
-              Raw SEG-Y amplitude sections and derived attributes, including uncalibrated
-              VSH/PHIE/SWE seismic proxies for lateral trend screening away from well control.
+              Upload SEG-Y volumes, tie wells to the nearest trace, and explore inlines,
+              crosslines, time slices, and spectra.
             </p>
           </div>
         </div>
@@ -98,50 +83,26 @@ export default function SeismicPage() {
       </div>
 
       {selectedSummary && (
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <SummaryTile label="Traces" value={selectedSummary.n_traces.toLocaleString()} />
-          <SummaryTile
-            label="Duration"
-            value={`${selectedSummary.duration_ms.toFixed(0)} ms`}
-          />
-          <SummaryTile label="Avg VSH Proxy" value={fmtPct(selectedSummary.avg_vsh_proxy)} />
-          <SummaryTile label="Avg PHIE Proxy" value={fmtPct(selectedSummary.avg_phie_proxy)} />
-          <SummaryTile label="Avg SWE Proxy" value={fmtPct(selectedSummary.avg_swe_proxy)} />
-        </div>
-      )}
-
-      {selectedId && (
-        <div className="flex justify-end">
-          
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 flex-1">
+            <SummaryTile label="Traces" value={selectedSummary.n_traces.toLocaleString()} />
+            <SummaryTile
+              label="Duration"
+              value={`${selectedSummary.duration_ms.toFixed(0)} ms`}
+            />
+            <SummaryTile label="Avg VSH Proxy" value={fmtPct(selectedSummary.avg_vsh_proxy)} />
+            <SummaryTile label="Avg PHIE Proxy" value={fmtPct(selectedSummary.avg_phie_proxy)} />
+            <SummaryTile label="Avg SWE Proxy" value={fmtPct(selectedSummary.avg_swe_proxy)} />
+          </div>
+          {selectedId && (
             <a
               href={getSeismicExportUrl(selectedId)}
-            className="text-xs font-semibold px-3.5 py-1.5 rounded-full border border-accent/30 bg-accent-soft text-accent-strong hover:bg-accent hover:text-white transition-colors"
-          >
-            Export Attributes CSV
-          </a>
+              className="text-xs font-semibold px-3.5 py-1.5 rounded-full border border-accent/30 bg-accent-soft text-accent-strong hover:bg-accent hover:text-white transition-colors whitespace-nowrap"
+            >
+              Export Attributes CSV
+            </a>
+          )}
         </div>
-      )}
-
-      {sectionQuery.isLoading && (
-        <div className="h-[520px] rounded-xl bg-surface-sunken animate-pulse" />
-      )}
-      {sectionQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
-          Failed to load seismic section: {(sectionQuery.error as Error).message}
-        </div>
-      )}
-      {sectionQuery.data && (
-        <section>
-          <h2 className="text-sm font-semibold text-ink mb-2">Raw Amplitude Section</h2>
-          <SeismicSection section={sectionQuery.data} />
-        </section>
-      )}
-
-      {attributesQuery.data && (
-        <section>
-          <h2 className="text-sm font-semibold text-ink mb-2">Computed Attributes</h2>
-          <SeismicAttributesChart attributes={attributesQuery.data} />
-        </section>
       )}
 
       <section>
