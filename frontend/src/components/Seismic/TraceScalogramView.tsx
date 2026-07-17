@@ -4,6 +4,7 @@ import Plot from "react-plotly.js";
 import { AxiosError } from "axios";
 import { getSpectralDecompositionTrace } from "@/api/client";
 import type { SurveyInfoResponse } from "@/api/types";
+import { useChartColors } from "@/styles/tokens";
 import { buildFigure } from "./SpectralDecompView";
 
 type ScalogramMethod = "cwt" | "sswt";
@@ -34,6 +35,7 @@ function errorMessage(error: unknown): string {
  * instead of x=crossline) rather than writing new rendering logic.
  */
 export default function TraceScalogramView({ surveyInfo }: { surveyInfo: SurveyInfoResponse }) {
+  const colors = useChartColors();
   const [inlineNumber, setInlineNumber] = useState(surveyInfo.inline_min);
   const [crosslineNumber, setCrosslineNumber] = useState(surveyInfo.crossline_min);
   const [scalogramMethod, setScalogramMethod] = useState<ScalogramMethod>("cwt");
@@ -51,8 +53,8 @@ export default function TraceScalogramView({ surveyInfo }: { surveyInfo: SurveyI
 
   const figure = traceQuery.data
     ? isSswt && traceQuery.data.sswt_freq_hz && traceQuery.data.sswt_amplitude
-      ? buildFigure(traceQuery.data.sswt_freq_hz, traceQuery.data.time_ms, traceQuery.data.sswt_amplitude, "Frequency (Hz)")
-      : buildFigure(traceQuery.data.freq_hz, traceQuery.data.time_ms, traceQuery.data.energy, "Frequency (Hz)")
+      ? buildFigure(traceQuery.data.sswt_freq_hz, traceQuery.data.time_ms, traceQuery.data.sswt_amplitude, colors, "Frequency (Hz)")
+      : buildFigure(traceQuery.data.freq_hz, traceQuery.data.time_ms, traceQuery.data.energy, colors, "Frequency (Hz)")
     : null;
 
   return (
@@ -126,7 +128,7 @@ export default function TraceScalogramView({ surveyInfo }: { surveyInfo: SurveyI
 
       {traceQuery.isLoading && <div className="h-[420px] rounded-xl bg-surface-sunken animate-pulse" />}
       {traceQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Failed to load trace scalogram: {errorMessage(traceQuery.error)}
         </div>
       )}

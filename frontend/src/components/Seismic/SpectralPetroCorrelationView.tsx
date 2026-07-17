@@ -16,7 +16,7 @@ import type {
   SpectralPetroCorrelationWellResult,
   SswtPetroCorrelationWellResult,
 } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors } from "@/styles/tokens";
 
 type CompareMethod = "swt" | "sswt";
 
@@ -75,6 +75,7 @@ function LowSampleBadge() {
 }
 
 function CorrelationBarChart({ otherLabel, pairs }: { otherLabel: string; pairs: ComparisonPair[] }) {
+  const colors = useChartColors();
   const data = pairs.map((p) => ({ name: p.label, CWT: p.cwtR ?? 0, [otherLabel]: p.otherR ?? 0 }));
   return (
     <div className="bg-surface border border-border rounded-xl p-4 shadow-card">
@@ -373,7 +374,7 @@ export default function SpectralPetroCorrelationView() {
       {corrQuery.isLoading && <div className="h-64 rounded-xl bg-surface-sunken animate-pulse" />}
 
       {corrQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Correlation failed: {errorMessage(corrQuery.error)}
         </div>
       )}

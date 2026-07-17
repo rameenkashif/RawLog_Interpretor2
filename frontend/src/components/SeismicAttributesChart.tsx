@@ -2,13 +2,15 @@ import { useMemo } from "react";
 import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import type { SeismicAttributesResponse } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors, type ChartColors } from "@/styles/tokens";
 
-const AXIS_STYLE = {
-  gridcolor: colors.gridLine,
-  linecolor: colors.borderStrong,
-  tickfont: { color: colors.inkMuted },
-};
+function axisStyle(colors: ChartColors) {
+  return {
+    gridcolor: colors.gridLine,
+    linecolor: colors.borderStrong,
+    tickfont: { color: colors.inkMuted },
+  };
+}
 
 /**
  * Per-trace seismic attribute trends: raw attributes (RMS amplitude,
@@ -22,9 +24,10 @@ export default function SeismicAttributesChart({
 }: {
   attributes: SeismicAttributesResponse;
 }) {
+  const colors = useChartColors();
   const { rawData, rawLayout, proxyData, proxyLayout } = useMemo(
-    () => buildFigures(attributes),
-    [attributes]
+    () => buildFigures(attributes, colors),
+    [attributes, colors]
   );
 
   return (
@@ -63,7 +66,8 @@ export default function SeismicAttributesChart({
   );
 }
 
-function buildFigures(attributes: SeismicAttributesResponse) {
+function buildFigures(attributes: SeismicAttributesResponse, colors: ChartColors) {
+  const AXIS_STYLE = axisStyle(colors);
   const rawData: Data[] = [
     {
       type: "scatter",

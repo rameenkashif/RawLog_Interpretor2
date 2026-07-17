@@ -10,7 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import type { SyntheticSeismogramResponse } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors } from "@/styles/tokens";
 
 type Domain = "time" | "frequency";
 
@@ -41,6 +41,7 @@ function rms(values: number[]): number {
  * actually returned by the API (CSV export, any future tool) so nothing
  * downstream of this component is affected. */
 export default function SyntheticTraceOverlay({ result }: { result: SyntheticSeismogramResponse }) {
+  const colors = useChartColors();
   const [domain, setDomain] = useState<Domain>("time");
 
   const realRms = rms(result.real_trace);
@@ -71,11 +72,11 @@ export default function SyntheticTraceOverlay({ result }: { result: SyntheticSei
               : `Distance: ${result.distance_m?.toFixed(0)} m`}
           </span>
           <span>Best shift: {result.best_shift_ms.toFixed(1)} ms</span>
-          <span className={result.correlation > 0.5 ? "text-green-600" : "text-orange-600"}>
+          <span className={result.correlation > 0.5 ? "text-success" : "text-orange-strong"}>
             Correlation: {result.correlation.toFixed(3)}
           </span>
           {result.polarity === -1 && (
-            <span className="text-orange-600">Polarity: reversed</span>
+            <span className="text-orange-strong">Polarity: reversed</span>
           )}
         </div>
 

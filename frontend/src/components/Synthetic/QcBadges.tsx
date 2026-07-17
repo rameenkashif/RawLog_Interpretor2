@@ -5,8 +5,8 @@ function Badge({ tone, children }: { tone: "orange" | "accent" | "green" | "dang
   const toneClasses = {
     orange: "border-orange/30 bg-orange-soft text-orange-strong",
     accent: "border-accent/30 bg-accent-soft text-accent-strong",
-    green: "border-green-200 bg-green-50 text-green-700",
-    danger: "border-red-300 bg-red-50 text-danger",
+    green: "border-success/30 bg-success-soft text-success",
+    danger: "border-danger/40 bg-danger-soft text-danger",
   }[tone];
   return (
     <span className={`text-xs font-semibold px-3 py-1.5 rounded-full border ${toneClasses}`}>{children}</span>

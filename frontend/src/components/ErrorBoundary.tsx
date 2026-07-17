@@ -29,7 +29,7 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div className="max-w-xl mx-auto mt-16 bg-surface border border-red-200 rounded-xl p-6 text-center shadow-card">
+        <div className="max-w-xl mx-auto mt-16 bg-surface border border-danger/30 rounded-xl p-6 text-center shadow-card">
           <p className="text-sm font-semibold text-danger mb-1">Something went wrong</p>
           <p className="text-xs text-ink-muted mb-4">{this.state.error.message}</p>
           <button

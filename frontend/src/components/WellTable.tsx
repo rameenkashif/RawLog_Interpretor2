@@ -34,10 +34,10 @@ function SweBadge({ swe }: { swe: number | null }) {
   const pct = swe * 100;
   const style =
     swe < 0.4
-      ? "bg-emerald-50 text-emerald-700"
+      ? "bg-success-soft text-success"
       : swe < 0.65
         ? "bg-orange-soft text-orange-strong"
-        : "bg-slate-100 text-ink-muted";
+        : "bg-surface-sunken text-ink-muted";
   return (
     <span
       className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${style}`}

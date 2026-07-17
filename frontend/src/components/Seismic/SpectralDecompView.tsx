@@ -11,14 +11,16 @@ import type {
   SurveyInfoResponse,
   SwtWavelet,
 } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors, type ChartColors } from "@/styles/tokens";
 import TraceScalogramView from "./TraceScalogramView";
 
-const AXIS_STYLE = {
-  gridcolor: colors.gridLine,
-  linecolor: colors.borderStrong,
-  tickfont: { color: colors.inkMuted },
-};
+function axisStyle(colors: ChartColors) {
+  return {
+    gridcolor: colors.gridLine,
+    linecolor: colors.borderStrong,
+    tickfont: { color: colors.inkMuted },
+  };
+}
 
 const DEFAULT_BAND_MIN_HZ = 5;
 const DEFAULT_BAND_MAX_HZ = 80;
@@ -55,6 +57,7 @@ const SWT_WAVELETS: { value: SwtWavelet; label: string }[] = [
  * every pixel of movement.
  */
 export default function SpectralDecompView({ surveyInfo }: { surveyInfo: SurveyInfoResponse }) {
+  const colors = useChartColors();
   const [inlineNumber, setInlineNumber] = useState(surveyInfo.inline_min);
   const [method, setMethod] = useState<SpectralMethod>("stft");
   const [frequencyHz, setFrequencyHz] = useState(
@@ -90,8 +93,8 @@ export default function SpectralDecompView({ surveyInfo }: { surveyInfo: SurveyI
 
   const figure = useMemo(() => {
     if (!sliceQuery.data) return null;
-    return buildFigure(sliceQuery.data.crossline_axis, sliceQuery.data.time_ms, sliceQuery.data.amplitude);
-  }, [sliceQuery.data]);
+    return buildFigure(sliceQuery.data.crossline_axis, sliceQuery.data.time_ms, sliceQuery.data.amplitude, colors);
+  }, [sliceQuery.data, colors]);
 
   const swtData = isSwt && sliceQuery.data && "band_hz" in sliceQuery.data ? sliceQuery.data : null;
 
@@ -222,7 +225,7 @@ export default function SpectralDecompView({ surveyInfo }: { surveyInfo: SurveyI
 
       {sliceQuery.isLoading && <div className="h-[480px] rounded-xl bg-surface-sunken animate-pulse" />}
       {sliceQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Failed to load spectral decomposition: {errorMessage(sliceQuery.error)}
         </div>
       )}
@@ -263,8 +266,10 @@ export function buildFigure(
   xAxis: number[],
   timeMs: number[],
   energy: number[][], // (n_time, n_x)
+  colors: ChartColors,
   xAxisLabel: string = "Crossline",
 ): { data: Data[]; layout: Partial<Layout> } {
+  const AXIS_STYLE = axisStyle(colors);
   let maxVal = 1e-6;
   for (const row of energy) {
     for (const value of row) {

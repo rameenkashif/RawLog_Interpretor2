@@ -2,8 +2,6 @@
 <html lang="en">
     <head>
         <meta charset="UTF-8" />
-        <!-- Force light UI regardless of OS/browser color-scheme preference (non-negotiable UI requirement) -->
-        <meta name="color-scheme" content="light only" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -12,6 +10,19 @@
             rel="stylesheet"
         />
         <title>RawReservoirClassifier</title>
+        <script>
+            // Set the `dark` class before first paint (reading the persisted
+            // preference, falling back to OS preference) so there's no flash
+            // of the wrong theme -- see src/theme/ThemeContext.tsx, which is
+            // the source of truth for this same logic post-hydration.
+            (function () {
+                var stored = localStorage.getItem("theme");
+                var dark =
+                    stored === "dark" ||
+                    (!stored && window.matchMedia("(prefers-color-scheme: dark)").matches);
+                if (dark) document.documentElement.classList.add("dark");
+            })();
+        </script>
     </head>
     <body class="bg-surface text-ink">
         <div id="root"></div>

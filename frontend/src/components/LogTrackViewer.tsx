@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import type { WellCurvesResponse } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors, type ChartColors } from "@/styles/tokens";
 
 interface LogTrackViewerProps {
   curves: WellCurvesResponse;
@@ -10,15 +10,17 @@ interface LogTrackViewerProps {
   depthRange?: [number, number];
 }
 
-const AXIS_STYLE = {
-  gridcolor: colors.gridLine,
-  zerolinecolor: colors.border,
-  linecolor: colors.borderStrong,
-  tickfont: { color: colors.inkMuted, size: 10 },
-  titlefont: { color: colors.inkMuted, size: 11 },
-  showline: true,
-  mirror: true,
-};
+function axisStyle(colors: ChartColors) {
+  return {
+    gridcolor: colors.gridLine,
+    zerolinecolor: colors.border,
+    linecolor: colors.borderStrong,
+    tickfont: { color: colors.inkMuted, size: 10 },
+    titlefont: { color: colors.inkMuted, size: 11 },
+    showline: true,
+    mirror: true,
+  };
+}
 
 /**
  * Classic multi-track wireline log display, built once and reused for every
@@ -39,9 +41,10 @@ export default function LogTrackViewer({
   curves,
   depthRange,
 }: LogTrackViewerProps) {
+  const colors = useChartColors();
   const { data, layout } = useMemo(
-    () => buildFigure(curves, depthRange),
-    [curves, depthRange],
+    () => buildFigure(curves, depthRange, colors),
+    [curves, depthRange, colors],
   );
 
   return (
@@ -58,8 +61,10 @@ export default function LogTrackViewer({
 
 function buildFigure(
   curves: WellCurvesResponse,
-  depthRange?: [number, number],
+  depthRange: [number, number] | undefined,
+  colors: ChartColors,
 ): { data: Data[]; layout: Partial<Layout> } {
+  const AXIS_STYLE = axisStyle(colors);
   const rows = curves.data;
   const depth = rows.map((r) => r.DEPT as number);
 

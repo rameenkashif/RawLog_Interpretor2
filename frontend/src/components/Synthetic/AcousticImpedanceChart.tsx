@@ -2,13 +2,15 @@ import { useMemo } from "react";
 import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import type { SyntheticSeismogramResponse } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors, type ChartColors } from "@/styles/tokens";
 
-const AXIS_STYLE = {
-  gridcolor: colors.gridLine,
-  linecolor: colors.borderStrong,
-  tickfont: { color: colors.inkMuted },
-};
+function axisStyle(colors: ChartColors) {
+  return {
+    gridcolor: colors.gridLine,
+    linecolor: colors.borderStrong,
+    tickfont: { color: colors.inkMuted },
+  };
+}
 
 /**
  * Acoustic impedance (depth domain) and reflectivity (depth + time domain)
@@ -17,7 +19,8 @@ const AXIS_STYLE = {
  * elsewhere in the app (LogTrackViewer.tsx).
  */
 export default function AcousticImpedanceChart({ result }: { result: SyntheticSeismogramResponse }) {
-  const { data, layout } = useMemo(() => buildFigure(result), [result]);
+  const colors = useChartColors();
+  const { data, layout } = useMemo(() => buildFigure(result, colors), [result, colors]);
 
   return (
     <div className="bg-surface border border-border rounded-xl p-2 shadow-card">
@@ -26,7 +29,8 @@ export default function AcousticImpedanceChart({ result }: { result: SyntheticSe
   );
 }
 
-function buildFigure(result: SyntheticSeismogramResponse): { data: Data[]; layout: Partial<Layout> } {
+function buildFigure(result: SyntheticSeismogramResponse, colors: ChartColors): { data: Data[]; layout: Partial<Layout> } {
+  const AXIS_STYLE = axisStyle(colors);
   const aiTrace = {
     type: "scatter",
     mode: "lines",

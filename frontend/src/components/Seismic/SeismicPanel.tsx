@@ -68,7 +68,7 @@ export default function SeismicPanel() {
       )}
 
       {surveyInfoQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Seismic volume unavailable: {(surveyInfoQuery.error as Error).message}. Drop a .sgy/.segy
           file into backend/data/seismic_raw/ and reload.
         </div>

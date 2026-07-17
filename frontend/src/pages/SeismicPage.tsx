@@ -28,8 +28,8 @@ export default function SeismicPage() {
   const selectedSummary = datasetsQuery.data?.find((d) => d.dataset_id === selectedId);
 
   return (
-    <div className="pb-24 space-y-6">
-      <div className="relative overflow-hidden rounded-2xl border border-border bg-brand-gradient-soft px-6 py-6">
+    <div className="pb-12 space-y-4">
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-brand-gradient-soft px-5 py-4">
         <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-orange/10 blur-2xl" />
         <div className="relative flex items-center justify-between flex-wrap gap-4">
           <div>
@@ -39,7 +39,7 @@ export default function SeismicPage() {
             <p className="text-xs font-semibold uppercase tracking-wider text-accent-strong mb-1 mt-1">
               Seismic Module
             </p>
-            <h1 className="text-2xl font-extrabold text-ink tracking-tight">Seismic Data</h1>
+            <h1 className="text-xl font-extrabold text-ink tracking-tight">Seismic Data</h1>
             <p className="text-sm text-ink-muted mt-1 max-w-xl">
               Upload SEG-Y volumes, tie wells to the nearest trace, and explore inlines,
               crosslines, time slices, and spectra.
@@ -48,9 +48,9 @@ export default function SeismicPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 items-start">
         <div className="xl:col-span-2">
-          <h2 className="text-sm font-semibold text-ink mb-2">Datasets</h2>
+          <h2 className="text-sm font-semibold text-ink mb-1.5">Datasets</h2>
           {datasetsQuery.isLoading && (
             <div className="h-16 rounded-xl bg-surface-sunken animate-pulse" />
           )}
@@ -83,8 +83,8 @@ export default function SeismicPage() {
       </div>
 
       {selectedSummary && (
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 flex-1">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 flex-1">
             <SummaryTile label="Traces" value={selectedSummary.n_traces.toLocaleString()} />
             <SummaryTile
               label="Duration"
@@ -106,11 +106,11 @@ export default function SeismicPage() {
       )}
 
       <section>
-        <h2 className="text-sm font-semibold text-ink mb-2">Well-to-Seismic Tie</h2>
+        <h2 className="text-sm font-semibold text-ink mb-1.5">Well-to-Seismic Tie</h2>
         <WellSeismicTie />
       </section>
 
-      <section className="border-t border-border pt-6">
+      <section className="border-t border-border pt-4">
         <SeismicPanel />
       </section>
     </div>

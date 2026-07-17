@@ -4,13 +4,15 @@ import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import { AxiosError } from "axios";
 import { getWellZoneTieMap } from "@/api/client";
-import { colors } from "@/styles/tokens";
+import { useChartColors, type ChartColors } from "@/styles/tokens";
 
-const AXIS_STYLE = {
-  gridcolor: colors.gridLine,
-  linecolor: colors.borderStrong,
-  tickfont: { color: colors.inkMuted },
-};
+function axisStyle(colors: ChartColors) {
+  return {
+    gridcolor: colors.gridLine,
+    linecolor: colors.borderStrong,
+    tickfont: { color: colors.inkMuted },
+  };
+}
 
 function errorMessage(error: unknown): string {
   if (error instanceof AxiosError) {
@@ -34,6 +36,7 @@ function errorMessage(error: unknown): string {
  * always shown alongside the map.
  */
 export default function WellZoneTieMapView() {
+  const colors = useChartColors();
   const [idwPower, setIdwPower] = useState(2);
 
   const query = useQuery({
@@ -44,8 +47,8 @@ export default function WellZoneTieMapView() {
 
   const figure = useMemo(() => {
     if (!query.data) return null;
-    return buildFigure(query.data);
-  }, [query.data]);
+    return buildFigure(query.data, colors);
+  }, [query.data, colors]);
 
   return (
     <div className="space-y-3">
@@ -68,7 +71,7 @@ export default function WellZoneTieMapView() {
       {query.isLoading && <div className="h-[520px] rounded-xl bg-surface-sunken animate-pulse" />}
 
       {query.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Well-seismic tie map unavailable: {errorMessage(query.error)}
         </div>
       )}
@@ -131,12 +134,16 @@ export default function WellZoneTieMapView() {
   );
 }
 
-function buildFigure(data: {
-  inline_axis: number[];
-  crossline_axis: number[];
-  predicted_vsh: (number | null)[][];
-  wells: { well_id: string; well_name: string; inline: number; crossline: number }[];
-}): { data: Data[]; layout: Partial<Layout> } {
+function buildFigure(
+  data: {
+    inline_axis: number[];
+    crossline_axis: number[];
+    predicted_vsh: (number | null)[][];
+    wells: { well_id: string; well_name: string; inline: number; crossline: number }[];
+  },
+  colors: ChartColors,
+): { data: Data[]; layout: Partial<Layout> } {
+  const AXIS_STYLE = axisStyle(colors);
   const heatmap = {
     type: "heatmap",
     x: data.crossline_axis,

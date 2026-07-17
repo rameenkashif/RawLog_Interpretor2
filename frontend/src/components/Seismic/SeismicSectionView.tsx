@@ -4,13 +4,15 @@ import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import { getCrosslineSection, getInlineSection } from "@/api/client";
 import type { SurveyInfoResponse } from "@/api/types";
-import { colors } from "@/styles/tokens";
+import { useChartColors, type ChartColors } from "@/styles/tokens";
 
-const AXIS_STYLE = {
-  gridcolor: colors.gridLine,
-  linecolor: colors.borderStrong,
-  tickfont: { color: colors.inkMuted },
-};
+function axisStyle(colors: ChartColors) {
+  return {
+    gridcolor: colors.gridLine,
+    linecolor: colors.borderStrong,
+    tickfont: { color: colors.inkMuted },
+  };
+}
 
 /**
  * Inline/crossline amplitude section viewer: pick a direction and a
@@ -20,6 +22,7 @@ const AXIS_STYLE = {
  * handles this data shape and volume well.
  */
 export default function SeismicSectionView({ surveyInfo }: { surveyInfo: SurveyInfoResponse }) {
+  const colors = useChartColors();
   const [direction, setDirection] = useState<"inline" | "crossline">("inline");
   const [inlineNumber, setInlineNumber] = useState(surveyInfo.inline_min);
   const [crosslineNumber, setCrosslineNumber] = useState(surveyInfo.crossline_min);
@@ -45,6 +48,7 @@ export default function SeismicSectionView({ surveyInfo }: { surveyInfo: SurveyI
         inlineQuery.data.twt_axis_ms,
         inlineQuery.data.amplitude,
         "Crossline",
+        colors,
       );
     }
     if (direction === "crossline" && crosslineQuery.data) {
@@ -53,10 +57,11 @@ export default function SeismicSectionView({ surveyInfo }: { surveyInfo: SurveyI
         crosslineQuery.data.twt_axis_ms,
         crosslineQuery.data.amplitude,
         "Inline",
+        colors,
       );
     }
     return null;
-  }, [direction, inlineQuery.data, crosslineQuery.data]);
+  }, [direction, inlineQuery.data, crosslineQuery.data, colors]);
 
   return (
     <div className="space-y-3">
@@ -130,7 +135,7 @@ export default function SeismicSectionView({ surveyInfo }: { surveyInfo: SurveyI
         <div className="h-[480px] rounded-xl bg-surface-sunken animate-pulse" />
       )}
       {activeQuery.isError && (
-        <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+        <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
           Failed to load section: {(activeQuery.error as Error).message}
         </div>
       )}
@@ -153,7 +158,9 @@ function buildFigure(
   twtAxisMs: number[],
   amplitude: number[][], // already (n_samples, n_traces) from the API
   positionLabel: string,
+  colors: ChartColors,
 ): { data: Data[]; layout: Partial<Layout> } {
+  const AXIS_STYLE = axisStyle(colors);
   let maxAbs = 1e-6;
   for (const row of amplitude) {
     for (const value of row) {

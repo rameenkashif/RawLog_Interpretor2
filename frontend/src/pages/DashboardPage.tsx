@@ -16,9 +16,9 @@ export default function DashboardPage() {
   });
 
   return (
-    <div className="pb-24 space-y-6">
+    <div className="pb-12 space-y-4">
       {/* Hero banner -- gives an immediate field-level orientation before the detail below. */}
-      <div className="relative overflow-hidden rounded-2xl border border-border bg-brand-gradient-soft px-6 py-6">
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-brand-gradient-soft px-5 py-4">
         <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-accent/10 blur-2xl" />
         <div className="absolute right-24 bottom-0 h-24 w-24 rounded-full bg-orange/10 blur-2xl" />
         <div className="relative flex items-center justify-between flex-wrap gap-4">
@@ -26,7 +26,7 @@ export default function DashboardPage() {
             <p className="text-xs font-semibold uppercase tracking-wider text-accent-strong mb-1">
               Field Overview
             </p>
-            <h1 className="text-2xl font-extrabold text-ink tracking-tight">
+            <h1 className="text-xl font-extrabold text-ink tracking-tight">
               Field Dashboard
             </h1>
             <p className="text-sm text-ink-muted mt-1 max-w-xl">
@@ -64,22 +64,22 @@ export default function DashboardPage() {
       {isError && <ErrorState message={(error as Error).message} />}
 
       {data && (
-        <div className="space-y-6">
+        <div className="space-y-4">
           <SummaryCards summary={data} />
 
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
             <WellsBarChart wells={data.wells} />
             <NetPayChart wells={data.wells} />
           </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 items-start">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 items-start">
             <div className="xl:col-span-2">
-              <h2 className="text-sm font-semibold text-ink mb-2">All Wells</h2>
+              <h2 className="text-sm font-semibold text-ink mb-1.5">All Wells</h2>
               <WellTable wells={data.wells} />
             </div>
-            <div className="xl:col-span-1 space-y-4">
+            <div className="xl:col-span-1 space-y-3">
               <div>
-                <h2 className="text-sm font-semibold text-ink mb-2">
+                <h2 className="text-sm font-semibold text-ink mb-1.5">
                   Add Data
                 </h2>
                 <UploadWells />
@@ -118,7 +118,7 @@ function LoadingState() {
 
 function ErrorState({ message }: { message: string }) {
   return (
-    <div className="border border-red-200 bg-red-50 text-danger text-sm rounded-xl px-4 py-3">
+    <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
       Failed to load dashboard: {message}
     </div>
   );
