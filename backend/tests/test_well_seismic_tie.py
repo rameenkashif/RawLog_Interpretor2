@@ -3,6 +3,7 @@ import pytest
 
 from app.well_seismic_tie import (
     DEFAULT_CANDIDATE_FREQS_HZ,
+    DEFAULT_TIE_SEARCH_FREQS_HZ,
     TieError,
     acoustic_impedance,
     apply_stretch_squeeze,
@@ -15,10 +16,12 @@ from app.well_seismic_tie import (
     extract_statistical_wavelet,
     find_nearest_trace_index,
     gardner_density,
+    reflectivity_from_time_axis,
     reflectivity_series,
     ricker_wavelet,
     rock_physics_density,
     search_best_tie,
+    search_best_tie_full_window,
     washout_qc_flag,
     wavelet_spectra,
 )
@@ -585,3 +588,148 @@ class TestBuildSyntheticDatumCheckAndDespike:
         # Constant DT/RHOB -> zero reflectivity everywhere -- despiking is
         # a no-op either way, but both must run without error and agree.
         np.testing.assert_allclose(result_despiked.reflectivity, result_raw.reflectivity)
+
+
+class TestReflectivityFromTimeAxis:
+    """reflectivity_from_time_axis trusts a caller-supplied time axis (e.g.
+    a well's vendor DPTM curve) directly, unlike build_synthetic's
+    depth_to_twt path which re-derives one by sonic integration."""
+
+    def test_zero_reflectivity_for_constant_impedance(self):
+        time_ms = np.linspace(2000.0, 2100.0, 60)
+        dt_log = np.full(60, 90.0)
+        rhob = np.full(60, 2.4)
+        t_rc, rc = reflectivity_from_time_axis(time_ms, dt_log, rhob, seismic_dt_ms=2.0)
+        assert np.allclose(rc, 0.0)
+        assert len(t_rc) == len(rc)
+
+    def test_output_covers_time_axis_span(self):
+        time_ms = np.linspace(2000.0, 2100.0, 60)
+        dt_log = 80.0 + np.sin(np.linspace(0, 6, 60)) * 5
+        rhob = 2.4 + np.cos(np.linspace(0, 6, 60)) * 0.05
+        t_rc, rc = reflectivity_from_time_axis(time_ms, dt_log, rhob, seismic_dt_ms=2.0)
+        assert t_rc[0] == pytest.approx(2000.0)
+        assert t_rc[-1] < 2100.0
+        assert np.all(np.diff(t_rc) > 0)
+
+    def test_unsorted_time_axis_is_sorted(self):
+        rng = np.random.default_rng(1)
+        order = rng.permutation(60)
+        time_ms = np.linspace(2000.0, 2100.0, 60)
+        dt_log = 80.0 + np.sin(np.linspace(0, 6, 60)) * 5
+        rhob = 2.4 + np.cos(np.linspace(0, 6, 60)) * 0.05
+        t_rc, rc = reflectivity_from_time_axis(time_ms[order], dt_log[order], rhob[order], seismic_dt_ms=2.0)
+        assert np.all(np.diff(t_rc) > 0)
+
+    def test_too_few_valid_samples_raises(self):
+        time_ms = np.array([2000.0, 2001.0, np.nan])
+        dt_log = np.array([80.0, 81.0, 82.0])
+        rhob = np.array([2.4, 2.4, 2.4])
+        with pytest.raises(TieError):
+            reflectivity_from_time_axis(time_ms, dt_log, rhob, seismic_dt_ms=2.0)
+
+    def test_nulls_and_nonpositive_values_are_excluded(self):
+        n = 30
+        time_ms = np.linspace(2000.0, 2100.0, n)
+        dt_log = np.full(n, 80.0)
+        rhob = np.full(n, 2.4)
+        dt_log[5] = -9999.25
+        rhob[10] = 0.0
+        dt_log[15] = np.nan
+        t_rc, rc = reflectivity_from_time_axis(time_ms, dt_log, rhob, seismic_dt_ms=2.0)
+        assert len(t_rc) > 0  # ran without error despite bad samples
+
+    def test_matches_rhob_over_dt_impedance_ratio_directly(self):
+        # AI = RHOB/DT is scale-invariant in the reflectivity ratio, same as
+        # acoustic_impedance()'s velocity*density -- see module docstring.
+        time_ms = np.linspace(2000.0, 2050.0, 30)
+        dt_log = np.linspace(80.0, 95.0, 30)
+        rhob = np.linspace(2.3, 2.6, 30)
+        t_rc, rc = reflectivity_from_time_axis(time_ms, dt_log, rhob, seismic_dt_ms=2.0)
+        ai = rhob / dt_log
+        ai_u = np.interp(np.arange(time_ms[0], time_ms[-1], 2.0), time_ms, ai)
+        expected = (ai_u[1:] - ai_u[:-1]) / (ai_u[1:] + ai_u[:-1])
+        np.testing.assert_allclose(rc, expected)
+
+
+class TestSearchBestTieFullWindow:
+    """search_best_tie_full_window mirrors the well_tie notebook's
+    algorithm: joint frequency/polarity/bulk-shift search across the whole
+    seismic window, using absolute-time overlap rather than a discrete
+    sample-lag cross-correlation."""
+
+    def _embed_known_tie(self, freq_hz: float, polarity: int, shift_ms: float, noise_std: float = 0.01, seed: int = 0):
+        rng = np.random.default_rng(seed)
+        dt_ms = 2.0
+        t_rc = np.arange(2000.0, 2120.0, dt_ms)
+        rc = np.zeros(len(t_rc))
+        rc[[10, 25, 40, 50]] = [0.1, -0.15, 0.08, -0.05]
+
+        _, wav = ricker_wavelet(freq_hz, dt_ms / 1000.0, min(0.100, max(0.030, 0.6 * len(rc) * dt_ms / 1000.0)))
+        synth = np.convolve(rc, wav, mode="same")
+        if len(synth) != len(rc):
+            synth = synth[: len(rc)] if len(synth) > len(rc) else np.pad(synth, (0, len(rc) - len(synth)))
+        synth = synth - synth.mean()
+        if synth.std() > 0:
+            synth = synth / synth.std()
+        synth = polarity * synth
+
+        seismic_twt_ms = np.arange(1900.0, 2300.0, dt_ms)
+        t_shifted = t_rc + shift_ms
+        real_trace = np.interp(seismic_twt_ms, t_shifted, synth, left=0.0, right=0.0)
+        real_trace = real_trace + rng.normal(0, noise_std, len(real_trace))
+        return t_rc, rc, seismic_twt_ms, dt_ms, real_trace
+
+    def test_recovers_known_freq_polarity_shift(self):
+        t_rc, rc, seismic_twt_ms, dt_ms, real_trace = self._embed_known_tie(
+            freq_hz=25.0, polarity=-1, shift_ms=14.0
+        )
+        result = search_best_tie_full_window(t_rc, rc, seismic_twt_ms, dt_ms, real_trace)
+        assert result.best_freq_hz == 25.0
+        assert result.polarity == -1
+        assert result.bulk_shift_ms == pytest.approx(14.0, abs=dt_ms)
+        assert result.correlation > 0.9
+
+    def test_positive_polarity_recovered_too(self):
+        t_rc, rc, seismic_twt_ms, dt_ms, real_trace = self._embed_known_tie(
+            freq_hz=35.0, polarity=1, shift_ms=-20.0
+        )
+        result = search_best_tie_full_window(t_rc, rc, seismic_twt_ms, dt_ms, real_trace)
+        assert result.polarity == 1
+        assert result.bulk_shift_ms == pytest.approx(-20.0, abs=dt_ms)
+        assert result.correlation > 0.9
+
+    def test_output_arrays_share_reflectivity_length(self):
+        t_rc, rc, seismic_twt_ms, dt_ms, real_trace = self._embed_known_tie(
+            freq_hz=25.0, polarity=1, shift_ms=0.0
+        )
+        result = search_best_tie_full_window(t_rc, rc, seismic_twt_ms, dt_ms, real_trace)
+        assert len(result.time_ms) == len(rc)
+        assert len(result.synthetic_amplitude) == len(rc)
+        assert len(result.seismic_amplitude) == len(rc)
+        assert len(result.reflectivity) == len(rc)
+        np.testing.assert_allclose(result.reflectivity, rc)
+        np.testing.assert_allclose(result.time_ms, t_rc + result.bulk_shift_ms)
+
+    def test_respects_default_freq_candidates(self):
+        t_rc, rc, seismic_twt_ms, dt_ms, real_trace = self._embed_known_tie(
+            freq_hz=25.0, polarity=1, shift_ms=0.0
+        )
+        result = search_best_tie_full_window(t_rc, rc, seismic_twt_ms, dt_ms, real_trace)
+        assert result.best_freq_hz in DEFAULT_TIE_SEARCH_FREQS_HZ
+
+    def test_no_overlap_raises(self):
+        t_rc = np.arange(2000.0, 2050.0, 2.0)
+        rc = np.zeros(len(t_rc))
+        rc[5] = 0.1
+        seismic_twt_ms = np.arange(0.0, 50.0, 2.0)  # nowhere near t_rc
+        real_trace = np.random.default_rng(0).normal(0, 1, len(seismic_twt_ms))
+        with pytest.raises(TieError):
+            search_best_tie_full_window(t_rc, rc, seismic_twt_ms, 2.0, real_trace)
+
+    def test_too_short_reflectivity_raises(self):
+        with pytest.raises(TieError):
+            search_best_tie_full_window(
+                np.array([2000.0, 2002.0]), np.array([0.1, 0.2]), np.arange(1900.0, 2100.0, 2.0), 2.0,
+                np.random.default_rng(0).normal(0, 1, 100),
+            )

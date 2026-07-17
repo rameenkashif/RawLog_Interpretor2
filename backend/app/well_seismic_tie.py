@@ -698,3 +698,192 @@ def search_best_tie(
     assert best is not None  # candidates always has >= 1 entry
     best.n_candidates_tried = n_tried
     return best
+
+
+# ---- Full-window tie search (vendor DPTM time axis) --------------------------
+# This is a second, distinct tie pipeline alongside build_synthetic() /
+# search_best_tie() above -- it doesn't re-derive a depth-time relationship
+# via depth_to_twt at all. Instead it trusts a caller-supplied time axis
+# directly (e.g. a well's own vendor-precomputed DPTM curve, see
+# petrophysics.compute_dptm's preference for it over sonic integration), and
+# searches wavelet frequency, polarity, AND bulk shift jointly across the
+# entire seismic recording window rather than a narrow +/-max_shift_ms
+# cross-correlation around a fixed position. Wired in by tie_service.py as
+# the default for the dataset-based well tie.
+
+
+def reflectivity_from_time_axis(
+    time_ms: np.ndarray,
+    dt_log: np.ndarray,
+    rhob: np.ndarray,
+    seismic_dt_ms: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Clean/sort/dedupe a well's logs on a caller-supplied time axis, build
+    an RHOB/DT acoustic-impedance proxy, resample onto the seismic's own
+    sample rate, and difference to a reflectivity series.
+
+    The impedance proxy is RHOB/DT rather than acoustic_impedance()'s
+    velocity*density -- both give IDENTICAL reflectivity, since the missing
+    velocity-conversion constant (dt_unit-dependent) is a pure scalar
+    multiplier that cancels exactly in the reflectivity ratio
+    (AI2-AI1)/(AI2+AI1); using the raw ratio directly here just avoids
+    needing to know dt_unit for this path at all.
+
+    time_ms is trusted as-is -- unlike build_synthetic's depth_to_twt path,
+    nothing here re-derives a depth-time relationship. Raises TieError if
+    there isn't enough valid, distinct, increasing time data to build a
+    reflectivity series.
+    """
+    time_ms = np.asarray(time_ms, dtype=float)
+    dt_log = np.asarray(dt_log, dtype=float)
+    rhob = np.asarray(rhob, dtype=float)
+
+    valid = np.isfinite(time_ms) & np.isfinite(dt_log) & np.isfinite(rhob) & (dt_log > 0) & (rhob > 0)
+    time_ms, dt_log, rhob = time_ms[valid], dt_log[valid], rhob[valid]
+    if len(time_ms) < 10:
+        raise TieError("Too few valid time/DT/RHOB samples to build a reflectivity series.")
+
+    order = np.argsort(time_ms)
+    time_ms, dt_log, rhob = time_ms[order], dt_log[order], rhob[order]
+    keep = np.concatenate([[True], np.diff(time_ms) > 1e-6])
+    time_ms, dt_log, rhob = time_ms[keep], dt_log[keep], rhob[keep]
+
+    if len(time_ms) < 10:
+        raise TieError("Too few distinct time samples after dedupe to build a reflectivity series.")
+
+    ai = rhob / dt_log
+    t0, t1 = float(time_ms[0]), float(time_ms[-1])
+    if t1 <= t0:
+        raise TieError("Time axis is not strictly increasing -- cannot build a uniform grid.")
+
+    t_uniform = np.arange(t0, t1, seismic_dt_ms)
+    ai_u = np.interp(t_uniform, time_ms, ai)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rc = (ai_u[1:] - ai_u[:-1]) / (ai_u[1:] + ai_u[:-1])
+    rc = np.nan_to_num(rc)
+    t_rc = t_uniform[:-1]
+    return t_rc, rc
+
+
+# Matches typical seismic bandwidth for a checkshot-free full-window search:
+# 13 candidates, 2.5 Hz apart, spanning 15-45 Hz.
+DEFAULT_TIE_SEARCH_FREQS_HZ: tuple[float, ...] = tuple(
+    float(f) for f in np.arange(15.0, 45.0 + 1e-9, 2.5)
+)
+DEFAULT_TIE_SEARCH_MAX_SHIFT_MS = 100.0
+
+
+@dataclass
+class FullWindowTieResult:
+    """Winning (frequency, polarity, shift) combination from
+    search_best_tie_full_window, plus ready-to-plot arrays covering just the
+    well's own reflectivity interval (NOT the full seismic trace -- a QC
+    plot only needs the window the well actually has data for)."""
+
+    best_freq_hz: float
+    polarity: int  # +1 or -1
+    bulk_shift_ms: float
+    correlation: float
+    n_used: int
+    time_ms: np.ndarray  # t_rc + bulk_shift_ms, same length as reflectivity
+    synthetic_amplitude: np.ndarray  # normalized, polarity-applied, full reflectivity-interval length
+    seismic_amplitude: np.ndarray  # real trace interpolated onto time_ms, normalized, same length
+    reflectivity: np.ndarray  # unshifted reflectivity series, same length
+
+
+def search_best_tie_full_window(
+    t_rc: np.ndarray,
+    rc: np.ndarray,
+    seismic_twt_axis_ms: np.ndarray,
+    seismic_dt_ms: float,
+    real_trace: np.ndarray,
+    candidate_freqs_hz: tuple[float, ...] = DEFAULT_TIE_SEARCH_FREQS_HZ,
+    max_shift_ms: float = DEFAULT_TIE_SEARCH_MAX_SHIFT_MS,
+) -> FullWindowTieResult:
+    """Jointly search Ricker wavelet frequency, polarity, and bulk time
+    shift, sliding the synthetic across the ENTIRE seismic recording window
+    (not a local search around a rough position) and keeping whichever
+    combination maximizes normalized cross-correlation against the real
+    trace.
+
+    Distinct from search_best_tie() above in two ways: it operates on an
+    already-built reflectivity series/time axis (see
+    reflectivity_from_time_axis) rather than re-convolving inside
+    build_synthetic's pipeline, and its position search is a full window
+    scan by absolute time (checking real overlap against
+    seismic_twt_axis_ms at each candidate shift) rather than a discrete
+    sample-lag cross-correlation (cross_correlate_and_shift) -- appropriate
+    here because, without a checkshot, the well's time axis (even a vendor
+    DPTM curve) can plausibly sit anywhere in a wide window relative to the
+    seismic, not just near a rough starting alignment.
+
+    Raises TieError if no (frequency, polarity, shift) combination produces
+    enough overlap with the seismic window to compute a correlation.
+    """
+    rc = np.asarray(rc, dtype=float)
+    t_rc = np.asarray(t_rc, dtype=float)
+    if len(rc) < 5:
+        raise TieError("Reflectivity series too short for a full-window tie search.")
+
+    wavelet_len_s = min(0.100, max(0.030, 0.6 * len(rc) * seismic_dt_ms / 1000.0))
+    min_needed = min(30, max(10, int(0.5 * len(t_rc))))
+    shift_candidates = np.arange(-max_shift_ms, max_shift_ms + 0.5 * seismic_dt_ms, seismic_dt_ms)
+
+    best: dict | None = None
+    for freq in candidate_freqs_hz:
+        _, wav = ricker_wavelet(freq, seismic_dt_ms / 1000.0, wavelet_len_s)
+        synth = np.convolve(rc, wav, mode="same")
+        if len(synth) != len(rc):
+            synth = synth[: len(rc)] if len(synth) > len(rc) else np.pad(synth, (0, len(rc) - len(synth)))
+        synth = synth - synth.mean()
+        if synth.std() > 0:
+            synth = synth / synth.std()
+
+        for polarity in (1, -1):
+            s = polarity * synth
+            for shift_ms in shift_candidates:
+                t_shifted = t_rc + shift_ms
+                mask = (t_shifted >= seismic_twt_axis_ms[0]) & (t_shifted <= seismic_twt_axis_ms[-1])
+                if mask.sum() < min_needed:
+                    continue
+                seis_interp = np.interp(t_shifted[mask], seismic_twt_axis_ms, real_trace)
+                ss = s[mask]
+                if seis_interp.std() == 0 or ss.std() == 0:
+                    continue
+                seis_n = (seis_interp - seis_interp.mean()) / seis_interp.std()
+                ss_n = (ss - ss.mean()) / ss.std()
+                corr = float(np.mean(seis_n * ss_n))
+                if best is None or corr > best["corr"]:
+                    best = dict(
+                        corr=corr,
+                        freq=float(freq),
+                        polarity=polarity,
+                        shift_ms=float(shift_ms),
+                        synth=s,
+                        n_used=int(mask.sum()),
+                    )
+
+    if best is None:
+        raise TieError(
+            "No (frequency, polarity, shift) combination produced enough overlap with the "
+            f"seismic window (need >= {min_needed} samples) -- check that the well's time axis "
+            "actually falls near the seismic's recorded TWT range."
+        )
+
+    time_ms_full = t_rc + best["shift_ms"]
+    seis_full = np.interp(time_ms_full, seismic_twt_axis_ms, real_trace)
+    seis_std = seis_full.std()
+    seismic_amplitude = (seis_full - seis_full.mean()) / seis_std if seis_std > 0 else seis_full - seis_full.mean()
+
+    return FullWindowTieResult(
+        best_freq_hz=best["freq"],
+        polarity=best["polarity"],
+        bulk_shift_ms=best["shift_ms"],
+        correlation=best["corr"],
+        n_used=best["n_used"],
+        time_ms=time_ms_full,
+        synthetic_amplitude=best["synth"],
+        seismic_amplitude=seismic_amplitude,
+        reflectivity=rc,
+    )

@@ -209,15 +209,28 @@ def compute_swe(df: pd.DataFrame, phie: pd.Series, config: dict[str, Any]) -> pd
 # -----------------------------------------------------------------------------
 # 3.5 DPTM -- Depth/Time Track (sonic-integration approximation)
 # -----------------------------------------------------------------------------
+DPTM_VENDOR_MIN_VALID_FRACTION = 0.8
+
+
 def compute_dptm(
     df: pd.DataFrame, config: dict[str, Any], step_depth: float
 ) -> pd.Series:
-    """Approximate two-way-time depth/time track by integrating sonic DT.
+    """Two-way-time depth/time track for this well.
 
-    *** APPROXIMATION ONLY -- pending real checkshot/VSP data. ***
-    If a real checkshot/VSP time-depth table is available, it should be
-    used instead of this module; this integration accumulates sonic
-    logging error and does not account for velocity anisotropy.
+    Prefers a vendor-precomputed DPTM curve straight from the LAS file (see
+    las_loader.py's OPTIONAL_CURVES) when one is present and mostly valid:
+    a real, already-calibrated-to-the-seismic-datum time-depth curve beats
+    any approximation we could derive here, and confirming it independently
+    (e.g. checking it falls inside the seismic's recorded TWT window) is
+    exactly what well_seismic_tie's tie search does downstream by actually
+    correlating against the seismic. Falls back to sonic integration below
+    for wells whose LAS export doesn't carry one.
+
+    *** SONIC-INTEGRATION FALLBACK IS AN APPROXIMATION ONLY -- pending real
+    checkshot/VSP data. *** If a real checkshot/VSP time-depth table is
+    available, it should be used instead of either path here; this
+    integration accumulates sonic logging error and does not account for
+    velocity anisotropy.
 
         TWT_increment = DT * step_depth / (2 * 3.28084 * 1e6)   [seconds]
         DPTM = cumulative_sum(TWT_increment)
@@ -228,6 +241,15 @@ def compute_dptm(
     """
     if not config.get("dptm", {}).get("enabled", True):
         return pd.Series(np.full(len(df), np.nan), index=df.index, name="DPTM")
+
+    if "DPTM" in df.columns:
+        vendor = df["DPTM"].to_numpy(dtype=float)
+        valid = np.isfinite(vendor) & (vendor > 0)
+        min_valid_fraction = config.get("dptm", {}).get(
+            "vendor_min_valid_fraction", DPTM_VENDOR_MIN_VALID_FRACTION
+        )
+        if len(vendor) > 0 and valid.sum() >= min_valid_fraction * len(vendor):
+            return pd.Series(vendor, index=df.index, name="DPTM")
 
     dt = df["DT"].to_numpy(dtype=float)
     dt_filled = np.nan_to_num(dt, nan=0.0)

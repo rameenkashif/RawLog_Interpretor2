@@ -59,6 +59,8 @@ class LoadedSegy:
     twt_axis_ms: np.ndarray  # shape (n_samples,), two-way time in ms
     trace_x: np.ndarray  # shape (n_traces,), surface X coordinate per trace (NaN if unavailable)
     trace_y: np.ndarray  # shape (n_traces,), surface Y coordinate per trace (NaN if unavailable)
+    trace_inline: np.ndarray  # shape (n_traces,), inline number per trace (NaN if unavailable)
+    trace_crossline: np.ndarray  # shape (n_traces,), crossline number per trace (NaN if unavailable)
 
 
 def _apply_coord_scalar(raw: np.ndarray, scalar: np.ndarray) -> np.ndarray:
@@ -116,6 +118,25 @@ def _extract_trace_coordinates(
     return np.full(n_traces, np.nan), np.full(n_traces, np.nan)
 
 
+def _extract_trace_inline_crossline(
+    f, n_traces: int, inline_field: int, crossline_field: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Best-effort per-trace inline/crossline extraction at the resolved
+    (possibly non-standard, see segy_header_parser) byte locations. This
+    pipeline opens SEG-Y with ignore_geometry=True (many real-world/vendor
+    exports have absent or non-standard 3D geometry -- see load_segy_file's
+    docstring), so inline/crossline are read here as plain per-trace header
+    attributes rather than relied on to build a 3D grid. Returns arrays of
+    NaN if the header field is absent or unreadable -- "not available",
+    same convention as _extract_trace_coordinates."""
+    try:
+        inline = np.array(f.attributes(inline_field)[:], dtype=float)
+        crossline = np.array(f.attributes(crossline_field)[:], dtype=float)
+        return inline, crossline
+    except Exception:  # pragma: no cover - segyio header quirks vary by vendor
+        return np.full(n_traces, np.nan), np.full(n_traces, np.nan)
+
+
 def _dataset_id_from_filename(path: Path) -> str:
     """Derive a dataset ID from the filename, e.g. 'Line_001.sgy' -> 'LINE_001'."""
     return path.stem.upper()
@@ -163,6 +184,21 @@ def load_segy_file(
         resolved_fields = shp.resolve_trace_fields(
             {"source_x": byte_result.byte_locations["source_x"], "source_y": byte_result.byte_locations["source_y"]}
         )
+        # Inline/crossline are resolved separately, in their own try/except:
+        # unlike source_x/source_y (required for the nearest-trace well tie),
+        # a bad/nonstandard inline or crossline declaration should degrade to
+        # "not available" (NaN, see _extract_trace_inline_crossline) rather
+        # than fail the whole SEG-Y load -- this pipeline already tolerates
+        # missing 3D geometry entirely (ignore_geometry=True below).
+        try:
+            geometry_fields: dict[str, int] | None = shp.resolve_trace_fields(
+                {
+                    "inline": byte_result.byte_locations["inline"],
+                    "crossline": byte_result.byte_locations["crossline"],
+                }
+            )
+        except ValueError:
+            geometry_fields = None
 
         # ignore_geometry=True avoids requiring inline/crossline byte
         # locations to be correctly set in the trace headers -- many
@@ -203,6 +239,13 @@ def load_segy_file(
             trace_x, trace_y = _extract_trace_coordinates(
                 f, n_traces, resolved_fields["source_x"], resolved_fields["source_y"]
             )
+            if geometry_fields is not None:
+                trace_inline, trace_crossline = _extract_trace_inline_crossline(
+                    f, n_traces, geometry_fields["inline"], geometry_fields["crossline"]
+                )
+            else:
+                trace_inline = np.full(n_traces, np.nan)
+                trace_crossline = np.full(n_traces, np.nan)
 
     except SegyValidationError:
         raise
@@ -216,6 +259,20 @@ def load_segy_file(
 
     duration_ms = float(twt_axis_ms[-1] - twt_axis_ms[0]) if n_samples > 1 else 0.0
 
+    byte_locations = {
+        "source_x": byte_result.byte_locations["source_x"],
+        "source_y": byte_result.byte_locations["source_y"],
+    }
+    byte_locations_declared = {
+        "source_x": byte_result.declared["source_x"],
+        "source_y": byte_result.declared["source_y"],
+    }
+    if geometry_fields is not None:
+        byte_locations["inline"] = byte_result.byte_locations["inline"]
+        byte_locations["crossline"] = byte_result.byte_locations["crossline"]
+        byte_locations_declared["inline"] = byte_result.declared["inline"]
+        byte_locations_declared["crossline"] = byte_result.declared["crossline"]
+
     metadata = SegyMetadata(
         dataset_id=_dataset_id_from_filename(path),
         source_filename=filename,
@@ -223,19 +280,19 @@ def load_segy_file(
         n_samples=n_samples,
         sample_interval_ms=sample_interval_ms,
         textual_header_encoding=header_result.encoding,
-        source_byte_locations={
-            "source_x": byte_result.byte_locations["source_x"],
-            "source_y": byte_result.byte_locations["source_y"],
-        },
-        source_byte_locations_declared={
-            "source_x": byte_result.declared["source_x"],
-            "source_y": byte_result.declared["source_y"],
-        },
+        source_byte_locations=byte_locations,
+        source_byte_locations_declared=byte_locations_declared,
         delay_recording_time_ms=delay_recording_time_ms,
         delay_recording_time_uniform=delay_recording_time_uniform,
         duration_ms=duration_ms,
     )
 
     return LoadedSegy(
-        metadata=metadata, traces=traces, twt_axis_ms=twt_axis_ms, trace_x=trace_x, trace_y=trace_y
+        metadata=metadata,
+        traces=traces,
+        twt_axis_ms=twt_axis_ms,
+        trace_x=trace_x,
+        trace_y=trace_y,
+        trace_inline=trace_inline,
+        trace_crossline=trace_crossline,
     )

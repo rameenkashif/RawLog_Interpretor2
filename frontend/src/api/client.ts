@@ -36,6 +36,7 @@ import type {
   TimeSliceResponse,
   WaveletMethod,
   WellCurvesResponse,
+  WellSeismicTieBatchResponse,
   WellSeismicTieResponse,
   WellSummary,
   WellTieVizResponse,
@@ -157,6 +158,15 @@ export async function getWellSeismicTie(
   seismicDatasetId: string,
 ): Promise<WellSeismicTieResponse> {
   const { data } = await http.get<WellSeismicTieResponse>(`/tie/${wellId}`, {
+    params: { seismic_dataset_id: seismicDatasetId },
+  });
+  return data;
+}
+
+export async function getAllWellSeismicTies(
+  seismicDatasetId: string,
+): Promise<WellSeismicTieBatchResponse> {
+  const { data } = await http.get<WellSeismicTieBatchResponse>("/tie/all", {
     params: { seismic_dataset_id: seismicDatasetId },
   });
   return data;

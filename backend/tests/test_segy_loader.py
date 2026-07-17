@@ -91,8 +91,18 @@ class TestHeaderDiagnostics:
     def test_no_declaration_defaults_to_rev1_source_xy(self, tmp_path):
         headers = [{segyio.TraceField.SourceX: 111, segyio.TraceField.SourceY: 222, segyio.TraceField.SourceGroupScalar: 1}]
         loaded = load_segy_file(_write_segy(tmp_path, headers))
-        assert loaded.metadata.source_byte_locations == {"source_x": 73, "source_y": 77}
-        assert loaded.metadata.source_byte_locations_declared == {"source_x": False, "source_y": False}
+        assert loaded.metadata.source_byte_locations == {
+            "source_x": 73,
+            "source_y": 77,
+            "inline": 189,
+            "crossline": 193,
+        }
+        assert loaded.metadata.source_byte_locations_declared == {
+            "source_x": False,
+            "source_y": False,
+            "inline": False,
+            "crossline": False,
+        }
         assert loaded.metadata.textual_header_encoding in ("cp037", "ascii", "latin-1")
 
     def test_delay_recording_time_read_explicitly(self, tmp_path):
@@ -111,3 +121,69 @@ class TestHeaderDiagnostics:
         ]
         loaded = load_segy_file(_write_segy(tmp_path, headers))
         assert loaded.metadata.delay_recording_time_uniform is False
+
+
+class TestTraceInlineCrossline:
+    def test_standard_byte_locations(self, tmp_path):
+        headers = [
+            {
+                segyio.TraceField.INLINE_3D: 100 + i,
+                segyio.TraceField.CROSSLINE_3D: 200 + i,
+                segyio.TraceField.SourceGroupScalar: 1,
+            }
+            for i in range(4)
+        ]
+        loaded = load_segy_file(_write_segy(tmp_path, headers))
+        np.testing.assert_allclose(loaded.trace_inline, [100, 101, 102, 103])
+        np.testing.assert_allclose(loaded.trace_crossline, [200, 201, 202, 203])
+
+    def test_no_geometry_returns_nan(self, tmp_path):
+        headers = [{segyio.TraceField.SourceGroupScalar: 1} for _ in range(3)]
+        loaded = load_segy_file(_write_segy(tmp_path, headers))
+        # rev1-standard byte locations default to zero-filled INLINE_3D/
+        # CROSSLINE_3D fields in a freshly created synthetic file (unlike a
+        # real vendor file where those bytes are just uninitialized/absent),
+        # so this asserts the shape/dtype contract rather than NaN --
+        # test_nonstandard_declaration_falls_back_gracefully below is the
+        # real "not available" case (an unresolvable declared byte location).
+        assert loaded.trace_inline.shape == (3,)
+        assert loaded.trace_crossline.shape == (3,)
+
+    def test_nonstandard_declared_byte_locations(self, tmp_path):
+        headers = [
+            {
+                segyio.TraceField.FieldRecord: 100 + i,  # byte 9
+                segyio.TraceField.TraceNumber: 200 + i,  # byte 13
+                segyio.TraceField.SourceGroupScalar: 1,
+            }
+            for i in range(4)
+        ]
+        path = _write_segy(tmp_path, headers)
+        text = ("Trace Inline At 9 And Size 4. Trace Crossline At Byte 13. " * 3).ljust(3200)[:3200]
+        with open(path, "r+b") as fh:
+            fh.write(text.encode("cp037"))
+
+        loaded = load_segy_file(path)
+        assert loaded.metadata.source_byte_locations["inline"] == 9
+        assert loaded.metadata.source_byte_locations["crossline"] == 13
+        assert loaded.metadata.source_byte_locations_declared["inline"] is True
+        np.testing.assert_allclose(loaded.trace_inline, [100, 101, 102, 103])
+        np.testing.assert_allclose(loaded.trace_crossline, [200, 201, 202, 203])
+
+    def test_nonstandard_declaration_falls_back_gracefully(self, tmp_path):
+        """A declared byte location that doesn't correspond to any real
+        SEG-Y trace header field must degrade to 'inline/crossline not
+        available' (NaN) rather than failing the whole SEG-Y load -- unlike
+        source_x/source_y, which the tie feature genuinely needs."""
+        headers = [{segyio.TraceField.SourceGroupScalar: 1} for _ in range(3)]
+        path = _write_segy(tmp_path, headers)
+        text = ("Trace Inline At 12345 And Size 4. Trace Crossline At Byte 6. " * 3).ljust(3200)[:3200]
+        with open(path, "r+b") as fh:
+            fh.write(text.encode("cp037"))
+
+        loaded = load_segy_file(path)
+        assert np.isnan(loaded.trace_inline).all()
+        assert np.isnan(loaded.trace_crossline).all()
+        assert "inline" not in loaded.metadata.source_byte_locations
+        assert "crossline" not in loaded.metadata.source_byte_locations
+        assert loaded.metadata.source_byte_locations["source_x"] == 73  # unaffected

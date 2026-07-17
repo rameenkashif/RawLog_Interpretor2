@@ -23,6 +23,14 @@ import numpy as np
 import pandas as pd
 
 REQUIRED_CURVES = ["DEPT", "GR", "RESISTIVITY", "RHOB", "NPHI", "DT"]
+# Optional curves: loaded (and null-cleaned) exactly like the required ones
+# when present, but their absence doesn't fail validation. DPTM is a
+# vendor-precomputed two-way-time depth/time track some LAS exports carry
+# directly -- when present and plausible, well_seismic_tie/petrophysics
+# prefer it over re-deriving one by sonic integration (see
+# petrophysics.compute_dptm), since it's a real calibrated curve rather
+# than an approximation.
+OPTIONAL_CURVES = ["DPTM"]
 NULL_VALUE = -9999.25
 NULL_TOLERANCE = 0.01  # treat anything within this of -9999.25 as null
 
@@ -355,6 +363,11 @@ def load_las_file(
             f"LAS file '{filename}' is missing required curve(s): {', '.join(missing)}. "
             f"Available curves: {[c.mnemonic for c in las.curves]}"
         )
+
+    for canonical in OPTIONAL_CURVES:
+        actual = _resolve_curve_name(las, canonical)
+        if actual is not None:
+            resolved[canonical] = actual
 
     df = pd.DataFrame(
         {canonical: las[actual] for canonical, actual in resolved.items()}

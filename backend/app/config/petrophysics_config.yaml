@@ -72,9 +72,13 @@ defaults:
     swe_pay_max: 0.5
 
   dptm:
-    # Sonic-integration time-depth approximation (Section 3.5).
-    # This is a placeholder pending real checkshot/VSP data.
+    # Two-way-time depth/time track (Section 3.5). Prefers a vendor-
+    # precomputed DPTM curve straight from the LAS file when one is present
+    # and at least vendor_min_valid_fraction of its samples are valid;
+    # otherwise falls back to a sonic-integration approximation, which is a
+    # placeholder pending real checkshot/VSP data.
     enabled: true
+    vendor_min_valid_fraction: 0.8
 
   core_perm_pred:
     # Random Forest regression config for the CORE_PERM_PRED proxy model
