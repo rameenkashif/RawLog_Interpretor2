@@ -65,6 +65,8 @@ def main() -> None:
             loaded.twt_axis_ms,
             loaded.trace_x,
             loaded.trace_y,
+            loaded.trace_inline,
+            loaded.trace_crossline,
             attributes,
         )
         n_loaded += 1
