@@ -437,6 +437,49 @@ would need.
 MD = TVD for all of them (same placeholder as `petrophysics.compute_md_tvd`) -- surfaced as a
 static badge, not buried.
 
+### Dashboard combined upload
+
+`POST /dashboard/upload` (`backend/app/services/dashboard_upload_service.py`) uploads a well
+and its seismic together and auto-processes both, so the Wells/Dashboard, Seismic, and
+Synthetic Seismogram pages all pick up the new data without a manual per-page re-upload or
+re-selection. It does not implement or alter any tie math -- it's an orchestration layer
+around the existing, unmodified `tie_service.get_well_seismic_tie`,
+`synthetic_seismogram_service.generate`, and `seismic_processor.SegyVolume` calls the rest of
+the app already makes.
+
+**Two SEG-Y storage systems, fed together:** the app has always had two independent SEG-Y
+paths -- the upload pipeline (`seismic_service`, a named `dataset_id` per dataset, feeding
+the attribute cards and `tie_service`) and the single active volume read directly from
+`backend/data/seismic_raw/` (`seismic_processor.get_segy_volume()`, feeding Seismic
+Visualization and the whole Synthetic Seismogram page). A dashboard upload writes the SEG-Y
+into both: `seismic_service.process_and_store_segy_bytes` first (so a corrupt file is
+rejected before anything else touches it), then into `seismic_raw/` (pruning any other
+`.sgy`/`.segy` there first -- this app is still single-active-volume, single-tenant by
+design) followed by `get_segy_volume(refresh=True)`.
+
+**Background job, not a queue:** the well (small file, fast) is parsed synchronously so the
+response can return a `well_id` immediately; the SEG-Y upload, tie, synthetic seismogram, and
+a spectral summary (via `SegyVolume.get_amplitude_spectrum` at the tied inline) run as a
+single `fastapi.BackgroundTasks` job. Poll `GET /dashboard/upload/{well_id}/status` for
+progress. A same-well re-upload while an earlier run is still in flight is handled with a
+`run_token` compare-and-swap (no queue needed at this scale) so a slow first run can never
+clobber a faster second one's result.
+
+**Status vs. confidence, kept distinct:** `status` (`"processing"`/`"ready"`/`"failed"`)
+tracks whether the pipeline ran without crashing. It does NOT mean the tie was good --
+`tie_low_confidence`/`synthetic_low_confidence` (correlation below 0.3, or the shift search
+pinned to its boundary) are separate, explicit flags, surfaced in both the status endpoint
+and the Dashboard's upload status banner, so a failed or low-confidence tie is never rendered
+as if it were a normal result. A `stale` flag catches the case where a later upload for a
+different well replaced the active SEG-Y volume while this well's own background run was
+still in flight.
+
+**Disk-persisted, well_id-keyed cache:** `backend/app/well_processing_cache_repository.py`
+(one JSON file per well under `backend/data/well_processing_cache/`, same repository pattern
+as `synthetic_tie_repository.py`) stores scalars only (correlation, shift, flags -- never the
+big time-series arrays every page already gets from the existing live endpoints). This is
+also what the four new agent tools below read from.
+
 ---
 
 ## 6. Backend API reference
@@ -449,6 +492,8 @@ static badge, not buried.
 | GET | `/wells/{well_id}/zones` | Zonation summary (thickness + avg PHIE/SWE/VSH per zone) |
 | GET | `/wells/{well_id}/crossplot?x=NPHI&y=RHOB&color=VSH` | Generic crossplot data, any curve pair + optional color-by |
 | GET | `/dashboard/summary` | Field-wide aggregated stats + per-well summaries |
+| POST | `/dashboard/upload` | Combined well (`.las`) + seismic (`.sgy`/`.segy`) upload (multipart form, fields `las_file`/`segy_file`). The well is processed immediately; seismic upload, well-to-seismic tie, synthetic seismogram, and a spectral summary run as a background job -- see "Dashboard combined upload" below |
+| GET | `/dashboard/upload/{well_id}/status` | Poll the background pipeline's progress: `"processing"`\|`"ready"`\|`"failed"`, plus explicit `tie_low_confidence`/`synthetic_low_confidence`/`stale` flags (never silently rendered as a normal result) |
 | POST | `/chat` | Anthropic agent, streams Server-Sent Events |
 | GET | `/wells/{well_id}/export?format=csv\|las` | Download interpreted curves |
 | POST | `/seismic/upload` | Upload one or more raw `.sgy`/`.segy` files (multipart form, field name `files`) |
@@ -506,12 +551,30 @@ data: {"type": "done"}
 - Tools exposed to Claude (all backed by real computed data, never hallucinated):
   `get_well_summary(well_id)`, `get_curve_values(well_id, curve_name, depth_min?, depth_max?)`,
   `get_zone_breakdown(well_id)`, `compare_wells(well_ids, metric)`,
-  `list_seismic_datasets()`, `get_seismic_summary(dataset_id)`.
+  `list_seismic_datasets()`, `get_seismic_summary(dataset_id)`,
+  `get_well_seismic_tie(well_id)`, `get_synthetic_seismogram(well_id)`,
+  `get_spectral_decomposition(well_id)`, `get_survey_info()`.
+- The last four tools are a deliberately separate family from `list_seismic_datasets`/
+  `get_seismic_summary` (different subsystem -- see "Dashboard combined upload" below):
+  they read the well-processing cache the dashboard's combined upload populates in the
+  background (cache-first, falling back to a live computation for a well not uploaded
+  through that flow), and return direct computed results (a real tie cross-correlation
+  search, real spectral analysis), not heuristics. Each carries an explicit
+  `low_confidence` (tie/synthetic) or `available` (spectral/survey) flag -- correlation
+  below 0.3, or the shift search pinned to its boundary -- so a bad result is always
+  surfaced plainly rather than narrated around.
 - System prompt instructs Claude to ground every numeric claim in a tool result, to flag
   when an answer depends on a tunable assumption (Rw, Swirr, matrix density, Archie
-  exponents, zone cutoffs) that should be reviewed by an SME, and to always caveat the
-  seismic VSH/PHIE/SWE proxies as uncalibrated amplitude heuristics rather than measured
-  rock properties whenever they come up.
+  exponents, zone cutoffs) that should be reviewed by an SME, to always caveat
+  `list_seismic_datasets`/`get_seismic_summary`'s VSH/PHIE/SWE proxies as uncalibrated
+  amplitude heuristics rather than measured rock properties whenever they come up, and to
+  always state a tie/synthetic/spectral tool's `low_confidence`/`available` flag plainly
+  when it's true.
+- The frontend keeps one shared "active well/dataset" (Zustand `useAppStore`), set by the
+  Dashboard's combined upload and read by the Seismic and Synthetic Seismogram pages' chat
+  panels (`wellId` prop on `ChatPanel`) -- so a question like "what's the correlation for
+  this tie" on any of the three pages resolves against whichever well is currently active,
+  without the user needing to name it.
 - Requires `ANTHROPIC_API_KEY` in `backend/.env` (see `backend/.env.example`).
 
 ---
@@ -522,8 +585,10 @@ data: {"type": "done"}
   in `index.html`, `color-scheme: light only` in global CSS, no Tailwind `dark:` classes
   anywhere, and every chart (Plotly + Recharts) explicitly styled with light backgrounds/
   gridlines via `frontend/src/styles/tokens.ts` rather than relying on library defaults.
-- **Dashboard** (`/`): upload widget, field-wide summary cards, per-well bar chart, sortable
-  wells table, field-wide chat panel.
+- **Dashboard** (`/`): a combined well+seismic upload widget (`DashboardUpload.tsx`, auto-
+  processed in the background -- see "Dashboard combined upload" above) alongside the
+  original single-file-type `UploadWells`/`SeismicUpload` widgets, field-wide summary cards,
+  per-well bar chart, sortable wells table, field-wide chat panel.
 - **Single-well view** (`/wells/:wellId`): multi-track log display (GR/VSH, Resistivity,
   RHOB-NPHI overlay, DT, PHIE/PHIT/SWE, ZONES color column), zone summary table, crossplot
   builder (with the 5 required presets: Neutron-Density, Pickett plot, PHIE vs
@@ -536,13 +601,22 @@ data: {"type": "done"}
   the heuristic VSH/PHIE/SWE seismic proxies -- always shown with an on-screen "uncalibrated
   heuristic" caveat), plus a CSV export of the per-trace attributes. The same page's bottom
   "Seismic Visualization" panel (tabbed) adds inline/crossline sections, time slices, a
-  direct-SEG-Y well tie, amplitude spectrum, and spectral decomposition (STFT/CWT).
+  direct-SEG-Y well tie, amplitude spectrum, and spectral decomposition (STFT/CWT). Now also
+  has a chat panel, and its dataset picker / well-tie selection seed from the dashboard's
+  shared active well/dataset after a combined upload.
 - **Synthetic Seismogram module** (`/synthetic`): well selector (same pattern as the other
-  pages), density/wavelet method pickers, prominent QC badges (vertical assumption, no
-  checkshot, coordinate unit conversion status, washout interval count), acoustic
-  impedance + reflectivity depth tracks, wavelet time-domain + amplitude/phase spectra,
-  synthetic-vs-real trace overlay with correlation/shift stats, a washout interval list, an
-  editable manual stretch/squeeze control-point table (persisted per well), and CSV export.
+  pages, now also seeded from the shared active well), density/wavelet method pickers,
+  prominent QC badges (vertical assumption, no checkshot, coordinate unit conversion status,
+  washout interval count, and a low-confidence-tie badge below the 0.3 correlation
+  threshold), acoustic impedance + reflectivity depth tracks, wavelet time-domain +
+  amplitude/phase spectra, synthetic-vs-real trace overlay with correlation/shift stats, a
+  washout interval list, an editable manual stretch/squeeze control-point table (persisted
+  per well), CSV export, and a chat panel.
+- **Cross-page active well/dataset**: `frontend/src/store/useAppStore.ts`'s `activeWellId`/
+  `activeDatasetId` (set by the Dashboard's combined upload) are read by the Seismic and
+  Synthetic Seismogram pages' well/dataset selectors and by all three pages' chat panels, so
+  a newly uploaded well/seismic appears everywhere without manual re-selection -- a manual
+  pick from any page's own selector still overrides it until the active well changes again.
 
 ---
 

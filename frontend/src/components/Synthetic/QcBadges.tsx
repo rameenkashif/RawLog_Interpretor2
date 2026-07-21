@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import type { SyntheticSeismogramResponse } from "@/api/types";
+import { TIE_LOW_CONFIDENCE_THRESHOLD } from "@/utils/tieConfidence";
 
-function Badge({ tone, children }: { tone: "orange" | "accent" | "green" | "danger"; children: ReactNode }) {
+export function Badge({ tone, children }: { tone: "orange" | "accent" | "green" | "danger"; children: ReactNode }) {
   const toneClasses = {
     orange: "border-orange/30 bg-orange-soft text-orange-strong",
     accent: "border-accent/30 bg-accent-soft text-accent-strong",
@@ -52,6 +53,11 @@ export default function QcBadges({ result }: { result: SyntheticSeismogramRespon
         {result.boundary_pinned
           ? `Shift pinned to search edge (±${result.max_shift_ms.toFixed(0)}ms) — likely a spurious match, not a genuine tie`
           : `Bulk shift converged within ±${result.max_shift_ms.toFixed(0)}ms search range`}
+      </Badge>
+      <Badge tone={result.correlation < TIE_LOW_CONFIDENCE_THRESHOLD ? "danger" : "green"}>
+        {result.correlation < TIE_LOW_CONFIDENCE_THRESHOLD
+          ? `Low-confidence tie — correlation ${result.correlation.toFixed(3)} is below the ${TIE_LOW_CONFIDENCE_THRESHOLD} threshold`
+          : `Correlation ${result.correlation.toFixed(3)}`}
       </Badge>
     </div>
   );

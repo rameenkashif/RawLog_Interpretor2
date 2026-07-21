@@ -5,6 +5,8 @@ import { getSeismicExportUrl, listSeismic } from "@/api/client";
 import SeismicUpload from "@/components/SeismicUpload";
 import WellSeismicTie from "@/components/WellSeismicTie";
 import SeismicPanel from "@/components/Seismic/SeismicPanel";
+import ChatPanel from "@/components/ChatPanel";
+import { useAppStore } from "@/store/useAppStore";
 
 function fmtPct(v: number | null): string {
   return v === null ? "—" : `${(v * 100).toFixed(1)}%`;
@@ -18,12 +20,21 @@ function fmtPct(v: number | null): string {
 export default function SeismicPage() {
   const datasetsQuery = useQuery({ queryKey: ["seismic-datasets"], queryFn: listSeismic });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const activeWellId = useAppStore((s) => s.activeWellId);
+  const activeDatasetId = useAppStore((s) => s.activeDatasetId);
 
   useEffect(() => {
     if (!selectedId && datasetsQuery.data && datasetsQuery.data.length > 0) {
       setSelectedId(datasetsQuery.data[0].dataset_id);
     }
   }, [datasetsQuery.data, selectedId]);
+
+  // Seed/redirect from the dashboard's shared "active dataset" (e.g. right
+  // after a combined upload) -- clicking a different dataset pill still
+  // overrides this until the active dataset changes again.
+  useEffect(() => {
+    if (activeDatasetId) setSelectedId(activeDatasetId);
+  }, [activeDatasetId]);
 
   const selectedSummary = datasetsQuery.data?.find((d) => d.dataset_id === selectedId);
 
@@ -113,6 +124,13 @@ export default function SeismicPage() {
       <section className="border-t border-border pt-4">
         <SeismicPanel />
       </section>
+
+      <ChatPanel
+        scope="seismic"
+        wellId={activeWellId}
+        title="Seismic Assistant"
+        subtitle="Ask about datasets, ties, and spectra"
+      />
     </div>
   );
 }

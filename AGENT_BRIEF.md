@@ -378,3 +378,32 @@ tune them without touching code. Key notes for future sessions:
   fixing this for `build_synthetic`'s other two callers (`tie_service.py`,
   `seismic_processor.get_well_tie`) as well, not just the new module. See README.md "Synthetic
   Seismogram module" for full details.
+- **Dashboard combined upload + cross-page active-well sync + agent tools added** (user
+  request). A new `POST /dashboard/upload` (`routers/dashboard.py`) accepts a well (`.las`)
+  and its seismic (`.sgy`/`.segy`) together, parses the well synchronously, and runs seismic
+  upload + the existing, unmodified well-to-seismic tie + synthetic seismogram + a spectral
+  summary as a single `fastapi.BackgroundTasks` job
+  (`services/dashboard_upload_service.py`) -- the app's first background-job infrastructure
+  (previously everything ran synchronously in the request). The uploaded SEG-Y feeds both of
+  the app's pre-existing, independent SEG-Y storage systems (the upload pipeline's named
+  `dataset_id`, and the single active volume `seismic_processor.get_segy_volume()` reads for
+  Seismic Visualization/Synthetic Seismogram), so all three pages pick up the new data.
+  Results land in a new disk-persisted, well_id-keyed cache
+  (`well_processing_cache_repository.py`, same repository pattern as
+  `synthetic_tie_repository.py`) -- extending the pre-existing in-memory-only
+  `_spectral_cache`/`_volume_cache` pattern to survive restarts and be readable outside a
+  live request. A tie/synthetic result with correlation below 0.3, or a shift search pinned
+  to its boundary, is flagged `low_confidence` -- kept distinct from `status` (which only
+  tracks whether the pipeline ran without crashing), so a bad tie is never silently rendered
+  as a normal result, in either the API or the UI. Four new agent tools
+  (`get_well_seismic_tie`, `get_synthetic_seismogram`, `get_spectral_decomposition`,
+  `get_survey_info`) read this cache (cache-first, live-compute fallback for wells not
+  uploaded through the new flow) -- a deliberately separate family from the pre-existing
+  `list_seismic_datasets`/`get_seismic_summary` tools (different subsystem, not merged).
+  Frontend: `useAppStore`'s new `activeWellId`/`activeDatasetId` are set by a new
+  `DashboardUpload.tsx` widget and read by the Seismic and Synthetic Seismogram pages'
+  selectors (seed/redirect, not lock -- a manual pick still overrides until the active well
+  changes again) and by new `ChatPanel` instances added to both pages (previously chat only
+  existed on the Dashboard and single-well view). See README.md "Dashboard combined upload"
+  for the full design, including the run_token compare-and-swap that protects a same-well
+  re-upload race and the two-SEG-Y-system reconciliation.

@@ -29,6 +29,38 @@ export interface WellUploadResponse {
   errors: string[];
 }
 
+export interface DashboardUploadResponse {
+  well_id: string;
+  well_summary: WellSummary;
+  status: "processing";
+}
+
+export interface DashboardUploadStatusResponse {
+  well_id: string;
+  status: "processing" | "ready" | "failed";
+  dataset_id: string | null;
+  segy_filename: string | null;
+  stale: boolean;
+  error: string | null;
+
+  tie_available: boolean;
+  tie_error: string | null;
+  tie_correlation: number | null;
+  tie_boundary_pinned: boolean | null;
+  tie_low_confidence: boolean;
+
+  synthetic_available: boolean;
+  synthetic_error: string | null;
+  synthetic_correlation: number | null;
+  synthetic_boundary_pinned: boolean | null;
+  synthetic_low_confidence: boolean;
+
+  spectral_available: boolean;
+  spectral_dominant_freq_hz: number | null;
+
+  updated_at: string;
+}
+
 export interface WellCurvesResponse {
   well_id: string;
   curve_names: string[];

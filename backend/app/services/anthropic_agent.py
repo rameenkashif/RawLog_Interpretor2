@@ -62,12 +62,24 @@ Rules you must follow:
    CORE_PERM_PRED (a regression trained on PERM_TIXIER as a proxy target, not real core plugs), \
    and DPTM (sonic-integration approximation pending real checkshot/VSP data). Mention this \
    caveat when discussing those curves.
-5. The seismic VSH_SEISMIC_PROXY, PHIE_SEISMIC_PROXY, and SWE_SEISMIC_PROXY attributes are \
-   UNCALIBRATED, amplitude-based heuristics -- NOT measured shale volume, porosity, or water \
-   saturation. They require a real well tie before being used for interpretation. ALWAYS state \
-   this caveat explicitly whenever you report or discuss any seismic proxy value, and never \
-   conflate them with the log-derived VSH/PHIE/SWE curves from wells.
+5. The seismic VSH_SEISMIC_PROXY, PHIE_SEISMIC_PROXY, and SWE_SEISMIC_PROXY attributes \
+   returned by list_seismic_datasets and get_seismic_summary are UNCALIBRATED, amplitude-based \
+   heuristics -- NOT measured shale volume, porosity, or water saturation. They require a real \
+   well tie before being used for interpretation. ALWAYS state this caveat explicitly whenever \
+   you report or discuss a value from those two tools specifically, and never conflate them with \
+   the log-derived VSH/PHIE/SWE curves from wells.
 6. Be concise. Use units (m, API, ohm.m, g/cc, v/v, mD, ms, Hz) when quoting values.
+7. get_well_seismic_tie, get_synthetic_seismogram, get_spectral_decomposition, and \
+   get_survey_info return direct computed results (real cross-correlation searches, real \
+   spectral analysis, real survey geometry) -- the rule 5 heuristic caveat does NOT apply to \
+   them. Instead, the tie/synthetic tool results carry a low_confidence flag (spectral/survey \
+   results carry an available flag). ALWAYS check this flag and state it plainly when it's true \
+   -- e.g. "the tie for well X has low confidence (correlation 0.21, below the 0.3 threshold)" \
+   or "the shift search pinned to its boundary, which usually means a spurious match, not a \
+   genuine tie" -- rather than reporting the correlation number alone or narrating around a bad \
+   result. The user is normally asking about whichever well is currently active in the UI (see \
+   the "(The user is currently viewing well ...)" note appended to their message); use that \
+   well_id unless they name a different one.
 """
 
 TOOLS = [
@@ -172,8 +184,72 @@ SEISMIC_TOOLS = [
     },
 ]
 
+# Distinct subsystem from list_seismic_datasets/get_seismic_summary above
+# (deliberately not merged with them, see dashboard_upload_service.py's
+# docstring) -- these read the well-processing cache populated by the
+# dashboard's combined upload background job (cache-first, live-compute
+# fallback for wells not uploaded through that flow), never recomputing a
+# tie/synthetic seismogram inside a chat turn when a cached result exists.
+TIE_SYNTHETIC_TOOLS = [
+    {
+        "name": "get_well_seismic_tie",
+        "description": (
+            "Get the well-to-seismic tie for one well: correlation, winning wavelet frequency, "
+            "polarity, bulk time shift, and trace location. A direct computed result (a real "
+            "frequency/polarity/shift cross-correlation search against the real seismic trace), "
+            "not a heuristic proxy. ALWAYS check and state the low_confidence flag plainly -- "
+            "true means the correlation is weak (below 0.3) or the shift search pinned to its "
+            "search boundary (likely a spurious match), and must be reported as such rather than "
+            "narrated around."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"well_id": {"type": "string", "description": "e.g. 'Z-02'"}},
+            "required": ["well_id"],
+        },
+    },
+    {
+        "name": "get_synthetic_seismogram",
+        "description": (
+            "Get the synthetic seismogram / well-tie summary for one well: correlation, "
+            "polarity, best time shift, the depth-time datum plausibility check, and washout "
+            "interval count. A direct computed result, not a heuristic. ALWAYS check and state "
+            "the low_confidence flag plainly."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"well_id": {"type": "string", "description": "e.g. 'Z-02'"}},
+            "required": ["well_id"],
+        },
+    },
+    {
+        "name": "get_spectral_decomposition",
+        "description": (
+            "Get the dominant frequency, -3dB bandwidth, and S/N proxy of the seismic amplitude "
+            "spectrum at the inline nearest to one well's tie point. A direct computed result "
+            "from the real seismic trace, not a heuristic. Requires a tie to already exist for "
+            "the well (available=false with an error otherwise -- call get_well_seismic_tie "
+            "first if unsure)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"well_id": {"type": "string", "description": "e.g. 'Z-02'"}},
+            "required": ["well_id"],
+        },
+    },
+    {
+        "name": "get_survey_info",
+        "description": (
+            "Get geometry metadata for the currently active SEG-Y survey (the single volume "
+            "backing Seismic Visualization and the Synthetic Seismogram page): trace/sample "
+            "counts, inline/crossline range, sample interval, and two-way-time range."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+]
+
 if _SEISMIC_AVAILABLE:
-    TOOLS = TOOLS + SEISMIC_TOOLS
+    TOOLS = TOOLS + SEISMIC_TOOLS + TIE_SYNTHETIC_TOOLS
 
 
 # -----------------------------------------------------------------------------
@@ -246,6 +322,34 @@ def _tool_get_seismic_summary(dataset_id: str) -> dict[str, Any]:
     return summary.model_dump()
 
 
+def _tool_get_well_seismic_tie(well_id: str) -> dict[str, Any]:
+    from app.services import dashboard_upload_service
+
+    return dashboard_upload_service.get_tie_summary(well_id)
+
+
+def _tool_get_synthetic_seismogram(well_id: str) -> dict[str, Any]:
+    from app.services import dashboard_upload_service
+
+    return dashboard_upload_service.get_synthetic_summary(well_id)
+
+
+def _tool_get_spectral_decomposition(well_id: str) -> dict[str, Any]:
+    from app.services import dashboard_upload_service
+
+    return dashboard_upload_service.get_spectral_summary(well_id)
+
+
+def _tool_get_survey_info() -> dict[str, Any]:
+    from app.services import seismic_processor as sp
+
+    try:
+        info = sp.get_segy_volume().survey_info()
+        return {"available": True, **vars(info)}
+    except sp.SegyFileNotFoundError as exc:
+        return {"available": False, "error": str(exc)}
+
+
 TOOL_DISPATCH = {
     "get_well_summary": _tool_get_well_summary,
     "get_curve_values": _tool_get_curve_values,
@@ -256,6 +360,10 @@ TOOL_DISPATCH = {
 if _SEISMIC_AVAILABLE:
     TOOL_DISPATCH["list_seismic_datasets"] = _tool_list_seismic_datasets
     TOOL_DISPATCH["get_seismic_summary"] = _tool_get_seismic_summary
+    TOOL_DISPATCH["get_well_seismic_tie"] = _tool_get_well_seismic_tie
+    TOOL_DISPATCH["get_synthetic_seismogram"] = _tool_get_synthetic_seismogram
+    TOOL_DISPATCH["get_spectral_decomposition"] = _tool_get_spectral_decomposition
+    TOOL_DISPATCH["get_survey_info"] = _tool_get_survey_info
 
 
 def _run_tool(name: str, tool_input: dict[str, Any]) -> Any:

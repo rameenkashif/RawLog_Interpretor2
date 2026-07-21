@@ -224,7 +224,48 @@ class ChatResponse(BaseModel):
         default_factory=list,
         description="Record of tool calls the agent made, for transparency",
     )
-    
+
+
+# -----------------------------------------------------------------------------
+# Dashboard combined upload (well + seismic, auto-processed in the background)
+# -----------------------------------------------------------------------------
+class DashboardUploadResponse(BaseModel):
+    well_id: str
+    well_summary: WellSummary
+    status: str = Field("processing", description="Always 'processing' -- poll GET /dashboard/upload/{well_id}/status")
+
+
+class DashboardUploadStatusResponse(BaseModel):
+    well_id: str
+    status: str = Field(..., description="'processing' | 'ready' | 'failed'")
+    dataset_id: str | None = None
+    segy_filename: str | None = None
+    stale: bool = Field(
+        False,
+        description="True if segy_filename is no longer the currently active SEG-Y volume (a later upload replaced it)",
+    )
+    error: str | None = None
+
+    tie_available: bool = False
+    tie_error: str | None = None
+    tie_correlation: float | None = None
+    tie_boundary_pinned: bool | None = None
+    tie_low_confidence: bool = Field(
+        False, description="True if correlation < 0.3 or boundary_pinned -- a distinct, must-not-be-silent flag"
+    )
+
+    synthetic_available: bool = False
+    synthetic_error: str | None = None
+    synthetic_correlation: float | None = None
+    synthetic_boundary_pinned: bool | None = None
+    synthetic_low_confidence: bool = False
+
+    spectral_available: bool = False
+    spectral_dominant_freq_hz: float | None = None
+
+    updated_at: str
+
+
 class WellSeismicTieResponse(BaseModel):
     well_id: str
     dataset_id: str

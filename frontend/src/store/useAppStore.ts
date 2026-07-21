@@ -20,6 +20,16 @@ interface AppState {
   conversations: Record<string, ChatMessage[]>;
   appendMessage: (scope: string, message: ChatMessage) => void;
   clearConversation: (scope: string) => void;
+
+  // The well/seismic-dataset currently "active" across pages -- set once
+  // (e.g. by the Dashboard's combined upload) and read by the Seismic and
+  // Synthetic Seismogram pages (and the chat panel's well_id context) so
+  // a newly uploaded well/dataset appears everywhere without manual
+  // re-selection on each page. Pages still allow a manual override; this
+  // only seeds/redirects their local selection state.
+  activeWellId: string | null;
+  activeDatasetId: string | null;
+  setActiveWell: (wellId: string | null, datasetId?: string | null) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -37,4 +47,12 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   clearConversation: (scope) =>
     set((s) => ({ conversations: { ...s.conversations, [scope]: [] } })),
+
+  activeWellId: null,
+  activeDatasetId: null,
+  setActiveWell: (wellId, datasetId) =>
+    set((s) => ({
+      activeWellId: wellId,
+      activeDatasetId: datasetId !== undefined ? datasetId : s.activeDatasetId,
+    })),
 }));

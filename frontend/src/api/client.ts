@@ -13,6 +13,8 @@ import type {
   CrosslineSectionResponse,
   CrossplotResponse,
   DashboardSummary,
+  DashboardUploadResponse,
+  DashboardUploadStatusResponse,
   DensityMethod,
   InlineSectionResponse,
   NearestTraceResponse,
@@ -98,6 +100,33 @@ export async function getCrossplot(
 
 export async function getDashboardSummary(): Promise<DashboardSummary> {
   const { data } = await http.get<DashboardSummary>("/dashboard/summary");
+  return data;
+}
+
+/** Combined well + seismic upload -- both are required. The well is
+ * processed immediately; seismic/tie/synthetic/spectral processing runs in
+ * the background, poll getDashboardUploadStatus(well_id) for progress. */
+export async function uploadDashboard(
+  lasFile: File,
+  segyFile: File,
+): Promise<DashboardUploadResponse> {
+  const form = new FormData();
+  form.append("las_file", lasFile);
+  form.append("segy_file", segyFile);
+  const { data } = await http.post<DashboardUploadResponse>(
+    "/dashboard/upload",
+    form,
+    { headers: { "Content-Type": "multipart/form-data" } },
+  );
+  return data;
+}
+
+export async function getDashboardUploadStatus(
+  wellId: string,
+): Promise<DashboardUploadStatusResponse> {
+  const { data } = await http.get<DashboardUploadStatusResponse>(
+    `/dashboard/upload/${wellId}/status`,
+  );
   return data;
 }
 

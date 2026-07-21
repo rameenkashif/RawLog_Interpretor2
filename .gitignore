@@ -20,6 +20,9 @@ backend/data/seismic_processed/*.meta.json
 # file per well -- regenerable via the UI, not source data)
 backend/data/synthetic_processed/*.json
 
+# Dashboard-upload background pipeline cache (regenerable from re-upload)
+backend/data/well_processing_cache/*.json
+
 # Node / frontend
 frontend/node_modules/
 frontend/dist/

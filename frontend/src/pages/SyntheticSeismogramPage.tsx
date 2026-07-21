@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
@@ -10,6 +10,8 @@ import WaveletView from "@/components/Synthetic/WaveletView";
 import SyntheticTraceOverlay from "@/components/Synthetic/SyntheticTraceOverlay";
 import WashoutSummary from "@/components/Synthetic/WashoutSummary";
 import StretchSqueezeControls from "@/components/Synthetic/StretchSqueezeControls";
+import ChatPanel from "@/components/ChatPanel";
+import { useAppStore } from "@/store/useAppStore";
 
 function errorMessage(error: unknown): string {
   if (error instanceof AxiosError) {
@@ -30,8 +32,16 @@ function errorMessage(error: unknown): string {
 export default function SyntheticSeismogramPage() {
   const queryClient = useQueryClient();
   const wellsQuery = useQuery({ queryKey: ["wells"], queryFn: listWells });
+  const activeWellId = useAppStore((s) => s.activeWellId);
 
   const [wellId, setWellId] = useState<string | null>(null);
+  // Seed/redirect from the dashboard's shared "active well" (e.g. right
+  // after a combined upload) -- a manual pick from the dropdown below
+  // still overrides this until the active well changes again.
+  useEffect(() => {
+    if (activeWellId) setWellId(activeWellId);
+  }, [activeWellId]);
+
   const [waveletMethod, setWaveletMethod] = useState<WaveletMethod>("statistical");
   const [waveletFreqHz, setWaveletFreqHz] = useState(25);
   const [densityMethod, setDensityMethod] = useState<DensityMethod>("rhob");
@@ -210,6 +220,13 @@ export default function SyntheticSeismogramPage() {
           </section>
         </div>
       )}
+
+      <ChatPanel
+        scope="synthetic"
+        wellId={wellId}
+        title="Synthetic Seismogram Assistant"
+        subtitle="Ask about this well's tie, wavelet, and QC flags"
+      />
     </div>
   );
 }

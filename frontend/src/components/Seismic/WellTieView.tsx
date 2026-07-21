@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import {
@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import { getWellTieViz, listWells } from "@/api/client";
 import { useChartColors } from "@/styles/tokens";
+import { useAppStore } from "@/store/useAppStore";
 
 function errorMessage(error: unknown): string {
   if (error instanceof AxiosError) {
@@ -48,6 +49,13 @@ export default function WellTieView() {
   const wellsQuery = useQuery({ queryKey: ["wells"], queryFn: listWells });
   const [wellId, setWellId] = useState<string | null>(null);
   const [waveletFreqHz, setWaveletFreqHz] = useState(25);
+  const activeWellId = useAppStore((s) => s.activeWellId);
+
+  // Seed/redirect from the dashboard's shared active well -- a manual pick
+  // from the dropdown below still overrides this until it changes again.
+  useEffect(() => {
+    if (activeWellId) setWellId(activeWellId);
+  }, [activeWellId]);
 
   const tieQuery = useQuery({
     queryKey: ["seismic-viz-well-tie", wellId, waveletFreqHz],

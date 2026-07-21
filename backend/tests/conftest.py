@@ -114,3 +114,18 @@ def _isolate_coordinate_repos(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ctor, "_repository", ctor.FileCoordinateTieOverrideRepository(base_dir=tmp_path / "overrides")
     )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_well_processing_cache(tmp_path, monkeypatch):
+    """well_processing_cache_repository.py's default singleton is backed by
+    a real directory under backend/data/well_processing_cache/. Force it to
+    a fresh per-test tmp_path instance so tests (e.g. dashboard_upload_
+    service, which reads the singleton via get_well_processing_cache_
+    repository() rather than accepting an injectable repo) can't leak
+    state into or read stale state from the real cache directory."""
+    import app.well_processing_cache_repository as wpcr
+
+    monkeypatch.setattr(
+        wpcr, "_repository", wpcr.FileWellProcessingCacheRepository(base_dir=tmp_path / "well_processing_cache")
+    )

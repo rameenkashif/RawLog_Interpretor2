@@ -4,6 +4,8 @@ import Plot from "react-plotly.js";
 import { getAllWellSeismicTies, getWellSeismicTie, listSeismic } from "@/api/client";
 import type { WellSeismicTieRow } from "@/api/types";
 import { useChartColors, usePlotlyLayout, type ChartColors } from "@/styles/tokens";
+import { useAppStore } from "@/store/useAppStore";
+import { isLowConfidenceTie } from "@/utils/tieConfidence";
 
 /** Correlation quality tiering, matching the pay/reservoir/danger semantic
  * colors used for zone quality elsewhere in the app (styles/tokens.ts) --
@@ -30,12 +32,24 @@ export default function WellSeismicTie() {
   const [selectedWellId, setSelectedWellId] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("correlation");
   const [sortAsc, setSortAsc] = useState(false);
+  const activeWellId = useAppStore((s) => s.activeWellId);
+  const activeDatasetId = useAppStore((s) => s.activeDatasetId);
 
   useEffect(() => {
     if (!datasetId && datasetsQuery.data && datasetsQuery.data.length > 0) {
       setDatasetId(datasetsQuery.data[0].dataset_id);
     }
   }, [datasetsQuery.data, datasetId]);
+
+  // Seed/redirect from the dashboard's shared active well/dataset -- the
+  // "best correlation" auto-pick below remains the fallback when no
+  // active well has been set (e.g. before any dashboard upload).
+  useEffect(() => {
+    if (activeDatasetId) setDatasetId(activeDatasetId);
+  }, [activeDatasetId]);
+  useEffect(() => {
+    if (activeWellId) setSelectedWellId(activeWellId);
+  }, [activeWellId]);
 
   const batchQuery = useQuery({
     queryKey: ["well-seismic-tie-batch", datasetId],
@@ -207,7 +221,7 @@ export default function WellSeismicTie() {
                               }}
                             >
                               {fmt(row.correlation, 3)}
-                              {row.boundary_pinned && " ⚠"}
+                              {isLowConfidenceTie(row.correlation, row.boundary_pinned) && " ⚠"}
                             </span>
                           </td>
                           <td className="px-3 py-2.5 text-ink-faint text-xs">
@@ -306,9 +320,12 @@ export default function WellSeismicTie() {
                   {detailQuery.data.geometry_warning}
                 </div>
               )}
-              {detailQuery.data.boundary_pinned && (
+              {isLowConfidenceTie(detailQuery.data.correlation, detailQuery.data.boundary_pinned) && (
                 <div className="text-danger text-xs mb-2">
-                  ⚠ Shift pinned to search edge — likely spurious, not a genuine tie
+                  ⚠{" "}
+                  {detailQuery.data.boundary_pinned
+                    ? "Shift pinned to search edge — likely spurious, not a genuine tie"
+                    : `Low-confidence tie — correlation ${detailQuery.data.correlation.toFixed(3)} is below the 0.3 threshold`}
                 </div>
               )}
 

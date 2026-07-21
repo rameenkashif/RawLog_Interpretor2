@@ -5,6 +5,7 @@ import WellsBarChart from "@/components/WellsBarChart";
 import NetPayChart from "@/components/NetPayChart";
 import WellTable from "@/components/WellTable";
 import UploadWells from "@/components/UploadWells";
+import DashboardUpload from "@/components/DashboardUpload";
 import SeismicDashboardModule from "@/components/SeismicDashboardModule";
 import ChatPanel from "@/components/ChatPanel";
 
@@ -82,7 +83,10 @@ export default function DashboardPage() {
                 <h2 className="text-sm font-semibold text-ink mb-1.5">
                   Add Data
                 </h2>
-                <UploadWells />
+                <div className="space-y-3">
+                  <DashboardUpload />
+                  <UploadWells />
+                </div>
               </div>
               <SeismicDashboardModule
                 nDatasets={data.n_seismic_datasets}
