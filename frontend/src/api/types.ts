@@ -467,6 +467,15 @@ export interface SswtCorrelationPair {
   sswt_n: number;
 }
 
+export interface SswtCorrelationScatter {
+  depth_m: number[];
+  vsh: (number | null)[];
+  phie: (number | null)[];
+  swe: (number | null)[];
+  cwt_amplitude: number[];
+  sswt_amplitude: number[];
+}
+
 export interface SswtPetroCorrelationWellResult {
   well_id: string;
   nearest_inline: number;
@@ -477,6 +486,8 @@ export interface SswtPetroCorrelationWellResult {
   phie: SswtCorrelationPair;
   swe: SswtCorrelationPair;
   low_sample_warning: boolean;
+  /** Raw paired samples for a crossplot -- 'single' well mode only, null in 'all_wells' mode. */
+  scatter: SswtCorrelationScatter | null;
 }
 
 export interface SswtCorrelationAverage {

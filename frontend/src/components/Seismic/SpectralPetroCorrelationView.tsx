@@ -17,6 +17,8 @@ import type {
   SswtPetroCorrelationWellResult,
 } from "@/api/types";
 import { useChartColors } from "@/styles/tokens";
+import SswtCorrelationCrossplots from "./SswtCorrelationCrossplots";
+import SswtCorrelationScalograms from "./SswtCorrelationScalograms";
 
 type CompareMethod = "swt" | "sswt";
 
@@ -415,6 +417,32 @@ export default function SpectralPetroCorrelationView() {
           <CorrelationBarChart otherLabel={otherLabel} pairs={chartPairs} />
 
           <p className="text-sm text-ink-muted">{buildSummary(summarySubject, otherLabel, chartPairs)}</p>
+
+          {isSswt && singleSswtWell && singleSswtWell.scatter && (
+            <section>
+              <h4 className="text-xs font-semibold text-ink mb-1.5">
+                Crossplots — {singleSswtWell.well_id}
+              </h4>
+              <SswtCorrelationCrossplots
+                scatter={singleSswtWell.scatter}
+                vsh={singleSswtWell.vsh}
+                phie={singleSswtWell.phie}
+                swe={singleSswtWell.swe}
+              />
+            </section>
+          )}
+
+          {isSswt && singleSswtWell && (
+            <section>
+              <h4 className="text-xs font-semibold text-ink mb-1.5">
+                Time-frequency image — {singleSswtWell.well_id}
+              </h4>
+              <SswtCorrelationScalograms
+                inlineNumber={singleSswtWell.nearest_inline}
+                crosslineNumber={singleSswtWell.nearest_crossline}
+              />
+            </section>
+          )}
 
           {!isSswt && swtData?.mode === "all_wells" && (
             <div className="bg-surface border border-border rounded-xl p-3 shadow-card">

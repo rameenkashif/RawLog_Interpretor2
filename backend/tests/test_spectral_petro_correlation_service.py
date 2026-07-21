@@ -319,6 +319,37 @@ class TestSingleWellSswtCorrelation:
         with pytest.raises(sp.CrsMismatchError):
             spc.get_sswt_correlation(well_id=result.well_id, all_wells=False)
 
+    def test_scatter_present_and_matches_pair_sample_counts(self, aligned_well):
+        result = spc.get_sswt_correlation(well_id=aligned_well.well_id, all_wells=False)
+        well = result["wells"][0]
+        scatter = well["scatter"]
+        assert scatter is not None
+
+        n = len(scatter["depth_m"])
+        assert n > 0
+        assert len(scatter["cwt_amplitude"]) == n
+        assert len(scatter["sswt_amplitude"]) == n
+        for curve in ("vsh", "phie", "swe"):
+            assert len(scatter[curve]) == n
+            # The pair's own cwt_n is the count of finite (cwt_amplitude,
+            # property) pairs, i.e. non-None entries in the raw series --
+            # the raw series must be consistent with the summary stat it
+            # was reduced from, not an independently-computed duplicate.
+            pair = well[curve]
+            finite_pairs = sum(
+                1
+                for amp, prop in zip(scatter["cwt_amplitude"], scatter[curve])
+                if prop is not None and np.isfinite(amp)
+            )
+            assert finite_pairs == pair["cwt_n"]
+
+    def test_scatter_omitted_when_correlation_present_but_all_wells(self, aligned_well):
+        # Sanity check that the single-well path's scatter is a genuinely
+        # new field, not always-on -- the all_wells path must not carry it
+        # (see next class), keeping that response small.
+        result = spc.get_sswt_correlation(well_id=aligned_well.well_id, all_wells=False)
+        assert "scatter" in result["wells"][0]
+
 
 class TestAllWellsSswtCorrelation:
     ssqueezepy = pytest.importorskip("ssqueezepy")
@@ -343,6 +374,10 @@ class TestAllWellsSswtCorrelation:
         result = spc.get_sswt_correlation(well_id=None, all_wells=True)
         well_ids = {w["well_id"] for w in result["wells"]}
         assert well_ids == {aligned_well.well_id, aligned_well_2.well_id}
+
+    def test_scatter_omitted_in_all_wells_mode(self, aligned_well, aligned_well_2):
+        result = spc.get_sswt_correlation(well_id=None, all_wells=True)
+        assert all(w["scatter"] is None for w in result["wells"])
         assert result["skipped_well_ids"] == []
 
     def test_well_without_dt_log_is_skipped_not_raised(self, aligned_well, aligned_well_2, well_repo):

@@ -327,7 +327,11 @@ def _cwt_sswt_freq_match(volume: sp.SegyVolume, frequency_hz: float) -> tuple[fl
 
 
 def _correlate_well_sswt(
-    volume: sp.SegyVolume, well_id: str, cwt_freq_idx: int, sswt_freq_idx: int
+    volume: sp.SegyVolume,
+    well_id: str,
+    cwt_freq_idx: int,
+    sswt_freq_idx: int,
+    include_scatter: bool = False,
 ) -> dict:
     ctx = _resolve_well_tie_context(volume, well_id)
 
@@ -342,8 +346,10 @@ def _correlate_well_sswt(
     sswt_amplitude = np.array(result["sswt_amplitude"])[:, sswt_freq_idx][ctx.overlap]
 
     correlations: dict[str, dict] = {}
+    property_series: dict[str, np.ndarray] = {}
     for curve_name in PETRO_CURVES:
         prop_t = _property_series(ctx, curve_name)
+        property_series[curve_name] = prop_t
         cwt_r, cwt_n = _pearson(cwt_amplitude, prop_t)
         sswt_r, sswt_n = _pearson(sswt_amplitude, prop_t)
         correlations[curve_name] = {"cwt_r": cwt_r, "cwt_n": cwt_n, "sswt_r": sswt_r, "sswt_n": sswt_n}
@@ -352,6 +358,25 @@ def _correlate_well_sswt(
         c["cwt_n"] < MIN_RELIABLE_SAMPLES or c["sswt_n"] < MIN_RELIABLE_SAMPLES for c in correlations.values()
     )
 
+    scatter = None
+    if include_scatter:
+        # The exact per-sample paired series each Pearson r above was
+        # computed from -- for a crossplot, so "how tight is this
+        # correlation" is visible, not just the summary r. NaN -> None so
+        # it survives JSON (a property's own null mask can differ from
+        # cwt/sswt's, per _property_series).
+        def _nan_to_none(arr: np.ndarray) -> list[float | None]:
+            return [None if not np.isfinite(v) else float(v) for v in arr]
+
+        scatter = {
+            "depth_m": ctx.depth_at_time.tolist(),
+            "vsh": _nan_to_none(property_series["vsh"]),
+            "phie": _nan_to_none(property_series["phie"]),
+            "swe": _nan_to_none(property_series["swe"]),
+            "cwt_amplitude": cwt_amplitude.tolist(),
+            "sswt_amplitude": sswt_amplitude.tolist(),
+        }
+
     return {
         "well_id": well_id,
         "nearest_inline": ctx.inline_number,
@@ -359,6 +384,7 @@ def _correlate_well_sswt(
         "distance_m": ctx.distance_m,
         "tie_method": ctx.tie_method,
         "low_sample_warning": low_sample_warning,
+        "scatter": scatter,
         **correlations,
     }
 
@@ -376,7 +402,7 @@ def get_sswt_correlation(
     if not all_wells:
         if not well_id:
             raise sp.SegyVolumeError("well_id is required unless all_wells=true.")
-        result = _correlate_well_sswt(volume, well_id, cwt_freq_idx, sswt_freq_idx)
+        result = _correlate_well_sswt(volume, well_id, cwt_freq_idx, sswt_freq_idx, include_scatter=True)
         return {
             "mode": "single",
             "requested_frequency_hz": frequency_hz,

@@ -660,6 +660,20 @@ class SswtCorrelationPair(BaseModel):
     sswt_n: int = Field(..., description="Sample count used for the SSWT correlation")
 
 
+class SswtCorrelationScatter(BaseModel):
+    """The raw, per-sample paired series each SswtCorrelationPair's Pearson
+    r is computed from, for a crossplot -- only populated in 'single' well
+    mode (see get_sswt_correlation); omitted for 'all_wells' rows to avoid
+    ballooning that response with per-well raw arrays."""
+
+    depth_m: list[float] = Field(..., description="Depth of each sample, for hover labels/color-by")
+    vsh: list[float | None]
+    phie: list[float | None]
+    swe: list[float | None]
+    cwt_amplitude: list[float]
+    sswt_amplitude: list[float]
+
+
 class SswtPetroCorrelationWellResult(BaseModel):
     well_id: str
     nearest_inline: int
@@ -671,6 +685,9 @@ class SswtPetroCorrelationWellResult(BaseModel):
     swe: SswtCorrelationPair
     low_sample_warning: bool = Field(
         ..., description="True if any correlation pair's sample count is below the reliability threshold (20)"
+    )
+    scatter: SswtCorrelationScatter | None = Field(
+        None, description="Raw paired samples for a crossplot -- 'single' well mode only"
     )
 
 
