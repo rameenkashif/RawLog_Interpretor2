@@ -42,7 +42,7 @@ DEFAULT_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 SYSTEM_PROMPT = """You are a petrophysics assistant embedded in a well log and seismic \
 interpretation platform. You help geoscientists and engineers understand computed \
 petrophysical curves (VSH, PHIT, PHIE, SWE, PERM_TIXIER, CORE_PERM_PRED, VVOLC, ZONES) \
-across a set of wells (Z-02 through Z-08), as well as seismic attribute data derived from \
+across whichever wells are currently loaded, as well as seismic attribute data derived from \
 uploaded SEG-Y datasets.
 
 Rules you must follow:
@@ -50,28 +50,34 @@ Rules you must follow:
    from general petrophysics knowledge when a tool can retrieve the real, computed value \
    for this dataset. If a tool call fails or returns no data, say so plainly instead of \
    filling in a plausible-sounding number.
-2. Explain interpretations in plain language when asked "why" or "what does this mean" -- \
+2. NEVER guess a well_id's exact spelling/format. Well IDs are derived from each LAS file's \
+   filename and can vary (e.g. 'Z-02_RAW', not always the bare field name you might expect). \
+   If a well_id isn't given by the "(The user is currently viewing well ...)" context note \
+   below, or a call with an assumed well_id returns "not found", call list_wells FIRST to get \
+   the exact set of valid IDs before trying again -- do not retry several guessed spelling \
+   variants against get_well_summary/get_well_seismic_tie/etc.
+3. Explain interpretations in plain language when asked "why" or "what does this mean" -- \
    e.g. why a zone was classified as pay, or what a high VSH implies about reservoir quality.
-3. Flag explicitly whenever an answer depends on an assumption or cutoff that a subject-matter \
+4. Flag explicitly whenever an answer depends on an assumption or cutoff that a subject-matter \
    expert (SME) should review -- in particular: Rw (formation water resistivity), Swirr \
    (irreducible water saturation), matrix density, Archie a/m/n exponents, and the VSH/PHIE/SWE \
    zone cutoffs. These are configurable defaults, not measured constants, and can materially \
    change the interpretation.
-4. Several well curves are explicitly heuristic/proxy calculations, not direct measurements: \
+5. Several well curves are explicitly heuristic/proxy calculations, not direct measurements: \
    VVOLC (density-neutron crossplot heuristic, uncalibrated against cuttings/core), \
    CORE_PERM_PRED (a regression trained on PERM_TIXIER as a proxy target, not real core plugs), \
    and DPTM (sonic-integration approximation pending real checkshot/VSP data). Mention this \
    caveat when discussing those curves.
-5. The seismic VSH_SEISMIC_PROXY, PHIE_SEISMIC_PROXY, and SWE_SEISMIC_PROXY attributes \
+6. The seismic VSH_SEISMIC_PROXY, PHIE_SEISMIC_PROXY, and SWE_SEISMIC_PROXY attributes \
    returned by list_seismic_datasets and get_seismic_summary are UNCALIBRATED, amplitude-based \
    heuristics -- NOT measured shale volume, porosity, or water saturation. They require a real \
    well tie before being used for interpretation. ALWAYS state this caveat explicitly whenever \
    you report or discuss a value from those two tools specifically, and never conflate them with \
    the log-derived VSH/PHIE/SWE curves from wells.
-6. Be concise. Use units (m, API, ohm.m, g/cc, v/v, mD, ms, Hz) when quoting values.
-7. get_well_seismic_tie, get_synthetic_seismogram, get_spectral_decomposition, and \
+7. Be concise. Use units (m, API, ohm.m, g/cc, v/v, mD, ms, Hz) when quoting values.
+8. get_well_seismic_tie, get_synthetic_seismogram, get_spectral_decomposition, and \
    get_survey_info return direct computed results (real cross-correlation searches, real \
-   spectral analysis, real survey geometry) -- the rule 5 heuristic caveat does NOT apply to \
+   spectral analysis, real survey geometry) -- the rule 6 heuristic caveat does NOT apply to \
    them. Instead, the tie/synthetic tool results carry a low_confidence flag (spectral/survey \
    results carry an available flag). ALWAYS check this flag and state it plainly when it's true \
    -- e.g. "the tie for well X has low confidence (correlation 0.21, below the 0.3 threshold)" \
@@ -84,14 +90,26 @@ Rules you must follow:
 
 TOOLS = [
     {
+        "name": "list_wells",
+        "description": (
+            "List every well currently loaded, with its exact well_id plus basic summary stats "
+            "(depth range, avg VSH/PHIE/SWE, net pay thickness). Well IDs are derived from each "
+            "LAS filename and are NOT guessable from a field-name convention (e.g. the real ID "
+            "might be 'Z-02_RAW', not 'Z-02') -- call this FIRST whenever you don't already have "
+            "an exact well_id from context, or after any other well tool call returns 'not found'."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "get_well_summary",
         "description": (
             "Get summary statistics for one well: depth range, sample count, average VSH/PHIE/SWE, "
-            "and net pay thickness."
+            "and net pay thickness. Call list_wells first if you don't already know this well's "
+            "exact well_id."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"well_id": {"type": "string", "description": "e.g. 'Z-02'"}},
+            "properties": {"well_id": {"type": "string"}},
             "required": ["well_id"],
         },
     },
@@ -257,6 +275,11 @@ if _SEISMIC_AVAILABLE:
 # the same service layers the REST routers use, so the agent and the UI
 # never disagree about the underlying numbers.
 # -----------------------------------------------------------------------------
+def _tool_list_wells() -> dict[str, Any]:
+    summaries = well_service.list_well_summaries()
+    return {"wells": [s.model_dump() for s in summaries]}
+
+
 def _tool_get_well_summary(well_id: str) -> dict[str, Any]:
     summary = well_service.get_well_summary(well_id)
     return summary.model_dump()
@@ -351,6 +374,7 @@ def _tool_get_survey_info() -> dict[str, Any]:
 
 
 TOOL_DISPATCH = {
+    "list_wells": _tool_list_wells,
     "get_well_summary": _tool_get_well_summary,
     "get_curve_values": _tool_get_curve_values,
     "get_zone_breakdown": _tool_get_zone_breakdown,
