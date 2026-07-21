@@ -549,12 +549,27 @@ data: {"type": "done"}
   time of writing). Override with the `ANTHROPIC_MODEL` env var in `backend/.env` without
   any code changes.
 - Tools exposed to Claude (all backed by real computed data, never hallucinated):
-  `get_well_summary(well_id)`, `get_curve_values(well_id, curve_name, depth_min?, depth_max?)`,
-  `get_zone_breakdown(well_id)`, `compare_wells(well_ids, metric)`,
+  `list_wells()`, `get_well_summary(well_id)`,
+  `get_curve_values(well_id, curve_name, depth_min?, depth_max?)`,
+  `get_zone_breakdown(well_id)`, `compare_wells(well_ids, metric)`, `get_field_overview()`,
   `list_seismic_datasets()`, `get_seismic_summary(dataset_id)`,
   `get_well_seismic_tie(well_id)`, `get_synthetic_seismogram(well_id)`,
   `get_spectral_decomposition(well_id)`, `get_survey_info()`.
-- The last four tools are a deliberately separate family from `list_seismic_datasets`/
+- `list_wells()` returns every currently loaded well's exact `well_id` (derived from each LAS
+  filename, e.g. `Z-02_RAW` -- not a guessable convention). The system prompt instructs Claude
+  to call this first whenever it doesn't already know the exact ID, rather than assuming a
+  naming pattern -- added after a real well_id-guessing failure loop with no way to
+  self-correct.
+- `get_field_overview()` returns pay-zone metrics (thickness, PHIE/SWE/VSH) plus tie/synthetic
+  confidence for every loaded well **in one call**, so a cross-well question ("which well has
+  the best pay with a reliable tie") doesn't require Claude to loop
+  `get_zone_breakdown`/`get_well_seismic_tie`/`get_synthetic_seismogram` once per well itself.
+  Deliberately returns raw combined data, never a precomputed "best well" score -- weighing
+  pay quality against tie confidence is a judgment call the system prompt tells Claude to make
+  and state explicitly (see "reasoning workflow" below), not one to bury in an invented
+  formula. Backed by `dashboard_upload_service.get_field_overview()`.
+- `get_well_seismic_tie`/`get_synthetic_seismogram`/`get_spectral_decomposition`/
+  `get_survey_info` are a deliberately separate family from `list_seismic_datasets`/
   `get_seismic_summary` (different subsystem -- see "Dashboard combined upload" below):
   they read the well-processing cache the dashboard's combined upload populates in the
   background (cache-first, falling back to a live computation for a well not uploaded
@@ -563,7 +578,14 @@ data: {"type": "done"}
   `low_confidence` (tie/synthetic) or `available` (spectral/survey) flag -- correlation
   below 0.3, or the shift search pinned to its boundary -- so a bad result is always
   surfaced plainly rather than narrated around.
-- System prompt instructs Claude to ground every numeric claim in a tool result, to flag
+- **Reasoning workflow**: beyond grounding individual facts, the system prompt instructs
+  Claude to reason through interpretive questions ("is this a good prospect", "which well
+  should we prioritize") the way a geophysicist actually works a dataset -- gather the
+  independent lines of evidence relevant to the question (log-derived petrophysics, tie
+  quality, seismic proxies, spectral character) before concluding, explicitly weigh whether
+  they agree or conflict, state confidence, and say what additional data would strengthen a
+  thin or conflicting case, rather than presenting a single number as a settled answer.
+- System prompt also instructs Claude to ground every numeric claim in a tool result, to flag
   when an answer depends on a tunable assumption (Rw, Swirr, matrix density, Archie
   exponents, zone cutoffs) that should be reviewed by an SME, to always caveat
   `list_seismic_datasets`/`get_seismic_summary`'s VSH/PHIE/SWE proxies as uncalibrated

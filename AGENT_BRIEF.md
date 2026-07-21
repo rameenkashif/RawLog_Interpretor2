@@ -407,3 +407,29 @@ tune them without touching code. Key notes for future sessions:
   existed on the Dashboard and single-well view). See README.md "Dashboard combined upload"
   for the full design, including the run_token compare-and-swap that protects a same-well
   re-upload race and the two-SEG-Y-system reconciliation.
+- **`list_wells` agent tool added, fixing a real well_id-guessing failure loop** (bug
+  discovered live). `anthropic_agent.SYSTEM_PROMPT` used to hardcode "across a set of wells
+  (Z-02 through Z-08)" as an example, but `las_loader._well_id_from_filename` derives the real
+  well_id from each LAS filename (`path.stem.upper()`), and the checked-in files are
+  `Z-0X_raw.las`, so the real IDs are `Z-02_RAW`..`Z-08_RAW` -- the prompt's hardcoded example
+  had drifted from reality with no tool letting the agent discover the actual IDs, causing it
+  to repeatedly guess wrong spellings with no way to self-correct. Fixed by adding
+  `list_wells()` (mirrors `list_seismic_datasets`) and rewriting the prompt to instruct calling
+  it first instead of assuming a naming convention -- with a regression test asserting the
+  stale hardcoded string can never come back verbatim.
+- **`get_field_overview` agent tool + a "reason like a geophysicist" system-prompt workflow
+  added** (user request: "how do I make the agent study the data like a true geophysicist").
+  The agent previously answered off whichever single tool call matched the question, rather
+  than proactively cross-referencing independent evidence the way an interpreter actually
+  works. Two additions, deliberately separate: (1) system-prompt guidance instructing Claude
+  to gather the relevant independent lines of evidence (petrophysics, tie quality, seismic
+  proxies, spectral character) before concluding on an interpretive question, explicitly weigh
+  whether they agree or conflict, state confidence, and say what would strengthen a thin case
+  -- rather than adding new computational capability; (2) `get_field_overview()`
+  (`dashboard_upload_service.py`), a composite tool returning pay-zone metrics plus tie/
+  synthetic confidence for every loaded well in one call, so a cross-well ranking question
+  doesn't require looping per-well tool calls. Deliberately returns raw combined data, never a
+  precomputed "best well" score, since inventing that scoring formula would be exactly the
+  kind of unvalidated heuristic this codebase is otherwise careful to avoid (see the seismic
+  proxy caveats) -- the synthesis judgment stays Claude's to make and state explicitly, per
+  the reasoning-workflow guidance above.

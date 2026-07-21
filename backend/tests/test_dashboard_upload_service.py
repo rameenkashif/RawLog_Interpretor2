@@ -284,3 +284,124 @@ class TestSummaryReadersCacheFirst:
         result = dus.get_spectral_summary("Z-99")
         assert result["available"] is False
         assert "error" in result
+
+
+class TestFieldOverview:
+    """get_field_overview -- the cross-well tool backing the agent's
+    reasoning-workflow guidance (see anthropic_agent.SYSTEM_PROMPT) so a
+    ranking/comparison question doesn't require looping per-well tool
+    calls."""
+
+    @pytest.fixture
+    def well_repo(self, tmp_path):
+        from app.repository import FileWellRepository
+
+        return FileWellRepository(base_dir=tmp_path / "wells")
+
+    @pytest.fixture
+    def loaded_wells(self, well_repo):
+        from pathlib import Path
+
+        from app.services import well_service
+
+        raw_dir = Path(__file__).resolve().parents[1] / "data" / "raw"
+        summaries = []
+        for name in ("Z-02_raw.las", "Z-03_raw.las"):
+            las_bytes = (raw_dir / name).read_bytes()
+            summaries.append(well_service.process_and_store_las_bytes(las_bytes, name, repo=well_repo))
+        return summaries
+
+    def _patch_well_service(self, monkeypatch, well_repo):
+        from app.services import well_service
+
+        monkeypatch.setattr(
+            well_service, "list_well_summaries",
+            lambda repo=None, _f=well_service.list_well_summaries: _f(repo=well_repo),
+        )
+        monkeypatch.setattr(
+            well_service, "get_well_zones",
+            lambda well_id, repo=None, _f=well_service.get_well_zones: _f(well_id, repo=well_repo),
+        )
+
+    def test_returns_every_loaded_well_with_pay_zone_data(self, monkeypatch, well_repo, loaded_wells):
+        self._patch_well_service(monkeypatch, well_repo)
+        monkeypatch.setattr(dus, "seismic_deps_available", lambda: False)
+
+        result = dus.get_field_overview()
+
+        well_ids = {w["well_id"] for w in result["wells"]}
+        assert well_ids == {w.well_id for w in loaded_wells}
+        for well in result["wells"]:
+            assert well["pay_zone"] is None or "thickness_m" in well["pay_zone"]
+            assert well["net_pay_thickness"] is not None
+
+    def test_omits_tie_fields_when_seismic_unavailable(self, monkeypatch, well_repo, loaded_wells):
+        self._patch_well_service(monkeypatch, well_repo)
+        monkeypatch.setattr(dus, "seismic_deps_available", lambda: False)
+
+        result = dus.get_field_overview()
+
+        for well in result["wells"]:
+            assert well["tie"] is None
+            assert well["tie_error"] == "Seismic module unavailable."
+            assert well["synthetic"] is None
+            assert well["synthetic_error"] == "Seismic module unavailable."
+
+    def test_includes_tie_and_synthetic_when_available(self, monkeypatch, well_repo, loaded_wells):
+        self._patch_well_service(monkeypatch, well_repo)
+        monkeypatch.setattr(dus, "seismic_deps_available", lambda: True)
+        monkeypatch.setattr(
+            dus, "get_tie_summary", lambda well_id: {"well_id": well_id, "correlation": 0.8, "low_confidence": False}
+        )
+        monkeypatch.setattr(
+            dus, "get_synthetic_summary", lambda well_id: {"correlation": 0.75, "low_confidence": False}
+        )
+
+        result = dus.get_field_overview()
+
+        for well in result["wells"]:
+            assert well["tie"]["correlation"] == 0.8
+            assert well["tie_error"] is None
+            assert well["synthetic"]["correlation"] == 0.75
+            assert well["synthetic_error"] is None
+
+    def test_one_well_failing_tie_does_not_drop_it_or_other_wells(self, monkeypatch, well_repo, loaded_wells):
+        self._patch_well_service(monkeypatch, well_repo)
+        monkeypatch.setattr(dus, "seismic_deps_available", lambda: True)
+
+        def _tie(well_id):
+            if well_id == loaded_wells[0].well_id:
+                return {"error": "no coordinates available"}
+            return {"correlation": 0.9, "low_confidence": False}
+
+        monkeypatch.setattr(dus, "get_tie_summary", _tie)
+        monkeypatch.setattr(dus, "get_synthetic_summary", lambda well_id: {"correlation": 0.9, "low_confidence": False})
+
+        result = dus.get_field_overview()
+
+        assert len(result["wells"]) == len(loaded_wells)
+        by_id = {w["well_id"]: w for w in result["wells"]}
+        assert by_id[loaded_wells[0].well_id]["tie"] is None
+        assert by_id[loaded_wells[0].well_id]["tie_error"] == "no coordinates available"
+        assert by_id[loaded_wells[1].well_id]["tie"]["correlation"] == 0.9
+
+    def test_zone_lookup_failure_is_isolated_per_well(self, monkeypatch, well_repo, loaded_wells):
+        from app.services import well_service
+
+        monkeypatch.setattr(
+            well_service, "list_well_summaries",
+            lambda repo=None, _f=well_service.list_well_summaries: _f(repo=well_repo),
+        )
+
+        def _broken_zones(well_id, repo=None):
+            raise RuntimeError("zone computation exploded")
+
+        monkeypatch.setattr(well_service, "get_well_zones", _broken_zones)
+        monkeypatch.setattr(dus, "seismic_deps_available", lambda: False)
+
+        result = dus.get_field_overview()
+
+        assert len(result["wells"]) == len(loaded_wells)
+        for well in result["wells"]:
+            assert well["pay_zone"] is None
+            assert well["zone_error"] == "zone computation exploded"

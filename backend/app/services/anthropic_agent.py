@@ -45,6 +45,27 @@ petrophysical curves (VSH, PHIT, PHIE, SWE, PERM_TIXIER, CORE_PERM_PRED, VVOLC, 
 across whichever wells are currently loaded, as well as seismic attribute data derived from \
 uploaded SEG-Y datasets.
 
+How to reason about interpretive questions: when asked something that calls for judgment \
+rather than a single fact -- "is this a good prospect", "which well/zone should we prioritize", \
+"how confident are we", "does the seismic support what the logs show" -- reason the way a \
+geophysicist actually works a dataset, not like a lookup:
+  - Gather the INDEPENDENT lines of evidence relevant to the question before concluding: \
+    log-derived petrophysics (VSH/PHIE/SWE, zone breakdown), well-to-seismic tie quality, \
+    the seismic proxies (with their heuristic caveat, rule 6 below), and spectral character \
+    where relevant. Don't answer off the first tool call if the question needs more than one.
+  - Explicitly weigh whether these lines of evidence AGREE or CONFLICT -- e.g. strong pay-zone \
+    metrics backed by a high-confidence tie is a stronger case than the same metrics with a \
+    low-confidence or missing tie; a bright seismic amplitude anomaly with no well-log support \
+    is a hypothesis, not a conclusion.
+  - State your confidence and say plainly what would strengthen a thin or conflicting case \
+    (e.g. a real checkshot, core calibration, an SME reviewing Rw/Swirr, more wells) rather than \
+    presenting a single number as a settled answer.
+  - For a question spanning multiple wells (ranking, comparison, "which well is best"), call \
+    get_field_overview ONCE rather than looping get_zone_breakdown/get_well_seismic_tie/ \
+    get_synthetic_seismogram yourself once per well -- it returns the same underlying data \
+    pre-gathered, not a precomputed verdict; the synthesis and ranking judgment is still yours \
+    to make and state explicitly, not to hide behind an invented composite score.
+
 Rules you must follow:
 1. ALWAYS ground numeric answers in tool results. Never estimate, guess, or recall a number \
    from general petrophysics knowledge when a tool can retrieve the real, computed value \
@@ -168,6 +189,20 @@ TOOLS = [
             },
             "required": ["well_ids", "metric"],
         },
+    },
+    {
+        "name": "get_field_overview",
+        "description": (
+            "Get a cross-well summary in ONE call: for every currently loaded well, its "
+            "pay-zone thickness/PHIE/SWE/VSH, plus (if seismic is loaded) well-to-seismic tie "
+            "and synthetic seismogram confidence (correlation, low_confidence flag). Use this "
+            "instead of calling get_zone_breakdown/get_well_seismic_tie/get_synthetic_seismogram "
+            "once per well whenever a question compares or ranks wells (e.g. best pay with a "
+            "reliable tie). Returns raw combined data, not a precomputed 'best well' score -- "
+            "weigh pay quality against tie confidence yourself, explicitly, per the reasoning "
+            "guidance above. May take a few seconds if some wells haven't been tied yet."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
     },
 ]
 
@@ -335,6 +370,12 @@ def _tool_compare_wells(well_ids: list[str], metric: str) -> dict[str, Any]:
     return {"metric": metric, "values": results}
 
 
+def _tool_get_field_overview() -> dict[str, Any]:
+    from app.services import dashboard_upload_service
+
+    return dashboard_upload_service.get_field_overview()
+
+
 def _tool_list_seismic_datasets() -> dict[str, Any]:
     summaries = seismic_service.list_seismic_summaries()
     return {"datasets": [s.model_dump() for s in summaries]}
@@ -379,6 +420,7 @@ TOOL_DISPATCH = {
     "get_curve_values": _tool_get_curve_values,
     "get_zone_breakdown": _tool_get_zone_breakdown,
     "compare_wells": _tool_compare_wells,
+    "get_field_overview": _tool_get_field_overview,
 }
 
 if _SEISMIC_AVAILABLE:

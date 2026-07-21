@@ -77,3 +77,37 @@ class TestSystemPromptDoesNotHardcodeWellIds:
 
     def test_instructs_calling_list_wells_before_guessing(self):
         assert "list_wells" in anthropic_agent.SYSTEM_PROMPT
+
+
+class TestGetFieldOverviewTool:
+    def test_registered_in_tools_and_dispatch(self):
+        tool_names = {t["name"] for t in anthropic_agent.TOOLS}
+        assert "get_field_overview" in tool_names
+        assert anthropic_agent.TOOL_DISPATCH["get_field_overview"] is anthropic_agent._tool_get_field_overview
+
+    def test_takes_no_required_arguments(self):
+        tool = next(t for t in anthropic_agent.TOOLS if t["name"] == "get_field_overview")
+        assert tool["input_schema"].get("required", []) == []
+
+    def test_dispatches_to_dashboard_upload_service(self, monkeypatch):
+        from app.services import dashboard_upload_service
+
+        monkeypatch.setattr(dashboard_upload_service, "get_field_overview", lambda: {"wells": ["sentinel"]})
+        assert anthropic_agent._tool_get_field_overview() == {"wells": ["sentinel"]}
+
+
+class TestSystemPromptReasoningWorkflow:
+    """The agent used to answer interpretive questions off a single tool
+    call; these guard the reasoning-workflow guidance that tells it to
+    gather independent evidence, weigh agreement/conflict, and use
+    get_field_overview instead of looping per-well calls itself."""
+
+    def test_mentions_get_field_overview_for_cross_well_questions(self):
+        assert "get_field_overview" in anthropic_agent.SYSTEM_PROMPT
+
+    def test_instructs_weighing_agreement_or_conflict_between_evidence(self):
+        prompt_lower = anthropic_agent.SYSTEM_PROMPT.lower()
+        assert "agree" in prompt_lower and "conflict" in prompt_lower
+
+    def test_forbids_hiding_synthesis_behind_an_invented_score(self):
+        assert "composite score" in anthropic_agent.SYSTEM_PROMPT.lower()

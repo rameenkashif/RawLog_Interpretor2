@@ -431,3 +431,81 @@ def is_active_volume_stale(record: WellProcessingCacheRecord) -> bool:
         return active.path.name != record.segy_filename
     except Exception:  # noqa: BLE001
         return False
+
+
+def get_field_overview() -> dict:
+    """Cross-well summary combining petrophysical pay-zone quality with
+    well-to-seismic tie/synthetic-seismogram confidence for every
+    currently loaded well, in one call -- backs the agent's
+    get_field_overview tool so a cross-well question (e.g. "which well
+    has the best pay with a reliable tie") doesn't require looping
+    get_zone_breakdown + get_well_seismic_tie + get_synthetic_seismogram
+    once per well itself.
+
+    Deliberately returns raw combined data per well, not a precomputed
+    composite "best well" score -- weighing pay quality against tie
+    confidence is exactly the judgment call a geophysicist (or the agent,
+    per the system prompt's reasoning workflow) should make explicitly,
+    not have hidden inside an invented formula.
+
+    Tie/synthetic fields reuse get_tie_summary/get_synthetic_summary's
+    existing cache-first behavior -- for a well never processed by the
+    dashboard-upload pipeline, this falls back to a live computation (the
+    same full frequency/polarity/shift search GET /tie/{well_id} runs),
+    so a field-wide overview across several uncached wells can take a few
+    seconds -- the same synchronous-per-well cost the app's existing
+    batch tie endpoint (GET /tie/all) already accepts.
+    """
+    from app.services import well_service
+
+    wells: list[dict] = []
+    for summary in well_service.list_well_summaries():
+        well_id = summary.well_id
+        entry: dict = {
+            "well_id": well_id,
+            "footage_logged": summary.footage_logged,
+            "net_pay_thickness": summary.net_pay_thickness,
+            "avg_vsh": summary.avg_vsh,
+            "avg_phie": summary.avg_phie,
+            "avg_swe": summary.avg_swe,
+            "pay_zone": None,
+            "zone_error": None,
+            "tie": None,
+            "tie_error": None,
+            "synthetic": None,
+            "synthetic_error": None,
+        }
+
+        try:
+            zones = well_service.get_well_zones(well_id)
+            pay_row = next((z for z in zones.zones if z.zone_label == "Pay"), None)
+            if pay_row is not None:
+                entry["pay_zone"] = {
+                    "thickness_m": pay_row.thickness,
+                    "avg_phie": pay_row.avg_phie,
+                    "avg_swe": pay_row.avg_swe,
+                    "avg_vsh": pay_row.avg_vsh,
+                    "n_samples": pay_row.n_samples,
+                }
+        except Exception as exc:  # noqa: BLE001 -- one well's zone lookup failing shouldn't drop it from the overview
+            entry["zone_error"] = str(exc)
+
+        if seismic_deps_available():
+            tie = get_tie_summary(well_id)
+            if "error" in tie:
+                entry["tie_error"] = tie["error"]
+            else:
+                entry["tie"] = tie
+
+            synthetic = get_synthetic_summary(well_id)
+            if "error" in synthetic:
+                entry["synthetic_error"] = synthetic["error"]
+            else:
+                entry["synthetic"] = synthetic
+        else:
+            entry["tie_error"] = "Seismic module unavailable."
+            entry["synthetic_error"] = "Seismic module unavailable."
+
+        wells.append(entry)
+
+    return {"wells": wells}
