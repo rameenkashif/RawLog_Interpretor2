@@ -461,17 +461,29 @@ tune them without touching code. Key notes for future sessions:
   `well_seismic_tie.cross_correlate_and_shift` with a dedicated test
   (`TestTimeShiftCorrection`), not just derived. Frontend: a new "Spectral Property Prediction"
   tab in `SeismicPanel.tsx` (`SpectralPropertyModelView.tsx`).
-- **`get_synthetic_summary` search rigor fixed** (bug found immediately after shipping the
-  above, from real usage: wells the Well-to-Seismic Tie page showed as well-tied, e.g. 0.94
-  correlation, came back excluded as low-confidence in the new Spectral Property Prediction
-  view). Root cause: `dashboard_upload_service.get_synthetic_summary`'s two call sites to
-  `synthetic_seismogram_service.generate(well_id)` used generate()'s plain defaults --
-  `wavelet_method="statistical"`, `auto_optimize_tie=False` -- meaning NO frequency/polarity
-  search at all, a much weaker fit than `tie_service.get_well_seismic_tie`'s joint Ricker
-  frequency + polarity + full-window shift search. Both call sites now pass
-  `wavelet_method="ricker", auto_optimize_tie=True`, opting into the comparable search. This
-  affects every consumer of `get_synthetic_summary`: the dashboard-upload pipeline, the
-  `get_synthetic_seismogram` agent tool, and the Spectral Property Prediction eligibility gate
-  above -- all now reflect a properly-searched tie rather than the cheap default.
-  `GET /api/synthetic/{well_id}/generate` (the interactive Synthetic Seismogram page) is
-  untouched -- it keeps its own user-controlled wavelet/auto-optimize toggle per request.
+- **`get_synthetic_summary` search rigor fixed, in two attempts** (bug found immediately
+  after shipping the above, from real usage: wells the Well-to-Seismic Tie page showed as
+  well-tied, e.g. 0.94 correlation, came back excluded as low-confidence in the new Spectral
+  Property Prediction view). Root cause: `dashboard_upload_service.get_synthetic_summary`'s
+  two call sites to `synthetic_seismogram_service.generate(well_id)` used generate()'s plain
+  defaults -- `wavelet_method="statistical"`, `auto_optimize_tie=False` -- meaning NO search
+  at all, a much weaker fit than `tie_service.get_well_seismic_tie`'s joint search.
+  - **First attempt (reverted)**: both call sites passed `wavelet_method="ricker",
+    auto_optimize_tie=True`. Verified against real usage this made results measurably WORSE
+    (lower correlation, more wells boundary-pinned), because `"statistical"` extracts the
+    wavelet directly from this trace's own frequency/phase content, while `"ricker"` imposes
+    a generic zero-phase synthetic shape -- that inherent trace-matching advantage outweighs
+    a frequency/polarity search over a wavelet family that may not fit the real data's phase
+    character at all. A concrete lesson: "search more thoroughly" is not the same
+    optimization axis as "assume the right wavelet shape," and conflating them backfired.
+  - **Corrected fix**: both call sites now pass only `auto_optimize_tie=True`,
+    `wavelet_method` left at its `"statistical"` default. With a statistical wavelet,
+    `auto_optimize_tie` only adds a polarity search `{+1,-1}` against that SAME wavelet (no
+    frequency to sweep) -- a strictly monotonic improvement over the no-search default (it
+    can only find a correlation >= what always-assuming +1 polarity gets), unlike swapping
+    wavelet families, which is not guaranteed to help and here demonstrably hurt. Affects
+    every consumer of `get_synthetic_summary`: the dashboard-upload pipeline, the
+    `get_synthetic_seismogram` agent tool, and the Spectral Property Prediction eligibility
+    gate above. `GET /api/synthetic/{well_id}/generate` (the interactive Synthetic Seismogram
+    page) is untouched -- it keeps its own user-controlled wavelet/auto-optimize toggle per
+    request.

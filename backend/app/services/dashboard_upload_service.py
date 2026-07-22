@@ -185,20 +185,21 @@ def _run_pipeline_steps(repo, well_id: str, run_token: str, segy_bytes: bytes, s
         _save(tie_available=False, tie_error=str(exc))
 
     # Step 4: the validated, unmodified synthetic seismogram generation.
-    # wavelet_method="ricker" + auto_optimize_tie=True: generate()'s
-    # defaults (statistical wavelet, no frequency search) are a much
-    # weaker search than tie_service.get_well_seismic_tie's joint
-    # frequency/polarity/shift search, so the two tie surfaces can
-    # disagree sharply on the SAME well for reasons that are just search
-    # thoroughness, not a real geological difference. This opts into the
-    # comparable (Ricker frequency grid + polarity + shift) search so
-    # eligibility/confidence here reflects the well's actual tie quality,
-    # not this call's default search's weaker starting point. Still a
-    # different algorithm/trace resolution than tie_service (see this
-    # module's docstring), so results won't be bit-for-bit identical --
-    # just no longer needlessly pessimistic.
+    # auto_optimize_tie=True, wavelet_method left at its default
+    # ("statistical" -- extracted from this trace's own frequency/phase
+    # content, NOT a generic zero-phase Ricker). Deliberately does NOT
+    # force wavelet_method="ricker": that was tried first and made
+    # results WORSE (lower correlation, more boundary-pinned wells) on
+    # real data, because a statistically-extracted wavelet's inherent
+    # trace-matching advantage outweighs a Ricker frequency/polarity
+    # search over a wavelet SHAPE that may not fit this trace at all.
+    # With wavelet_method="statistical", auto_optimize_tie only adds a
+    # polarity search {+1,-1} against that SAME wavelet -- a strictly
+    # monotonic improvement over the no-search default (can only find a
+    # correlation >= what always-assuming +1 polarity gets), unlike
+    # swapping wavelet families, which is not guaranteed to help.
     try:
-        synth = synthetic_seismogram_service.generate(well_id, wavelet_method="ricker", auto_optimize_tie=True)
+        synth = synthetic_seismogram_service.generate(well_id, auto_optimize_tie=True)
         synth_low_confidence = (
             synth["correlation"] < TIE_LOW_CONFIDENCE_THRESHOLD
             or synth["boundary_pinned"]
@@ -335,16 +336,16 @@ def get_synthetic_summary(well_id: str) -> dict:
         return {"error": record.synthetic_error}
 
     # Live fallback for a well not yet processed by the dashboard pipeline.
-    # Same wavelet_method="ricker" + auto_optimize_tie=True override as
-    # run_upload_pipeline above, for the same reason (generate()'s plain
-    # defaults are a much weaker search than tie_service's) -- NOT the
-    # same as GET /api/synthetic/{well_id}/generate's own defaults, which
-    # stay user-controlled per-request on the Synthetic Seismogram page;
-    # this is specifically the confidence signal this cache/tools rely on.
+    # Same auto_optimize_tie=True override as run_upload_pipeline above
+    # (see its comment for why wavelet_method is deliberately left at
+    # "statistical", not forced to "ricker") -- NOT the same as
+    # GET /api/synthetic/{well_id}/generate's own defaults, which stay
+    # user-controlled per-request on the Synthetic Seismogram page; this
+    # is specifically the confidence signal this cache/tools rely on.
     from app.services import synthetic_seismogram_service
 
     try:
-        synth = synthetic_seismogram_service.generate(well_id, wavelet_method="ricker", auto_optimize_tie=True)
+        synth = synthetic_seismogram_service.generate(well_id, auto_optimize_tie=True)
     except Exception as exc:  # noqa: BLE001
         return {"error": str(exc)}
 

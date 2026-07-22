@@ -111,20 +111,26 @@ def _patch_pipeline_deps(
 
 
 class TestSyntheticTieSearchRigor:
-    """generate()'s own defaults (statistical wavelet, no frequency
-    search) are a much weaker search than tie_service.get_well_seismic_
-    tie's joint frequency/polarity/shift search -- the two tie surfaces
-    disagreeing sharply on the same well turned out to be partly just
-    this search-thoroughness gap, not a real geological difference (see
-    README.md). Both call sites must opt into the comparable
-    (Ricker-grid + polarity + shift) search."""
+    """generate()'s plain defaults (statistical wavelet, no search at
+    all) are weaker than they could be -- both call sites opt into
+    auto_optimize_tie=True for a polarity search on top of the same
+    statistical wavelet. wavelet_method is deliberately left at its
+    default ("statistical"), NOT forced to "ricker": that was tried
+    first and made real results WORSE (lower correlation, more
+    boundary-pinned wells), because a statistically-extracted wavelet's
+    trace-matching advantage outweighs a frequency/polarity search over
+    a generic Ricker shape that may not fit this trace at all. Polarity
+    search against the SAME (statistical) wavelet, by contrast, is a
+    strictly monotonic improvement -- it can only find a correlation >=
+    what always-assuming +1 polarity gets. See README.md/AGENT_BRIEF.md
+    for the full story, including the reverted wavelet_method="ricker"
+    attempt."""
 
-    def test_run_upload_pipeline_requests_ricker_auto_optimize(self, monkeypatch, raw_seismic_dir):
+    def test_run_upload_pipeline_requests_auto_optimize_with_statistical_wavelet(self, monkeypatch, raw_seismic_dir):
         _patch_pipeline_deps(monkeypatch)
         from app.services import synthetic_seismogram_service
 
         calls = []
-        original = synthetic_seismogram_service.generate
 
         def _spy(well_id, **kwargs):
             calls.append(kwargs)
@@ -136,9 +142,11 @@ class TestSyntheticTieSearchRigor:
         dus.run_upload_pipeline("Z-02", token, b"x", "survey.sgy")
 
         assert len(calls) == 1
-        assert calls[0] == {"wavelet_method": "ricker", "auto_optimize_tie": True}
+        assert calls[0] == {"auto_optimize_tie": True}
 
-    def test_get_synthetic_summary_live_fallback_requests_ricker_auto_optimize(self, monkeypatch, raw_seismic_dir):
+    def test_get_synthetic_summary_live_fallback_requests_auto_optimize_with_statistical_wavelet(
+        self, monkeypatch, raw_seismic_dir
+    ):
         from app.services import synthetic_seismogram_service
 
         calls = []
@@ -152,7 +160,7 @@ class TestSyntheticTieSearchRigor:
         dus.get_synthetic_summary("Z-09")
 
         assert len(calls) == 1
-        assert calls[0] == {"wavelet_method": "ricker", "auto_optimize_tie": True}
+        assert calls[0] == {"auto_optimize_tie": True}
 
 
 class TestRunUploadPipelineSuccess:

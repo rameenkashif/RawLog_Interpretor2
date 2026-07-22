@@ -511,14 +511,20 @@ generalize:
   else in this app) are excluded from training, per `well_seismic_tie.
   cross_correlate_and_shift`'s own documented guidance: "Boundary-pinned results should be
   excluded from aggregate statistics (mean correlation, ML training sets) by default."
-  `get_synthetic_summary`'s underlying `generate()` call runs with `wavelet_method="ricker",
-  auto_optimize_tie=True` (both call sites in `dashboard_upload_service.py`, not
-  `generate()`'s own plain defaults, which run a much weaker statistical-wavelet,
-  no-frequency-search fit) -- found and fixed after real usage showed this default made
-  wells with a genuinely strong `tie_service`-measured tie (e.g. 0.94 correlation on the
-  Well-to-Seismic Tie page) come back excluded here as low-confidence, purely from search
-  thoroughness, not a real geological disagreement. Still a different search/trace-resolution
-  than `tie_service` (see above), so results won't be identical -- just no longer needlessly
+  `get_synthetic_summary`'s underlying `generate()` call (both call sites in
+  `dashboard_upload_service.py`) runs with `auto_optimize_tie=True`, `wavelet_method` left at
+  its default (`"statistical"` -- extracted from the trace's own frequency/phase content, not
+  a generic zero-phase Ricker) -- found and fixed after real usage showed the plain
+  no-search default made wells with a genuinely strong `tie_service`-measured tie (e.g. 0.94
+  correlation on the Well-to-Seismic Tie page) come back excluded here as low-confidence.
+  **A first attempt also forced `wavelet_method="ricker"` and made results measurably worse**
+  (lower correlation, more boundary-pinned wells) -- a statistically-extracted wavelet's
+  inherent trace-matching advantage outweighs a frequency/polarity search over a generic
+  wavelet shape that may not fit this trace at all, so that override was reverted.
+  `auto_optimize_tie=True` alone (statistical wavelet unchanged) only adds a polarity search
+  `{+1,-1}` against that same wavelet -- a strictly monotonic improvement over the no-search
+  default, unlike swapping wavelet families. Still a different search/trace-resolution than
+  `tie_service` (see above), so results won't be identical -- just no longer needlessly
   pessimistic. `GET /api/synthetic/{well_id}/generate` (the Synthetic Seismogram page) keeps
   its own user-controlled defaults, unaffected by this.
 - **Depth-time alignment applies the synthetic seismogram's own `best_shift_ms` correction**
