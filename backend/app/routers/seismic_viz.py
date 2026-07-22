@@ -24,6 +24,7 @@ from app.models.schemas import (
     InlineSectionResponse,
     RecalibrateRequest,
     RecalibrateResponse,
+    SectionWellLogsResponse,
     SpectralDecompositionResponse,
     SpectralFrequencySliceResponse,
     SpectralPetroCorrelationResponse,
@@ -43,6 +44,7 @@ from app.models.schemas import (
 from app.coordinate_calibration import CoordinateCalibrationError
 from app.coordinate_tie_override_repository import WellTraceOverride, get_coordinate_tie_override_repository
 from app.services import coordinate_calibration_service as ccs
+from app.services import section_well_log_service as swl
 from app.services import seismic_processor as sp
 from app.services import spectral_petro_correlation_service as spc
 from app.services import spectral_property_prediction_service as sppp
@@ -89,6 +91,22 @@ async def crossline_section(crossline_number: int) -> CrosslineSectionResponse:
     try:
         volume = sp.get_segy_volume()
         return CrosslineSectionResponse(**volume.get_crossline_section(crossline_number))
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/section-well-logs", response_model=SectionWellLogsResponse)
+async def section_well_logs(
+    orientation: str = Query(..., description="'inline' or 'crossline' -- which section this is for"),
+    line_number: int = Query(..., description="The section's own inline/crossline number (bounds the time clip)"),
+) -> SectionWellLogsResponse:
+    """Every well's VSH/PHIE/SWE curve, converted to two-way time via the
+    direct nearest-trace tie (section_well_log_service.py), for drawing as
+    a log-on-section overlay next to the Inline/Crossline Section view."""
+    try:
+        return SectionWellLogsResponse(**swl.get_section_well_logs(orientation, line_number))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         _handle(exc)
 

@@ -20,6 +20,7 @@ import type {
   NearestTraceResponse,
   RecalibrateResponse,
   SaveTiePointsRequest,
+  SectionWellLogsResponse,
   SeismicAttributesResponse,
   SeismicSectionResponse,
   SeismicSummary,
@@ -225,6 +226,16 @@ export async function getCrosslineSection(
   const { data } = await http.get<CrosslineSectionResponse>(
     `/api/seismic/crossline/${crosslineNumber}`,
   );
+  return data;
+}
+
+export async function getSectionWellLogs(
+  orientation: "inline" | "crossline",
+  lineNumber: number,
+): Promise<SectionWellLogsResponse> {
+  const { data } = await http.get<SectionWellLogsResponse>("/api/seismic/section-well-logs", {
+    params: { orientation, line_number: lineNumber },
+  });
   return data;
 }
 

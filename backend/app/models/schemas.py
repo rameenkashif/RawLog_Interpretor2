@@ -386,6 +386,29 @@ class CrosslineSectionResponse(BaseModel):
     )
 
 
+class SectionWellLogCurve(BaseModel):
+    well_id: str
+    position_on_axis: int = Field(
+        ..., description="This well's own tied crossline (inline section) or inline (crossline section)"
+    )
+    correlation: float = Field(..., description="Direct-tie correlation (direct_tie_service.resolve_direct_tie)")
+    twt_ms: list[float]
+    vsh: list[float | None]
+    phie: list[float | None]
+    swe: list[float | None]
+
+
+class SectionWellLogsResponse(BaseModel):
+    orientation: str = Field(..., description="'inline' or 'crossline' -- which section this is for")
+    line_number: int
+    wells: list[SectionWellLogCurve] = Field(
+        ..., description="Every well with a usable direct tie, projected onto this section at its own position"
+    )
+    skipped_wells: list[dict] = Field(
+        default_factory=list, description="Wells not drawn, each with a human-readable reason"
+    )
+
+
 class TimeSliceResponse(BaseModel):
     time_ms: float = Field(..., description="Actual sample time used (nearest-neighbor to requested_time_ms)")
     requested_time_ms: float

@@ -306,6 +306,23 @@ export interface CrosslineSectionResponse {
   amplitude: number[][]; // shape (n_samples, n_traces_in_line)
 }
 
+export interface SectionWellLogCurve {
+  well_id: string;
+  position_on_axis: number;
+  correlation: number;
+  twt_ms: number[];
+  vsh: (number | null)[];
+  phie: (number | null)[];
+  swe: (number | null)[];
+}
+
+export interface SectionWellLogsResponse {
+  orientation: "inline" | "crossline";
+  line_number: number;
+  wells: SectionWellLogCurve[];
+  skipped_wells: { well_id: string; reason: string }[];
+}
+
 export interface TimeSliceResponse {
   time_ms: number;
   requested_time_ms: number;

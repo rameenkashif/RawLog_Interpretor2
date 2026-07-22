@@ -46,14 +46,12 @@ from dataclasses import dataclass
 import numpy as np
 
 from app import well_seismic_tie as wst
-from app.services.dashboard_upload_service import TIE_LOW_CONFIDENCE_THRESHOLD
+from app.services import direct_tie_service as dts
 from app.services.spectral_petro_correlation_service import (
     PETRO_CURVES,
     _WellTieContext,
-    _extract_curve,
     _property_series,
 )
-from app.services.tie_service import _load_config as _load_tie_config
 from app.services import well_service
 
 # Below this many eligible wells, leave-one-well-out is meaningless -- you
@@ -75,12 +73,6 @@ RF_RANDOM_STATE = 42
 
 METHODS = ("sswt", "cwt")
 
-# Minimum valid DEPT/DPTM samples to trust a depth<->time mapping for
-# placing spectral features by depth -- matches spectral_petro_correlation_
-# service.MIN_DEPTH_TIME_SAMPLES / synthetic_seismogram_service's build_
-# synthetic guard.
-MIN_DEPTH_TIME_SAMPLES = 10
-
 
 @dataclass
 class _DirectTieResult:
@@ -97,78 +89,42 @@ class _DirectTieResult:
 
 
 def _resolve_direct_tie(volume, well_id: str) -> _DirectTieResult:
-    """Direct nearest-trace spatial search (well_seismic_tie.
-    find_nearest_trace_index on raw well_x/well_y vs the volume's own
-    source_x/source_y) plus a DPTM-based, full-seismic-window frequency/
-    polarity/bulk-shift correlation search (well_seismic_tie.
-    search_best_tie_full_window) -- the exact algorithm tie_service.
-    get_well_seismic_tie uses for the Well-to-Seismic Tie page, reused here
-    against this feature's single active volume instead of a named
-    dataset. Raises TieError/WellNotFoundError/SegyVolumeError on any
-    failure -- callers treat that as "excluded", never silently proceed.
+    """Thin wrapper around direct_tie_service.resolve_direct_tie (the
+    shared direct nearest-trace + DPTM full-window-search tie -- see that
+    module's docstring) that additionally builds the seismic-time overlap
+    mask + depth_at_time array this module's feature extraction needs.
+    Raises TieError/WellNotFoundError/SegyVolumeError on any failure --
+    callers treat that as "excluded", never silently proceed.
     """
-    config = _load_tie_config()
-    max_radius_m = config.get("max_tie_search_radius_m")
-    max_shift_ms = float(config.get("tie_search_max_shift_ms", wst.DEFAULT_TIE_SEARCH_MAX_SHIFT_MS))
+    result = dts.resolve_direct_tie(volume, well_id)
 
-    well_summary = well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
-    if well_summary.well_x is None or well_summary.well_y is None:
-        raise wst.TieError(
-            f"Well '{well_id}' has no surface coordinates in its LAS header -- cannot locate it "
-            "on the seismic survey."
-        )
-    trace_idx, distance_m = wst.find_nearest_trace_index(
-        well_summary.well_x, well_summary.well_y, volume.source_x, volume.source_y, max_radius_m=max_radius_m
-    )
-    inline_number = int(volume.inline[trace_idx])
-    crossline_number = int(volume.crossline[trace_idx])
-
+    # ctx.rows/ctx.depth need the FULL (not DPTM-valid-only) curve rows,
+    # so _property_series can apply each property's own independent null
+    # mask -- direct_tie_service's depth_m/dptm_ms are already reduced to
+    # just the DPTM-valid subset, which isn't what ctx.depth is for.
     curves_response = well_service.get_well_curves(well_id)
     rows = curves_response["data"]
-    depth = _extract_curve(rows, "DEPT")
-    dt_log = _extract_curve(rows, "DT")
-    rhob = _extract_curve(rows, "RHOB")
-    dptm = _extract_curve(rows, "DPTM")
-
-    t_rc, rc = wst.reflectivity_from_time_axis(dptm, dt_log, rhob, volume.sample_interval_ms)
-    real_trace = volume.get_trace(trace_idx)
-    tie = wst.search_best_tie_full_window(
-        t_rc, rc, volume.twt_axis_ms, volume.sample_interval_ms, real_trace, max_shift_ms=max_shift_ms
+    depth = np.array(
+        [row.get("DEPT") if row.get("DEPT") is not None else np.nan for row in rows], dtype=float
     )
-    boundary_pinned = abs(tie.bulk_shift_ms) >= (1.0 - wst.BOUNDARY_PINNED_FRACTION) * max_shift_ms
-    low_confidence = tie.correlation < TIE_LOW_CONFIDENCE_THRESHOLD or boundary_pinned
-
-    # DEPT<->DPTM mapping for placing seismic-time samples back at a depth
-    # (and from there, at a VSH/PHIE/SWE value) -- independent of the
-    # DT/RHOB validity reflectivity_from_time_axis required internally,
-    # per this codebase's convention of each curve getting its own null
-    # mask (see _property_series).
-    valid = np.isfinite(depth) & np.isfinite(dptm)
-    depth_v, dptm_v = depth[valid], dptm[valid]
-    order = np.argsort(dptm_v)
-    depth_v, dptm_v = depth_v[order], dptm_v[order]
-    keep = np.concatenate([[True], np.diff(dptm_v) > 1e-6])
-    depth_v, dptm_v = depth_v[keep], dptm_v[keep]
-    if len(depth_v) < MIN_DEPTH_TIME_SAMPLES:
-        raise wst.TieError(
-            f"Well '{well_id}' has too few valid DEPT/DPTM samples ({len(depth_v)}) to align "
-            f"spectral features (need >= {MIN_DEPTH_TIME_SAMPLES})."
-        )
 
     seismic_twt = volume.twt_axis_ms
-    overlap = (seismic_twt - tie.bulk_shift_ms >= dptm_v[0]) & (seismic_twt - tie.bulk_shift_ms <= dptm_v[-1])
+    overlap = (
+        (seismic_twt - result.bulk_shift_ms >= result.dptm_ms[0])
+        & (seismic_twt - result.bulk_shift_ms <= result.dptm_ms[-1])
+    )
     if not overlap.any():
         raise wst.TieError(
             f"Well '{well_id}'s logged interval does not overlap the seismic survey's recorded "
             "time window after the direct tie's bulk shift -- no samples to correlate."
         )
-    depth_at_time = np.interp(seismic_twt[overlap] - tie.bulk_shift_ms, dptm_v, depth_v)
+    depth_at_time = np.interp(seismic_twt[overlap] - result.bulk_shift_ms, result.dptm_ms, result.depth_m)
 
     ctx = _WellTieContext(
         well_id=well_id,
-        inline_number=inline_number,
-        crossline_number=crossline_number,
-        distance_m=distance_m,
+        inline_number=result.inline_number,
+        crossline_number=result.crossline_number,
+        distance_m=result.distance_m,
         tie_method="direct_nearest_trace",
         rows=rows,
         depth=depth,
@@ -177,11 +133,11 @@ def _resolve_direct_tie(volume, well_id: str) -> _DirectTieResult:
     )
     return _DirectTieResult(
         ctx=ctx,
-        correlation=tie.correlation,
-        bulk_shift_ms=tie.bulk_shift_ms,
-        best_freq_hz=tie.best_freq_hz,
-        boundary_pinned=boundary_pinned,
-        low_confidence=low_confidence,
+        correlation=result.correlation,
+        bulk_shift_ms=result.bulk_shift_ms,
+        best_freq_hz=result.best_freq_hz,
+        boundary_pinned=result.boundary_pinned,
+        low_confidence=result.low_confidence,
     )
 
 
