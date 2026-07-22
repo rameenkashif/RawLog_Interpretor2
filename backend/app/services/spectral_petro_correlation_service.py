@@ -112,12 +112,12 @@ def _resolve_well_tie_context(
 ) -> _WellTieContext:
     """time_shift_ms: an optional additional correction on top of the raw
     sonic-integrated depth-time relationship, e.g. a well's own
-    synthetic-seismogram cross-correlation best_shift_ms (see
-    spectral_property_prediction_service.py, which is the only caller
-    that passes a non-zero value -- defaults to 0.0 here, reproducing
-    this function's original behavior exactly for the existing CWT-vs-
-    SWT/SSWT correlation callers below, which don't apply this
-    correction). Sign convention verified against
+    synthetic-seismogram cross-correlation best_shift_ms. Defaults to 0.0,
+    which is what every current caller below (the CWT-vs-SWT/SSWT
+    correlation views) passes -- spectral_property_prediction_service.py
+    no longer calls this function at all, it resolves its own direct
+    nearest-trace tie via _resolve_direct_tie instead (see that module's
+    docstring for why). Sign convention verified against
     well_seismic_tie.cross_correlate_and_shift: a seismic-time sample t
     corresponds to the well's own unshifted axis at t - best_shift_ms
     (shifting the synthetic by +best_shift_ms is what aligns it to the

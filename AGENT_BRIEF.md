@@ -487,3 +487,34 @@ tune them without touching code. Key notes for future sessions:
     gate above. `GET /api/synthetic/{well_id}/generate` (the interactive Synthetic Seismogram
     page) is untouched -- it keeps its own user-controlled wavelet/auto-optimize toggle per
     request.
+- **Spectral Property Prediction's well→trace resolution replaced with a direct nearest-trace
+  tie, matching `tie_service`'s Well-to-Seismic Tie page instead of `coordinate_calibration_
+  service`'s calibrated fit.** Root cause found by cross-checking real per-well numbers: for
+  every well on the real field data (Z-02..Z-08), the calibrated fit's crossline came out
+  42-100 bins away from the crossline the Well-to-Seismic Tie page's direct search finds and
+  validates with real waveform correlation (0.6-0.94), while inline only differed by 2-16 --
+  and critically, the wells' *relative order* along crossline was nearly identical between the
+  two methods, just at ~4x the spread. That's the calibrated fit's per-axis min/max stretch
+  (`fit_per_axis_calibration`) doing exactly what it's documented to risk: it maps the
+  calibration wells' own coordinate extent onto the *entire* seismic survey's extent, which
+  badly over-spreads crossline position when (as here) the wells only cluster in a small
+  sub-region of the survey rather than spanning it corner-to-corner. This explained a real
+  symptom: Z-06 tied at 0.934 correlation on the Well-to-Seismic Tie page but ~0.000 via the
+  calibrated-fit path used for Spectral Property Prediction/Synthetic Seismogram -- the two
+  paths were resolving to different physical trace locations.
+
+  Fix, scoped to `spectral_property_prediction_service.py` only (Synthetic Seismogram and
+  `dashboard_upload_service.get_synthetic_summary` deliberately left on the calibrated-fit path
+  -- changing those has a much larger blast radius, including the interactive Synthetic
+  Seismogram page's manual stretch/squeeze workflow, and wasn't what broke). New
+  `_resolve_direct_tie(volume, well_id)` reuses `well_seismic_tie.find_nearest_trace_index`
+  (raw well X/Y vs. the active volume's own `source_x`/`source_y`, no transform) plus
+  `well_seismic_tie.reflectivity_from_time_axis` + `search_best_tie_full_window` on the well's
+  DPTM curve -- the exact same two-function pipeline `tie_service.get_well_seismic_tie` uses,
+  just pointed at this feature's single active volume instead of a named dataset, reusing
+  `tie_config.yaml`'s `max_tie_search_radius_m`/`tie_search_max_shift_ms` for consistency. Both
+  `_eligible_wells` (the gate) and `_extract_well_features` (feature extraction) now consume
+  this single resolved tie per well, closing a latent self-consistency gap the old design had
+  (gate and extraction were two separately-resolved calibrated-fit ties that could in principle
+  diverge). `get_field_overview` and the Spectral Petro Correlation view are unaffected --
+  they still resolve via `coordinate_calibration_service`, unchanged.

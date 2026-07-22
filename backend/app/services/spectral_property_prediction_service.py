@@ -12,32 +12,26 @@ extending to a volume-wide map is an explicit follow-up, gated on this
 validating with real (not in-sample) skill first. See README.md/
 AGENT_BRIEF.md for the full reasoning.
 
-Two things this module gets right that the existing single-frequency
-CWT/SWT/SSWT-vs-petrophysics correlation view (spectral_petro_correlation_
-service.py) does not, because that view is a lighter-weight first-pass
-check, not a model meant to generalize:
-
-1. Well eligibility and time-shift correction are both driven by
-   dashboard_upload_service.get_synthetic_summary(well_id) (backed by
-   synthetic_seismogram_service.generate), NOT tie_service.get_well_
-   seismic_tie -- because THIS module (like spectral_petro_correlation_
-   service.py) resolves well->trace via coordinate_calibration_service
-   against the single active SEG-Y volume, the same system synthetic_
-   seismogram_service uses. tie_service resolves against a separate,
-   independently-named dataset with its own DPTM-based time axis --
-   using its tie confidence/shift here would be gating on and correcting
-   with a tie computed against a different trace and time axis than the
-   one actually used below. This means the wells this module considers
-   "usable" can legitimately differ from what get_well_seismic_tie/
-   get_field_overview report -- that's an architectural fact, not a bug.
-
-2. Depth-time alignment applies the synthetic seismogram's own
-   best_shift_ms correction (spectral_petro_correlation_service._resolve_
-   well_tie_context's new optional time_shift_ms parameter) before
-   extracting spectral features -- the existing correlation view does
-   not apply this, using only the raw unshifted sonic-integrated axis.
-   Leaving that misalignment in place while training a model would bias
-   results toward "no relationship" regardless of whether one exists.
+Well eligibility and time alignment here are driven by _resolve_direct_tie
+below -- the SAME two-part algorithm tie_service.get_well_seismic_tie uses
+for the Well-to-Seismic Tie page (a direct nearest-trace spatial search via
+well_seismic_tie.find_nearest_trace_index, then a DPTM-based, full-seismic-
+window frequency/polarity/bulk-shift correlation search via
+well_seismic_tie.search_best_tie_full_window), applied against this
+feature's single active SEG-Y volume instead of a separately uploaded
+dataset. This module used to resolve well->trace via
+coordinate_calibration_service (the same calibrated-fit transform
+synthetic_seismogram_service uses) -- that was replaced because the fit
+stretches these wells' own coordinate extent to the FULL seismic survey's
+extent, which badly over-spreads crossline position for a well cluster
+that only covers a small part of the survey. Cross-checking against the
+Well-to-Seismic Tie page's own per-well numbers confirmed the calibrated
+fit was landing tens of bins away from the position that page's direct
+search finds and validates with real waveform correlation (0.6-0.94 across
+Z-02..Z-08) -- this module now uses that same proven-good resolution
+instead. This means the wells this module considers "usable" can still
+legitimately differ from get_field_overview's coordinate-calibration-based
+tie -- that remains an architectural fact, not a bug.
 
 Boundary-pinned/low-confidence wells are excluded from training, per
 well_seismic_tie.cross_correlate_and_shift's own documented guidance:
@@ -47,13 +41,20 @@ well_seismic_tie.cross_correlate_and_shift's own documented guidance:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
+from app import well_seismic_tie as wst
+from app.services.dashboard_upload_service import TIE_LOW_CONFIDENCE_THRESHOLD
 from app.services.spectral_petro_correlation_service import (
     PETRO_CURVES,
+    _WellTieContext,
+    _extract_curve,
     _property_series,
-    _resolve_well_tie_context,
 )
+from app.services.tie_service import _load_config as _load_tie_config
+from app.services import well_service
 
 # Below this many eligible wells, leave-one-well-out is meaningless -- you
 # can't hold one out and still have anything to train on.
@@ -74,52 +75,158 @@ RF_RANDOM_STATE = 42
 
 METHODS = ("sswt", "cwt")
 
+# Minimum valid DEPT/DPTM samples to trust a depth<->time mapping for
+# placing spectral features by depth -- matches spectral_petro_correlation_
+# service.MIN_DEPTH_TIME_SAMPLES / synthetic_seismogram_service's build_
+# synthetic guard.
+MIN_DEPTH_TIME_SAMPLES = 10
 
-def _eligible_wells() -> tuple[list[str], list[dict]]:
+
+@dataclass
+class _DirectTieResult:
+    """A well's direct nearest-trace tie against the single active SEG-Y
+    volume, plus everything _extract_well_features needs to pull spectral
+    features at the resolved trace without re-resolving anything."""
+
+    ctx: _WellTieContext
+    correlation: float
+    bulk_shift_ms: float
+    best_freq_hz: float
+    boundary_pinned: bool
+    low_confidence: bool
+
+
+def _resolve_direct_tie(volume, well_id: str) -> _DirectTieResult:
+    """Direct nearest-trace spatial search (well_seismic_tie.
+    find_nearest_trace_index on raw well_x/well_y vs the volume's own
+    source_x/source_y) plus a DPTM-based, full-seismic-window frequency/
+    polarity/bulk-shift correlation search (well_seismic_tie.
+    search_best_tie_full_window) -- the exact algorithm tie_service.
+    get_well_seismic_tie uses for the Well-to-Seismic Tie page, reused here
+    against this feature's single active volume instead of a named
+    dataset. Raises TieError/WellNotFoundError/SegyVolumeError on any
+    failure -- callers treat that as "excluded", never silently proceed.
+    """
+    config = _load_tie_config()
+    max_radius_m = config.get("max_tie_search_radius_m")
+    max_shift_ms = float(config.get("tie_search_max_shift_ms", wst.DEFAULT_TIE_SEARCH_MAX_SHIFT_MS))
+
+    well_summary = well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
+    if well_summary.well_x is None or well_summary.well_y is None:
+        raise wst.TieError(
+            f"Well '{well_id}' has no surface coordinates in its LAS header -- cannot locate it "
+            "on the seismic survey."
+        )
+    trace_idx, distance_m = wst.find_nearest_trace_index(
+        well_summary.well_x, well_summary.well_y, volume.source_x, volume.source_y, max_radius_m=max_radius_m
+    )
+    inline_number = int(volume.inline[trace_idx])
+    crossline_number = int(volume.crossline[trace_idx])
+
+    curves_response = well_service.get_well_curves(well_id)
+    rows = curves_response["data"]
+    depth = _extract_curve(rows, "DEPT")
+    dt_log = _extract_curve(rows, "DT")
+    rhob = _extract_curve(rows, "RHOB")
+    dptm = _extract_curve(rows, "DPTM")
+
+    t_rc, rc = wst.reflectivity_from_time_axis(dptm, dt_log, rhob, volume.sample_interval_ms)
+    real_trace = volume.get_trace(trace_idx)
+    tie = wst.search_best_tie_full_window(
+        t_rc, rc, volume.twt_axis_ms, volume.sample_interval_ms, real_trace, max_shift_ms=max_shift_ms
+    )
+    boundary_pinned = abs(tie.bulk_shift_ms) >= (1.0 - wst.BOUNDARY_PINNED_FRACTION) * max_shift_ms
+    low_confidence = tie.correlation < TIE_LOW_CONFIDENCE_THRESHOLD or boundary_pinned
+
+    # DEPT<->DPTM mapping for placing seismic-time samples back at a depth
+    # (and from there, at a VSH/PHIE/SWE value) -- independent of the
+    # DT/RHOB validity reflectivity_from_time_axis required internally,
+    # per this codebase's convention of each curve getting its own null
+    # mask (see _property_series).
+    valid = np.isfinite(depth) & np.isfinite(dptm)
+    depth_v, dptm_v = depth[valid], dptm[valid]
+    order = np.argsort(dptm_v)
+    depth_v, dptm_v = depth_v[order], dptm_v[order]
+    keep = np.concatenate([[True], np.diff(dptm_v) > 1e-6])
+    depth_v, dptm_v = depth_v[keep], dptm_v[keep]
+    if len(depth_v) < MIN_DEPTH_TIME_SAMPLES:
+        raise wst.TieError(
+            f"Well '{well_id}' has too few valid DEPT/DPTM samples ({len(depth_v)}) to align "
+            f"spectral features (need >= {MIN_DEPTH_TIME_SAMPLES})."
+        )
+
+    seismic_twt = volume.twt_axis_ms
+    overlap = (seismic_twt - tie.bulk_shift_ms >= dptm_v[0]) & (seismic_twt - tie.bulk_shift_ms <= dptm_v[-1])
+    if not overlap.any():
+        raise wst.TieError(
+            f"Well '{well_id}'s logged interval does not overlap the seismic survey's recorded "
+            "time window after the direct tie's bulk shift -- no samples to correlate."
+        )
+    depth_at_time = np.interp(seismic_twt[overlap] - tie.bulk_shift_ms, dptm_v, depth_v)
+
+    ctx = _WellTieContext(
+        well_id=well_id,
+        inline_number=inline_number,
+        crossline_number=crossline_number,
+        distance_m=distance_m,
+        tie_method="direct_nearest_trace",
+        rows=rows,
+        depth=depth,
+        depth_at_time=depth_at_time,
+        overlap=overlap,
+    )
+    return _DirectTieResult(
+        ctx=ctx,
+        correlation=tie.correlation,
+        bulk_shift_ms=tie.bulk_shift_ms,
+        best_freq_hz=tie.best_freq_hz,
+        boundary_pinned=boundary_pinned,
+        low_confidence=low_confidence,
+    )
+
+
+def _eligible_wells(volume) -> tuple[list[str], list[dict], dict[str, _DirectTieResult]]:
     """Classifies every currently loaded well as eligible (has a usable
-    synthetic-seismogram tie -- see module docstring for why this tie
-    source, not tie_service's) or excluded (with a human-readable
-    reason), never silently dropping a well without saying why."""
-    from app.services import dashboard_upload_service as dus
-    from app.services import well_service
-
+    direct nearest-trace tie -- see module docstring) or excluded (with a
+    human-readable reason), never silently dropping a well without saying
+    why. Returns the resolved tie for each eligible well too, so
+    get_property_models doesn't need to re-resolve it."""
     eligible: list[str] = []
     excluded: list[dict] = []
+    tie_results: dict[str, _DirectTieResult] = {}
 
     for summary in well_service.list_well_summaries():
         well_id = summary.well_id
-        synth = dus.get_synthetic_summary(well_id)
-        if "error" in synth:
-            excluded.append({"well_id": well_id, "reason": f"No usable tie: {synth['error']}"})
+        try:
+            result = _resolve_direct_tie(volume, well_id)
+        except (wst.TieError, well_service.WellNotFoundError) as exc:
+            excluded.append({"well_id": well_id, "reason": f"No usable tie: {exc}"})
             continue
-        if synth.get("boundary_pinned"):
+        if result.boundary_pinned:
             excluded.append({
                 "well_id": well_id,
                 "reason": "Shift search pinned to its boundary -- likely a spurious match, not a genuine tie.",
             })
             continue
-        if synth.get("low_confidence"):
-            corr = synth.get("correlation")
-            corr_str = f"{corr:.3f}" if corr is not None else "n/a"
+        if result.low_confidence:
             excluded.append({
                 "well_id": well_id,
-                "reason": f"Low-confidence tie (correlation={corr_str}, below the 0.3 threshold).",
+                "reason": f"Low-confidence tie (correlation={result.correlation:.3f}, below the 0.3 threshold).",
             })
             continue
         eligible.append(well_id)
+        tie_results[well_id] = result
 
-    return eligible, excluded
+    return eligible, excluded, tie_results
 
 
-def _extract_well_features(volume, well_id: str, shift_ms: float) -> dict | None:
-    """One well's shift-corrected feature matrices (n_samples, n_freq) for
-    both spectral methods, plus its VSH/PHIE/SWE target series aligned to
-    the same samples. Returns None (caller treats as an exclusion, not a
-    crash) if the well's tie/curves can't actually be resolved despite
-    passing the eligibility check -- e.g. a curve edge case
-    get_synthetic_summary's own resolution didn't hit."""
+def _extract_well_features(volume, ctx: _WellTieContext) -> dict | None:
+    """One well's already-resolved-and-shift-corrected feature matrices
+    (n_samples, n_freq) for both spectral methods, plus its VSH/PHIE/SWE
+    target series aligned to the same samples. Returns None (caller treats
+    as an exclusion, not a crash) if the trace/curves can't actually be
+    pulled despite passing the eligibility check."""
     try:
-        ctx = _resolve_well_tie_context(volume, well_id, time_shift_ms=shift_ms)
         result = volume.get_spectral_decomposition_trace(
             ctx.inline_number, ctx.crossline_number, method="cwt", include_sswt=True
         )
@@ -217,10 +324,10 @@ def get_property_models() -> dict:
     for every (property, method) combination. status='insufficient_data'
     is a first-class, explicit outcome (never a fabricated score) when
     fewer than MIN_ELIGIBLE_WELLS wells have a usable tie."""
-    from app.services import dashboard_upload_service as dus
     from app.services import seismic_processor as sp_mod
 
-    eligible_ids, excluded = _eligible_wells()
+    volume = sp_mod.get_segy_volume()
+    eligible_ids, excluded, tie_results = _eligible_wells(volume)
 
     if len(eligible_ids) < MIN_ELIGIBLE_WELLS:
         return {
@@ -237,13 +344,9 @@ def get_property_models() -> dict:
             "results": None,
         }
 
-    volume = sp_mod.get_segy_volume()
-
     wells_features: dict[str, dict] = {}
     for well_id in eligible_ids:
-        synth = dus.get_synthetic_summary(well_id)
-        shift_ms = synth.get("best_shift_ms") or 0.0
-        feats = _extract_well_features(volume, well_id, shift_ms)
+        feats = _extract_well_features(volume, tie_results[well_id].ctx)
         if feats is None:
             excluded.append({
                 "well_id": well_id,

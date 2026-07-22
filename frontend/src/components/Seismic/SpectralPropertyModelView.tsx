@@ -76,9 +76,10 @@ export default function SpectralPropertyModelView() {
         performance since adjacent depth samples are strongly autocorrelated. This is a
         point-source validation only, not a volume-wide prediction: a good LOOCV R² here is a
         prerequisite for, not the same as, a trustworthy spatial map. Well eligibility and time
-        alignment here use the Synthetic Seismogram module's tie, which may list different
-        wells as usable than the Well-to-Seismic Tie page's dataset-based tie -- see README.md
-        for why.
+        alignment here use a direct nearest-trace tie against the active seismic volume (the
+        same resolution + full-window frequency/polarity/shift search the Well-to-Seismic Tie
+        page uses), so eligible wells here should track that page's high-confidence wells --
+        see README.md for details.
       </div>
 
       {query.isLoading && <div className="h-64 rounded-xl bg-surface-sunken animate-pulse" />}

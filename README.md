@@ -497,44 +497,39 @@ Two things this module gets right that the single-frequency correlation view abo
 because that view is a lighter-weight first-pass check rather than a model meant to
 generalize:
 
-- **Well eligibility and time-shift correction both use `dashboard_upload_service.
-  get_synthetic_summary(well_id)`** (backed by `synthetic_seismogram_service.generate`), NOT
-  `tie_service.get_well_seismic_tie`. This module resolves well→trace via
-  `coordinate_calibration_service` against the single active SEG-Y volume -- the same system
-  `synthetic_seismogram_service.py` uses -- while `tie_service` resolves against a separate,
-  independently-named dataset with its own DPTM-based time axis. Using `tie_service`'s tie
-  confidence here would mean gating on and correcting with a tie computed against a different
-  trace and time axis than the one actually used for feature extraction. **This means the set
-  of wells this module considers "usable" can legitimately differ from what
-  `get_well_seismic_tie`/`get_field_overview` report** -- an architectural fact, not a bug.
-  Boundary-pinned or low-confidence wells (the same 0.3-correlation threshold used everywhere
-  else in this app) are excluded from training, per `well_seismic_tie.
-  cross_correlate_and_shift`'s own documented guidance: "Boundary-pinned results should be
-  excluded from aggregate statistics (mean correlation, ML training sets) by default."
-  `get_synthetic_summary`'s underlying `generate()` call (both call sites in
-  `dashboard_upload_service.py`) runs with `auto_optimize_tie=True`, `wavelet_method` left at
-  its default (`"statistical"` -- extracted from the trace's own frequency/phase content, not
-  a generic zero-phase Ricker) -- found and fixed after real usage showed the plain
-  no-search default made wells with a genuinely strong `tie_service`-measured tie (e.g. 0.94
-  correlation on the Well-to-Seismic Tie page) come back excluded here as low-confidence.
-  **A first attempt also forced `wavelet_method="ricker"` and made results measurably worse**
-  (lower correlation, more boundary-pinned wells) -- a statistically-extracted wavelet's
-  inherent trace-matching advantage outweighs a frequency/polarity search over a generic
-  wavelet shape that may not fit this trace at all, so that override was reverted.
-  `auto_optimize_tie=True` alone (statistical wavelet unchanged) only adds a polarity search
-  `{+1,-1}` against that same wavelet -- a strictly monotonic improvement over the no-search
-  default, unlike swapping wavelet families. Still a different search/trace-resolution than
-  `tie_service` (see above), so results won't be identical -- just no longer needlessly
-  pessimistic. `GET /api/synthetic/{well_id}/generate` (the Synthetic Seismogram page) keeps
-  its own user-controlled defaults, unaffected by this.
-- **Depth-time alignment applies the synthetic seismogram's own `best_shift_ms` correction**
-  before extracting spectral features (`spectral_petro_correlation_service._resolve_well_tie_
-  context`'s new optional `time_shift_ms` parameter, default `0.0` so the existing
-  single-frequency correlation view's behavior is unchanged) -- that view uses only the raw,
-  unshifted sonic-integrated axis. Leaving that misalignment in place while training a model
-  would bias results toward "no relationship" regardless of whether one exists. The sign
-  convention was verified directly against `well_seismic_tie.cross_correlate_and_shift`
-  (empirically tested, not just derived) rather than assumed.
+- **Well eligibility and time alignment both use `_resolve_direct_tie`** (`spectral_property_
+  prediction_service.py`), a direct nearest-trace spatial search (`well_seismic_tie.
+  find_nearest_trace_index` on raw well X/Y vs. the active volume's own trace coordinates) plus
+  a DPTM-based, full-seismic-window frequency/polarity/bulk-shift correlation search
+  (`well_seismic_tie.search_best_tie_full_window`) -- the *same two-part algorithm*
+  `tie_service.get_well_seismic_tie` uses for the Well-to-Seismic Tie page, just run against
+  this feature's single active SEG-Y volume instead of a separately uploaded/named dataset.
+  This module used to resolve well→trace via `coordinate_calibration_service`'s calibrated-fit
+  transform instead (the same one `synthetic_seismogram_service.py` uses) -- that was replaced
+  after cross-checking its per-well inline/crossline against the Well-to-Seismic Tie page's own
+  numbers showed the calibrated fit landing tens of crossline bins away from the position that
+  page's direct search finds and validates with real waveform correlation (0.6-0.94 across
+  Z-02..Z-08 on real field data). The calibrated fit stretches the wells' own coordinate extent
+  to the *full* seismic survey's extent, which badly over-spreads crossline position for a well
+  cluster that only covers a small part of the survey -- a real, demonstrated failure mode, not
+  a hypothetical one. **This still means the set of wells this module considers "usable" can
+  differ from `get_field_overview`'s coordinate-calibration-based tie** -- an architectural
+  fact, not a bug -- but it should now track the Well-to-Seismic Tie page's high-confidence
+  wells closely, since both use the same resolution + search. Boundary-pinned or low-confidence
+  wells (the same 0.3-correlation threshold used everywhere else in this app) are excluded from
+  training, per `well_seismic_tie.cross_correlate_and_shift`'s own documented guidance:
+  "Boundary-pinned results should be excluded from aggregate statistics (mean correlation, ML
+  training sets) by default." `GET /api/synthetic/{well_id}/generate` (the Synthetic Seismogram
+  page) and `dashboard_upload_service.get_synthetic_summary` are unaffected by this -- they
+  keep resolving well→trace via the calibrated fit, as before.
+- **Depth-time alignment uses the direct tie's own `bulk_shift_ms`**, applied to the well's DPTM
+  (vendor-precomputed, or sonic-integration-derived) time axis directly -- not the sonic-
+  integration-anchored `depth_to_twt`/`best_shift_ms` correction
+  `spectral_petro_correlation_service._resolve_well_tie_context` uses for the single-frequency
+  correlation view. Both spatial resolution and time alignment now come from one
+  `_resolve_direct_tie` call per well, so the eligibility gate and the feature-extraction step
+  are always self-consistent (same trace, same time axis) -- unlike the old design, which
+  gated on one tie and extracted features via a second, separately-resolved one.
 
 Model: `sklearn.ensemble.RandomForestRegressor`, same hyperparameters as the existing
 `CORE_PERM_PRED` model (`petrophysics.py`) for consistency -- this codebase's one other

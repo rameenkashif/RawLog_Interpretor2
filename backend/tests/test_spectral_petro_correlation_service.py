@@ -173,9 +173,10 @@ class TestSingleWellCorrelation:
 
 
 class TestTimeShiftCorrection:
-    """_resolve_well_tie_context's time_shift_ms parameter, added for
-    spectral_property_prediction_service.py's shift-corrected feature
-    extraction. Sign convention verified against
+    """_resolve_well_tie_context's time_shift_ms parameter (general-purpose
+    shift correction on top of the sonic-integrated depth-time axis; no
+    current caller here passes non-zero, all default to 0.0). Sign
+    convention verified against
     well_seismic_tie.cross_correlate_and_shift directly (not assumed):
     shifted_syn = np.roll(synthetic, best_lag) means a seismic-time
     sample t corresponds to the well's own unshifted axis at
