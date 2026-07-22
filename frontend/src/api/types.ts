@@ -513,6 +513,46 @@ export interface SswtPetroCorrelationResponse {
   averages: SswtPetroCorrelationAverages | null;
 }
 
+// -----------------------------------------------------------------------------
+// Spectral property prediction (multi-frequency CWT/SSWT -> VSH/PHIE/SWE,
+// validated with leave-one-well-out cross-validation -- point-source
+// validation only, not a volume-wide prediction).
+// -----------------------------------------------------------------------------
+export interface SpectralPropertyExcludedWell {
+  well_id: string;
+  reason: string;
+}
+
+export interface SpectralPropertyWellResult {
+  well_id: string;
+  r2: number | null;
+  n_samples: number;
+}
+
+export interface SpectralPropertyFeatureImportance {
+  frequency_hz: number;
+  importance: number;
+}
+
+export interface SpectralPropertyMethodResult {
+  loocv_r2: number | null;
+  n_wells_used: number;
+  per_well: SpectralPropertyWellResult[];
+  feature_importance: SpectralPropertyFeatureImportance[];
+}
+
+export type SpectralPropertyName = "vsh" | "phie" | "swe";
+export type SpectralPropertyMethod = "sswt" | "cwt";
+
+export interface SpectralPropertyModelResponse {
+  status: "validated" | "insufficient_data";
+  message: string | null;
+  eligible_well_ids: string[];
+  excluded_wells: SpectralPropertyExcludedWell[];
+  n_wells_used: number;
+  results: Record<SpectralPropertyName, Record<SpectralPropertyMethod, SpectralPropertyMethodResult | null>> | null;
+}
+
 export const CURVE_NAMES = [
   "DEPT",
   "GR",

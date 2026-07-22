@@ -28,6 +28,7 @@ import type {
   SpectralFrequencySliceResponse,
   SpectralMethod,
   SpectralPetroCorrelationResponse,
+  SpectralPropertyModelResponse,
   SpectralSwtSliceResponse,
   SpectralTraceResponse,
   SswtPetroCorrelationResponse,
@@ -385,6 +386,13 @@ export async function getSswtPetroCorrelation(
         frequency_hz: opts.frequencyHz,
       },
     },
+  );
+  return data;
+}
+
+export async function getSpectralPropertyModel(): Promise<SpectralPropertyModelResponse> {
+  const { data } = await http.get<SpectralPropertyModelResponse>(
+    "/api/seismic/spectral-property-model",
   );
   return data;
 }

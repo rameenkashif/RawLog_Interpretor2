@@ -27,6 +27,7 @@ from app.models.schemas import (
     SpectralDecompositionResponse,
     SpectralFrequencySliceResponse,
     SpectralPetroCorrelationResponse,
+    SpectralPropertyModelResponse,
     SpectralSwtSliceResponse,
     SpectralSwtTraceResponse,
     SpectralTraceResponse,
@@ -44,6 +45,7 @@ from app.coordinate_tie_override_repository import WellTraceOverride, get_coordi
 from app.services import coordinate_calibration_service as ccs
 from app.services import seismic_processor as sp
 from app.services import spectral_petro_correlation_service as spc
+from app.services import spectral_property_prediction_service as sppp
 from app.services import well_zone_tie_service as wzt
 from app.services.well_service import WellNotFoundError
 
@@ -325,5 +327,23 @@ async def spectral_petro_correlation_sswt(
     try:
         result = spc.get_sswt_correlation(well_id=well_id, all_wells=all_wells, frequency_hz=frequency_hz)
         return SswtPetroCorrelationResponse(**result)
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/spectral-property-model", response_model=SpectralPropertyModelResponse)
+async def spectral_property_model() -> SpectralPropertyModelResponse:
+    """Multi-frequency CWT/SSWT amplitude -> VSH/PHIE/SWE prediction,
+    validated with leave-one-well-out cross-validation across every well
+    with a usable synthetic-seismogram tie (not a random depth-sample
+    split -- see spectral_property_prediction_service for why).
+    POINT-SOURCE validation only, not a volume-wide prediction -- a good
+    loocv_r2 here is a prerequisite for, not the same as, a trustworthy
+    spatial map. status='insufficient_data' (with results=null) is a
+    first-class outcome when fewer than 2 wells have a usable tie,
+    surfaced explicitly rather than as an error or a fabricated score."""
+    try:
+        result = sppp.get_property_models()
+        return SpectralPropertyModelResponse(**result)
     except Exception as exc:  # noqa: BLE001
         _handle(exc)

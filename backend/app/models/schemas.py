@@ -720,6 +720,52 @@ class SswtPetroCorrelationResponse(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Spectral property prediction (multi-frequency CWT/SSWT -> VSH/PHIE/SWE,
+# validated with leave-one-well-out cross-validation -- POINT-SOURCE
+# validation only, not a volume-wide prediction. See
+# spectral_property_prediction_service.py.
+# -----------------------------------------------------------------------------
+class SpectralPropertyExcludedWell(BaseModel):
+    well_id: str
+    reason: str = Field(..., description="Why this well was excluded from training -- never silently dropped")
+
+
+class SpectralPropertyWellResult(BaseModel):
+    well_id: str
+    r2: float | None = Field(None, description="Held-out R^2 for this well when it was the leave-one-out fold")
+    n_samples: int
+
+
+class SpectralPropertyFeatureImportance(BaseModel):
+    frequency_hz: float
+    importance: float = Field(..., description="RandomForest feature_importances_ for this frequency bin")
+
+
+class SpectralPropertyMethodResult(BaseModel):
+    loocv_r2: float | None = Field(
+        None, description="Pooled leave-one-well-out R^2 across all held-out predictions -- the headline validation score"
+    )
+    n_wells_used: int
+    per_well: list[SpectralPropertyWellResult]
+    feature_importance: list[SpectralPropertyFeatureImportance] = Field(
+        ...,
+        description="From a separate model fit on ALL usable wells -- in-sample, for interpretation only, NOT the validation score above",
+    )
+
+
+class SpectralPropertyModelResponse(BaseModel):
+    status: str = Field(..., description="'validated' or 'insufficient_data' -- a first-class, explicit outcome, never a fabricated score")
+    message: str | None = Field(None, description="Set when status='insufficient_data', explaining why and what would help")
+    eligible_well_ids: list[str]
+    excluded_wells: list[SpectralPropertyExcludedWell]
+    n_wells_used: int
+    results: dict[str, dict[str, SpectralPropertyMethodResult | None]] | None = Field(
+        None,
+        description="{'vsh'|'phie'|'swe': {'sswt'|'cwt': result_or_null}} -- null per (property, method) if too few wells had enough valid samples for that specific property, even when status='validated' overall",
+    )
+
+
+# -----------------------------------------------------------------------------
 # Synthetic Seismogram module (/api/synthetic/*)
 # -----------------------------------------------------------------------------
 class WellHeaderQc(BaseModel):

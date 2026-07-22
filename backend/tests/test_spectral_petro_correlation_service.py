@@ -172,6 +172,67 @@ class TestSingleWellCorrelation:
             spc.get_correlation(well_id=result.well_id, all_wells=False)
 
 
+class TestTimeShiftCorrection:
+    """_resolve_well_tie_context's time_shift_ms parameter, added for
+    spectral_property_prediction_service.py's shift-corrected feature
+    extraction. Sign convention verified against
+    well_seismic_tie.cross_correlate_and_shift directly (not assumed):
+    shifted_syn = np.roll(synthetic, best_lag) means a seismic-time
+    sample t corresponds to the well's own unshifted axis at
+    t - best_shift_ms, so depth_at_time must be looked up at
+    (seismic_time - time_shift_ms), not seismic_time directly. These
+    tests check that operationally, not just that the code runs.
+    """
+
+    def test_zero_shift_reproduces_unshifted_behavior_exactly(self, aligned_well, volume):
+        ctx_default = spc._resolve_well_tie_context(volume, aligned_well.well_id)
+        ctx_explicit_zero = spc._resolve_well_tie_context(volume, aligned_well.well_id, time_shift_ms=0.0)
+
+        np.testing.assert_array_equal(ctx_default.depth_at_time, ctx_explicit_zero.depth_at_time)
+        np.testing.assert_array_equal(ctx_default.overlap, ctx_explicit_zero.overlap)
+
+    def test_positive_shift_maps_to_shallower_depth(self, aligned_well, volume):
+        # twt increases with depth (standard), so evaluating the well's
+        # own unshifted curve at an EARLIER equivalent time
+        # (seismic_time - shift, shift > 0) must land at a SHALLOWER
+        # depth than the unshifted lookup at the same seismic sample.
+        ctx0 = spc._resolve_well_tie_context(volume, aligned_well.well_id, time_shift_ms=0.0)
+        ctx_shifted = spc._resolve_well_tie_context(volume, aligned_well.well_id, time_shift_ms=10.0)
+
+        # Compare at seismic samples present in BOTH overlap windows (the
+        # shift can change which samples overlap at all -- see the next
+        # test), not by raw array position.
+        common = ctx0.overlap & ctx_shifted.overlap
+        depth0_at_common = np.interp(
+            volume.twt_axis_ms[common], volume.twt_axis_ms[ctx0.overlap], ctx0.depth_at_time
+        )
+        depth_shifted_at_common = np.interp(
+            volume.twt_axis_ms[common], volume.twt_axis_ms[ctx_shifted.overlap], ctx_shifted.depth_at_time
+        )
+        assert common.any()
+        assert np.all(depth_shifted_at_common <= depth0_at_common + 1e-9)
+        assert np.any(depth_shifted_at_common < depth0_at_common - 1e-9)
+
+    def test_negative_shift_maps_to_deeper_depth(self, aligned_well, volume):
+        ctx0 = spc._resolve_well_tie_context(volume, aligned_well.well_id, time_shift_ms=0.0)
+        ctx_shifted = spc._resolve_well_tie_context(volume, aligned_well.well_id, time_shift_ms=-10.0)
+
+        common = ctx0.overlap & ctx_shifted.overlap
+        depth0_at_common = np.interp(
+            volume.twt_axis_ms[common], volume.twt_axis_ms[ctx0.overlap], ctx0.depth_at_time
+        )
+        depth_shifted_at_common = np.interp(
+            volume.twt_axis_ms[common], volume.twt_axis_ms[ctx_shifted.overlap], ctx_shifted.depth_at_time
+        )
+        assert common.any()
+        assert np.all(depth_shifted_at_common >= depth0_at_common - 1e-9)
+        assert np.any(depth_shifted_at_common > depth0_at_common + 1e-9)
+
+    def test_shift_larger_than_logged_interval_can_empty_the_overlap(self, aligned_well, volume):
+        with pytest.raises(sp.SegyVolumeError):
+            spc._resolve_well_tie_context(volume, aligned_well.well_id, time_shift_ms=1e6)
+
+
 class TestAllWellsCorrelation:
     def test_single_aligned_well_averages_equal_its_own_values(self, aligned_well):
         result = spc.get_correlation(well_id=None, all_wells=True)

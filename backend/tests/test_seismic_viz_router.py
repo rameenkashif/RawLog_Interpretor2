@@ -337,3 +337,50 @@ class TestWellTieEndpoint:
             resp = c.get("/api/seismic/survey-info")
         assert resp.status_code == 404
         sp._volume_cache.clear()
+
+
+class TestSpectralPropertyModelEndpoint:
+    def test_no_wells_loaded_reports_insufficient_data_not_an_error(self, client):
+        # `client` fixture loads a real synthetic SEG-Y but zero wells --
+        # a real (non-mocked) end-to-end check that the endpoint degrades
+        # gracefully to an explicit status rather than a 500 or a
+        # fabricated result.
+        resp = client.get("/api/seismic/spectral-property-model")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "insufficient_data"
+        assert body["results"] is None
+        assert body["message"]
+
+    def test_validated_response_matches_schema(self, client, monkeypatch):
+        from app.services import spectral_property_prediction_service as sppp
+
+        canned = {
+            "status": "validated",
+            "message": None,
+            "eligible_well_ids": ["Z-02_RAW", "Z-03_RAW"],
+            "excluded_wells": [{"well_id": "Z-04_RAW", "reason": "low-confidence tie"}],
+            "n_wells_used": 2,
+            "results": {
+                "vsh": {
+                    "sswt": {
+                        "loocv_r2": 0.42,
+                        "n_wells_used": 2,
+                        "per_well": [{"well_id": "Z-02_RAW", "r2": 0.4, "n_samples": 50}],
+                        "feature_importance": [{"frequency_hz": 5.0, "importance": 1.0}],
+                    },
+                    "cwt": None,
+                },
+                "phie": {"sswt": None, "cwt": None},
+                "swe": {"sswt": None, "cwt": None},
+            },
+        }
+        monkeypatch.setattr(sppp, "get_property_models", lambda: canned)
+
+        resp = client.get("/api/seismic/spectral-property-model")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "validated"
+        assert body["results"]["vsh"]["sswt"]["loocv_r2"] == 0.42
+        assert body["results"]["vsh"]["cwt"] is None
+        assert len(body["excluded_wells"]) == 1

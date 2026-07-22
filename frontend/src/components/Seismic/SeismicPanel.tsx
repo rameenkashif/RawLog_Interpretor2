@@ -9,6 +9,7 @@ import WellZoneTieMapView from "./WellZoneTieMapView";
 import AmplitudeSpectrumView from "./AmplitudeSpectrumView";
 import SpectralDecompView from "./SpectralDecompView";
 import SpectralPetroCorrelationView from "./SpectralPetroCorrelationView";
+import SpectralPropertyModelView from "./SpectralPropertyModelView";
 
 const TABS = [
   { id: "section", label: "Inline / Crossline Section" },
@@ -19,6 +20,7 @@ const TABS = [
   { id: "spectrum", label: "Amplitude Spectrum" },
   { id: "spectral", label: "Spectral Decomposition" },
   { id: "petrocorr", label: "Spectral Petro Correlation" },
+  { id: "propertymodel", label: "Spectral Property Prediction" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -101,6 +103,7 @@ export default function SeismicPanel() {
             {activeTab === "spectrum" && <AmplitudeSpectrumView surveyInfo={surveyInfoQuery.data} />}
             {activeTab === "spectral" && <SpectralDecompView surveyInfo={surveyInfoQuery.data} />}
             {activeTab === "petrocorr" && <SpectralPetroCorrelationView />}
+            {activeTab === "propertymodel" && <SpectralPropertyModelView />}
           </div>
         </>
       )}

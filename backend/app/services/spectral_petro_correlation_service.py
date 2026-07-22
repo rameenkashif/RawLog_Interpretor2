@@ -107,7 +107,23 @@ class _WellTieContext:
     overlap: np.ndarray  # boolean mask into volume.twt_axis_ms
 
 
-def _resolve_well_tie_context(volume: sp.SegyVolume, well_id: str) -> _WellTieContext:
+def _resolve_well_tie_context(
+    volume: sp.SegyVolume, well_id: str, time_shift_ms: float = 0.0
+) -> _WellTieContext:
+    """time_shift_ms: an optional additional correction on top of the raw
+    sonic-integrated depth-time relationship, e.g. a well's own
+    synthetic-seismogram cross-correlation best_shift_ms (see
+    spectral_property_prediction_service.py, which is the only caller
+    that passes a non-zero value -- defaults to 0.0 here, reproducing
+    this function's original behavior exactly for the existing CWT-vs-
+    SWT/SSWT correlation callers below, which don't apply this
+    correction). Sign convention verified against
+    well_seismic_tie.cross_correlate_and_shift: a seismic-time sample t
+    corresponds to the well's own unshifted axis at t - best_shift_ms
+    (shifting the synthetic by +best_shift_ms is what aligns it to the
+    real trace), so the correction is subtracted from the seismic time
+    axis before the depth lookup below.
+    """
     well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
     # Well location resolved the same way as every other tie in this app
     # (Well Tie, Synthetic Seismogram) -- NOT a raw distance comparison,
@@ -140,11 +156,13 @@ def _resolve_well_tie_context(volume: sp.SegyVolume, well_id: str) -> _WellTieCo
     twt_ms_v = wst.depth_to_twt(depth_v, dt_v, dt_unit="us_per_ft", t0_ms=t0_ms)
 
     # Overlap between the seismic's own recorded time window and the
-    # logged interval's sonic-integrated time coverage -- only this
-    # window has both a real trace and a depth-time relationship to place
-    # the logs on, per the feature spec.
+    # logged interval's sonic-integrated time coverage (shift-corrected,
+    # see time_shift_ms above) -- only this window has both a real trace
+    # and a depth-time relationship to place the logs on, per the
+    # feature spec.
     seismic_twt = volume.twt_axis_ms
-    overlap = (seismic_twt >= twt_ms_v[0]) & (seismic_twt <= twt_ms_v[-1])
+    well_axis_time = seismic_twt - time_shift_ms
+    overlap = (well_axis_time >= twt_ms_v[0]) & (well_axis_time <= twt_ms_v[-1])
     if not overlap.any():
         raise sp.SegyVolumeError(
             f"Well '{well_id}'s logged interval does not overlap the seismic survey's "
@@ -152,10 +170,11 @@ def _resolve_well_tie_context(volume: sp.SegyVolume, well_id: str) -> _WellTieCo
         )
     seismic_twt_sub = seismic_twt[overlap]
 
-    # Seismic time -> depth, via the depth-time curve above -- the first
-    # step of the two-step interpolation _property_series finishes (depth
-    # -> property value, against that property's OWN null mask).
-    depth_at_time = np.interp(seismic_twt_sub, twt_ms_v, depth_v)
+    # Seismic time -> depth, via the (shift-corrected) depth-time curve
+    # above -- the first step of the two-step interpolation
+    # _property_series finishes (depth -> property value, against that
+    # property's OWN null mask).
+    depth_at_time = np.interp(seismic_twt_sub - time_shift_ms, twt_ms_v, depth_v)
 
     return _WellTieContext(
         well_id=well_id,

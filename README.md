@@ -480,6 +480,57 @@ as `synthetic_tie_repository.py`) stores scalars only (correlation, shift, flags
 big time-series arrays every page already gets from the existing live endpoints). This is
 also what the four new agent tools below read from.
 
+### Spectral property prediction
+
+`GET /api/seismic/spectral-property-model` (`backend/app/services/
+spectral_property_prediction_service.py`) uses SSWT/CWT amplitude across **all** available
+frequency bins (not one, unlike the single-frequency correlation view above) as features to
+predict VSH/PHIE/SWE, validated with **leave-one-well-out cross-validation** across wells with
+a usable tie -- deliberately not a random depth-sample split, which would badly overstate
+performance since adjacent depth samples within one well are strongly autocorrelated. This is
+a **point-source validation only**, not a volume-wide prediction: a good `loocv_r2` here is a
+prerequisite for, not the same as, a trustworthy spatial map, and building that map is an
+explicit follow-up gated on this validating with real, held-out skill first -- see
+`AGENT_BRIEF.md`'s changelog for the full reasoning behind that sequencing.
+
+Two things this module gets right that the single-frequency correlation view above does not,
+because that view is a lighter-weight first-pass check rather than a model meant to
+generalize:
+
+- **Well eligibility and time-shift correction both use `dashboard_upload_service.
+  get_synthetic_summary(well_id)`** (backed by `synthetic_seismogram_service.generate`), NOT
+  `tie_service.get_well_seismic_tie`. This module resolves well→trace via
+  `coordinate_calibration_service` against the single active SEG-Y volume -- the same system
+  `synthetic_seismogram_service.py` uses -- while `tie_service` resolves against a separate,
+  independently-named dataset with its own DPTM-based time axis. Using `tie_service`'s tie
+  confidence here would mean gating on and correcting with a tie computed against a different
+  trace and time axis than the one actually used for feature extraction. **This means the set
+  of wells this module considers "usable" can legitimately differ from what
+  `get_well_seismic_tie`/`get_field_overview` report** -- an architectural fact, not a bug.
+  Boundary-pinned or low-confidence wells (the same 0.3-correlation threshold used everywhere
+  else in this app) are excluded from training, per `well_seismic_tie.
+  cross_correlate_and_shift`'s own documented guidance: "Boundary-pinned results should be
+  excluded from aggregate statistics (mean correlation, ML training sets) by default."
+- **Depth-time alignment applies the synthetic seismogram's own `best_shift_ms` correction**
+  before extracting spectral features (`spectral_petro_correlation_service._resolve_well_tie_
+  context`'s new optional `time_shift_ms` parameter, default `0.0` so the existing
+  single-frequency correlation view's behavior is unchanged) -- that view uses only the raw,
+  unshifted sonic-integrated axis. Leaving that misalignment in place while training a model
+  would bias results toward "no relationship" regardless of whether one exists. The sign
+  convention was verified directly against `well_seismic_tie.cross_correlate_and_shift`
+  (empirically tested, not just derived) rather than assumed.
+
+Model: `sklearn.ensemble.RandomForestRegressor`, same hyperparameters as the existing
+`CORE_PERM_PRED` model (`petrophysics.py`) for consistency -- this codebase's one other
+"regression trained on sparse, proxy-quality data, and honest about it" precedent.
+`status="insufficient_data"` (with `results=null`) is a first-class, explicit response when
+fewer than 2 wells have a usable tie -- never a fabricated score. Feature importance (per
+frequency bin) comes from a separate model fit on all usable wells and is for interpretation
+only, never the validation score itself (that would be in-sample). Frontend: a new "Spectral
+Property Prediction" tab in the Seismic Visualization panel (`SpectralPropertyModelView.tsx`)
+showing the LOOCV R² comparison, per-well breakdown, feature-importance-by-frequency chart, and
+the eligible/excluded wells list with exclusion reasons visible.
+
 ---
 
 ## 6. Backend API reference
@@ -510,6 +561,7 @@ also what the four new agent tools below read from.
 | GET | `/api/seismic/spectrum?inline_number=...` | Average amplitude spectrum (whole volume or one inline) + dominant frequency/bandwidth/S-N-proxy stats |
 | GET | `/api/seismic/spectral-decomp/inline/{inline_number}?method=stft\|cwt&frequency_hz=...` | Spectral decomposition: full time x freq x position volume if `frequency_hz` omitted, or a single frequency's energy across the section if given (fast path for a slider) |
 | GET | `/api/seismic/spectral-decomp/trace?inline_number=...&crossline_number=...&method=stft\|cwt` | Spectral decomposition (time x freq) for a single trace |
+| GET | `/api/seismic/spectral-property-model` | Multi-frequency CWT/SSWT amplitude -> VSH/PHIE/SWE, validated with leave-one-well-out cross-validation across wells with a usable tie (see "Spectral property prediction" below) |
 | GET | `/api/synthetic/{well_id}/generate?wavelet_method=&wavelet_freq_hz=&density_method=` | Full synthetic seismogram + well tie (see "Synthetic Seismogram module" below) |
 | GET | `/api/synthetic/{well_id}/nearest-trace` | Lightweight nearest-trace lookup without generating the full synthetic |
 | GET / PUT / DELETE | `/api/synthetic/{well_id}/tie` | Get / save / clear a well's persisted manual stretch/squeeze control points |

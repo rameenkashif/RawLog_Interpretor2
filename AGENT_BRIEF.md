@@ -433,3 +433,31 @@ tune them without touching code. Key notes for future sessions:
   kind of unvalidated heuristic this codebase is otherwise careful to avoid (see the seismic
   proxy caveats) -- the synthesis judgment stays Claude's to make and state explicitly, per
   the reasoning-workflow guidance above.
+- **Spectral property prediction added, step 1 of a deliberately sequenced volume-wide-map
+  request** (user request: multi-frequency SSWT -> VSH/PHIE/SWE prediction, ultimately across
+  the whole seismic volume). Rather than building the volume-wide map directly, this pass
+  builds and honestly validates the point-source model only: `GET /api/seismic/
+  spectral-property-model` (`spectral_property_prediction_service.py`) uses SSWT/CWT amplitude
+  across ALL frequency bins as features, trains `sklearn.ensemble.RandomForestRegressor` (same
+  hyperparameters as the existing `CORE_PERM_PRED` model, for consistency), and validates with
+  **leave-one-well-out cross-validation** -- not a random depth-sample split, which would
+  overstate performance given depth-sample autocorrelation within a well.
+  `status="insufficient_data"` is a first-class outcome when fewer than 2 wells have a usable
+  tie, never a fabricated score -- the volume-wide map is explicitly deferred until this
+  validates with real, held-out skill.
+
+  Two correctness issues were found and fixed during design, verified against source rather
+  than assumed: (1) well eligibility/time-shift correction must use `dashboard_upload_service.
+  get_synthetic_summary` (the tie computed against the SAME single-active-volume + coordinate-
+  calibration trace resolution this module and `spectral_petro_correlation_service.py` both
+  use), not `tie_service.get_well_seismic_tie` (a different, dataset-based trace/time-axis
+  system) -- meaning this module's "usable" wells can legitimately differ from what
+  `get_field_overview` reports; (2) `spectral_petro_correlation_service._resolve_well_tie_
+  context` gained an optional `time_shift_ms` parameter (default `0.0`, fully backward-
+  compatible with its two existing callers) so this module can apply the synthetic
+  seismogram's `best_shift_ms` correction before extracting features -- the existing
+  single-frequency correlation view does not apply this correction and is left unchanged, a
+  known follow-up. The shift's sign convention was verified empirically against
+  `well_seismic_tie.cross_correlate_and_shift` with a dedicated test
+  (`TestTimeShiftCorrection`), not just derived. Frontend: a new "Spectral Property Prediction"
+  tab in `SeismicPanel.tsx` (`SpectralPropertyModelView.tsx`).
