@@ -511,6 +511,16 @@ generalize:
   else in this app) are excluded from training, per `well_seismic_tie.
   cross_correlate_and_shift`'s own documented guidance: "Boundary-pinned results should be
   excluded from aggregate statistics (mean correlation, ML training sets) by default."
+  `get_synthetic_summary`'s underlying `generate()` call runs with `wavelet_method="ricker",
+  auto_optimize_tie=True` (both call sites in `dashboard_upload_service.py`, not
+  `generate()`'s own plain defaults, which run a much weaker statistical-wavelet,
+  no-frequency-search fit) -- found and fixed after real usage showed this default made
+  wells with a genuinely strong `tie_service`-measured tie (e.g. 0.94 correlation on the
+  Well-to-Seismic Tie page) come back excluded here as low-confidence, purely from search
+  thoroughness, not a real geological disagreement. Still a different search/trace-resolution
+  than `tie_service` (see above), so results won't be identical -- just no longer needlessly
+  pessimistic. `GET /api/synthetic/{well_id}/generate` (the Synthetic Seismogram page) keeps
+  its own user-controlled defaults, unaffected by this.
 - **Depth-time alignment applies the synthetic seismogram's own `best_shift_ms` correction**
   before extracting spectral features (`spectral_petro_correlation_service._resolve_well_tie_
   context`'s new optional `time_shift_ms` parameter, default `0.0` so the existing

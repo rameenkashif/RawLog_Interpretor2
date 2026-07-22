@@ -185,8 +185,20 @@ def _run_pipeline_steps(repo, well_id: str, run_token: str, segy_bytes: bytes, s
         _save(tie_available=False, tie_error=str(exc))
 
     # Step 4: the validated, unmodified synthetic seismogram generation.
+    # wavelet_method="ricker" + auto_optimize_tie=True: generate()'s
+    # defaults (statistical wavelet, no frequency search) are a much
+    # weaker search than tie_service.get_well_seismic_tie's joint
+    # frequency/polarity/shift search, so the two tie surfaces can
+    # disagree sharply on the SAME well for reasons that are just search
+    # thoroughness, not a real geological difference. This opts into the
+    # comparable (Ricker frequency grid + polarity + shift) search so
+    # eligibility/confidence here reflects the well's actual tie quality,
+    # not this call's default search's weaker starting point. Still a
+    # different algorithm/trace resolution than tie_service (see this
+    # module's docstring), so results won't be bit-for-bit identical --
+    # just no longer needlessly pessimistic.
     try:
-        synth = synthetic_seismogram_service.generate(well_id)
+        synth = synthetic_seismogram_service.generate(well_id, wavelet_method="ricker", auto_optimize_tie=True)
         synth_low_confidence = (
             synth["correlation"] < TIE_LOW_CONFIDENCE_THRESHOLD
             or synth["boundary_pinned"]
@@ -322,11 +334,17 @@ def get_synthetic_summary(well_id: str) -> dict:
     if record is not None and record.synthetic_error:
         return {"error": record.synthetic_error}
 
-    # Live fallback: same call GET /api/synthetic/{well_id}/generate makes.
+    # Live fallback for a well not yet processed by the dashboard pipeline.
+    # Same wavelet_method="ricker" + auto_optimize_tie=True override as
+    # run_upload_pipeline above, for the same reason (generate()'s plain
+    # defaults are a much weaker search than tie_service's) -- NOT the
+    # same as GET /api/synthetic/{well_id}/generate's own defaults, which
+    # stay user-controlled per-request on the Synthetic Seismogram page;
+    # this is specifically the confidence signal this cache/tools rely on.
     from app.services import synthetic_seismogram_service
 
     try:
-        synth = synthetic_seismogram_service.generate(well_id)
+        synth = synthetic_seismogram_service.generate(well_id, wavelet_method="ricker", auto_optimize_tie=True)
     except Exception as exc:  # noqa: BLE001
         return {"error": str(exc)}
 

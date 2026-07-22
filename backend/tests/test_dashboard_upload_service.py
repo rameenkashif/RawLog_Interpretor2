@@ -110,6 +110,51 @@ def _patch_pipeline_deps(
     monkeypatch.setattr(synthetic_seismogram_service, "generate", _generate)
 
 
+class TestSyntheticTieSearchRigor:
+    """generate()'s own defaults (statistical wavelet, no frequency
+    search) are a much weaker search than tie_service.get_well_seismic_
+    tie's joint frequency/polarity/shift search -- the two tie surfaces
+    disagreeing sharply on the same well turned out to be partly just
+    this search-thoroughness gap, not a real geological difference (see
+    README.md). Both call sites must opt into the comparable
+    (Ricker-grid + polarity + shift) search."""
+
+    def test_run_upload_pipeline_requests_ricker_auto_optimize(self, monkeypatch, raw_seismic_dir):
+        _patch_pipeline_deps(monkeypatch)
+        from app.services import synthetic_seismogram_service
+
+        calls = []
+        original = synthetic_seismogram_service.generate
+
+        def _spy(well_id, **kwargs):
+            calls.append(kwargs)
+            return _fake_synthetic()
+
+        monkeypatch.setattr(synthetic_seismogram_service, "generate", _spy)
+
+        token = dus.start_upload("Z-02", "survey.sgy")
+        dus.run_upload_pipeline("Z-02", token, b"x", "survey.sgy")
+
+        assert len(calls) == 1
+        assert calls[0] == {"wavelet_method": "ricker", "auto_optimize_tie": True}
+
+    def test_get_synthetic_summary_live_fallback_requests_ricker_auto_optimize(self, monkeypatch, raw_seismic_dir):
+        from app.services import synthetic_seismogram_service
+
+        calls = []
+
+        def _spy(well_id, **kwargs):
+            calls.append(kwargs)
+            return _fake_synthetic()
+
+        monkeypatch.setattr(synthetic_seismogram_service, "generate", _spy)
+
+        dus.get_synthetic_summary("Z-09")
+
+        assert len(calls) == 1
+        assert calls[0] == {"wavelet_method": "ricker", "auto_optimize_tie": True}
+
+
 class TestRunUploadPipelineSuccess:
     def test_full_success_marks_ready_with_all_sections_available(self, monkeypatch, raw_seismic_dir):
         _patch_pipeline_deps(monkeypatch)
