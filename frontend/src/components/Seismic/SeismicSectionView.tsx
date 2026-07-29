@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
-import { getCrosslineSection, getInlineSection, getSectionWellLogs } from "@/api/client";
+import { getCrosslineSection, getInlineSection, getSectionImageUrl, getSectionWellLogs } from "@/api/client";
 import type { SectionWellLogCurve, SurveyInfoResponse } from "@/api/types";
 import { useChartColors, type ChartColors } from "@/styles/tokens";
 
@@ -30,6 +30,7 @@ function axisStyle(colors: ChartColors) {
 export default function SeismicSectionView({ surveyInfo }: { surveyInfo: SurveyInfoResponse }) {
   const colors = useChartColors();
   const [direction, setDirection] = useState<"inline" | "crossline">("inline");
+  const [renderMode, setRenderMode] = useState<"interactive" | "static">("interactive");
   const [inlineNumber, setInlineNumber] = useState(surveyInfo.inline_min);
   const [crosslineNumber, setCrosslineNumber] = useState(surveyInfo.crossline_min);
 
@@ -101,6 +102,27 @@ export default function SeismicSectionView({ surveyInfo }: { surveyInfo: SurveyI
           ))}
         </div>
 
+        <div className="flex gap-1.5">
+          {(
+            [
+              { key: "interactive", label: "Interactive" },
+              { key: "static", label: "Clean (static)" },
+            ] as const
+          ).map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setRenderMode(key)}
+              className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition-all ${
+                renderMode === key
+                  ? "bg-brand-gradient text-white border-transparent shadow-card"
+                  : "bg-surface text-ink-muted border-border-strong hover:border-accent hover:text-accent"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         {direction === "inline" ? (
           <label className="flex items-center gap-2 text-xs font-semibold text-ink-muted">
             Inline
@@ -158,7 +180,7 @@ export default function SeismicSectionView({ surveyInfo }: { surveyInfo: SurveyI
           Failed to load section: {(activeQuery.error as Error).message}
         </div>
       )}
-      {figure && (
+      {renderMode === "interactive" && figure && (
         <div className="bg-surface border border-border rounded-xl p-2 shadow-card">
           <Plot
             data={figure.data}
@@ -185,6 +207,24 @@ export default function SeismicSectionView({ surveyInfo }: { surveyInfo: SurveyI
               No wells have a usable direct tie to draw yet.
             </p>
           )}
+        </div>
+      )}
+
+      {renderMode === "static" && !activeQuery.isLoading && (
+        <div className="bg-surface border border-border rounded-xl p-2 shadow-card">
+          {/* Matplotlib PNG rendered server-side (section_image_service.py) --
+              a static alternative to the Plotly view above: no pan/zoom/hover,
+              but each well's VSH/PHIE/SWE is normalized to its own range here,
+              so PHIE (naturally a much smaller range than VSH/SWE) is actually
+              readable instead of looking flat. Keying on direction+lineNumber
+              forces a fresh <img> load instead of the browser reusing a stale
+              cached one when the line number changes. */}
+          <img
+            key={`${direction}-${lineNumber}`}
+            src={getSectionImageUrl(direction, lineNumber)}
+            alt={`${direction} ${lineNumber} section with well logs`}
+            className="w-full rounded-lg"
+          />
         </div>
       )}
     </div>

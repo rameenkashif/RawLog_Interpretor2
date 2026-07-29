@@ -229,6 +229,10 @@ export async function getCrosslineSection(
   return data;
 }
 
+export function getSectionImageUrl(orientation: "inline" | "crossline", lineNumber: number): string {
+  return `${BASE_URL}/api/seismic/section-image?orientation=${orientation}&line_number=${lineNumber}`;
+}
+
 export async function getSectionWellLogs(
   orientation: "inline" | "crossline",
   lineNumber: number,

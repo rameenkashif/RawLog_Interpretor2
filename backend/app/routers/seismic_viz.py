@@ -15,7 +15,7 @@ Mounted at a different prefix (/api/seismic) so the two don't collide.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from app.models.schemas import (
     AmplitudeSpectrumResponse,
@@ -44,6 +44,7 @@ from app.models.schemas import (
 from app.coordinate_calibration import CoordinateCalibrationError
 from app.coordinate_tie_override_repository import WellTraceOverride, get_coordinate_tie_override_repository
 from app.services import coordinate_calibration_service as ccs
+from app.services import section_image_service as swi
 from app.services import section_well_log_service as swl
 from app.services import seismic_processor as sp
 from app.services import spectral_petro_correlation_service as spc
@@ -105,6 +106,24 @@ async def section_well_logs(
     a log-on-section overlay next to the Inline/Crossline Section view."""
     try:
         return SectionWellLogsResponse(**swl.get_section_well_logs(orientation, line_number))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/section-image")
+async def section_image(
+    orientation: str = Query(..., description="'inline' or 'crossline'"),
+    line_number: int = Query(..., description="The section's own inline/crossline number"),
+) -> Response:
+    """Static (Matplotlib) PNG rendering of the same section + well-log
+    overlay section-well-logs/the interactive Plotly view show -- an
+    additional, cleaner-looking option, not a replacement (see
+    section_image_service.py)."""
+    try:
+        png_bytes = swi.render_section_image(orientation, line_number)
+        return Response(content=png_bytes, media_type="image/png")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
