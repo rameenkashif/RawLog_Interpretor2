@@ -795,6 +795,42 @@ class SpectralPropertyModelResponse(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Prediction page (blind-well VSH/PHIE/SWE via Ridge regression on CWT/SSWT
+# amplitude, ported from a user-supplied reference pipeline -- see
+# prediction_pipeline_service.py for exactly what was and wasn't changed
+# from that reference).
+# -----------------------------------------------------------------------------
+class PredictionExcludedWell(BaseModel):
+    well_id: str
+    reason: str
+
+
+class PredictionResult(BaseModel):
+    r2: float | None
+    n_train_samples: int
+    n_train_wells: int
+    n_test_samples: int
+    y_true: list[float]
+    y_pred: list[float]
+    depths_m: list[float]
+    twt_ms: list[float]
+
+
+class PredictionResponse(BaseModel):
+    status: str = Field(..., description="'validated' or 'insufficient_data'")
+    message: str | None = None
+    blind_well_id: str
+    target: str = Field(..., description="'vsh', 'phie', or 'swe'")
+    method: str = Field(..., description="'cwt' or 'sswt'")
+    inline_number: int | None = None
+    crossline_number: int | None = None
+    tie_correlation: float | None = Field(None, description="Direct-tie correlation for the blind well")
+    excluded_wells: list[PredictionExcludedWell]
+    n_train_wells: int
+    result: PredictionResult | None = None
+
+
+# -----------------------------------------------------------------------------
 # Synthetic Seismogram module (/api/synthetic/*)
 # -----------------------------------------------------------------------------
 class WellHeaderQc(BaseModel):

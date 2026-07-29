@@ -306,6 +306,39 @@ export interface CrosslineSectionResponse {
   amplitude: number[][]; // shape (n_samples, n_traces_in_line)
 }
 
+export interface PredictionExcludedWell {
+  well_id: string;
+  reason: string;
+}
+
+export interface PredictionResult {
+  r2: number | null;
+  n_train_samples: number;
+  n_train_wells: number;
+  n_test_samples: number;
+  y_true: number[];
+  y_pred: number[];
+  depths_m: number[];
+  twt_ms: number[];
+}
+
+export type PredictionTarget = "vsh" | "phie" | "swe";
+export type PredictionMethod = "cwt" | "sswt";
+
+export interface PredictionResponse {
+  status: "validated" | "insufficient_data";
+  message: string | null;
+  blind_well_id: string;
+  target: PredictionTarget;
+  method: PredictionMethod;
+  inline_number: number | null;
+  crossline_number: number | null;
+  tie_correlation: number | null;
+  excluded_wells: PredictionExcludedWell[];
+  n_train_wells: number;
+  result: PredictionResult | null;
+}
+
 export interface SectionWellLogCurve {
   well_id: string;
   position_on_axis: number;

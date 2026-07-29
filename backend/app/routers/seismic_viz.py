@@ -22,6 +22,7 @@ from app.models.schemas import (
     CoordinateCalibrationReportResponse,
     CrosslineSectionResponse,
     InlineSectionResponse,
+    PredictionResponse,
     RecalibrateRequest,
     RecalibrateResponse,
     SectionWellLogsResponse,
@@ -44,6 +45,7 @@ from app.models.schemas import (
 from app.coordinate_calibration import CoordinateCalibrationError
 from app.coordinate_tie_override_repository import WellTraceOverride, get_coordinate_tie_override_repository
 from app.services import coordinate_calibration_service as ccs
+from app.services import prediction_pipeline_service as pps
 from app.services import section_image_service as swi
 from app.services import section_well_log_service as swl
 from app.services import seismic_processor as sp
@@ -123,6 +125,40 @@ async def section_image(
     section_image_service.py)."""
     try:
         png_bytes = swi.render_section_image(orientation, line_number)
+        return Response(content=png_bytes, media_type="image/png")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/prediction", response_model=PredictionResponse)
+async def prediction(
+    blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
+    target: str = Query(..., description="'vsh', 'phie', or 'swe'"),
+    method: str = Query("cwt", description="'cwt' or 'sswt'"),
+) -> PredictionResponse:
+    """Blind-well VSH/PHIE/SWE prediction (Ridge regression on CWT/SSWT
+    amplitude) -- see prediction_pipeline_service.py."""
+    try:
+        return PredictionResponse(**pps.get_prediction_result(blind_well_id, target, method))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/prediction-image")
+async def prediction_image(
+    blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
+    target: str = Query(..., description="'vsh', 'phie', or 'swe'"),
+    method: str = Query("cwt", description="'cwt' or 'sswt'"),
+) -> Response:
+    """Static (Matplotlib) PNG: side-by-side TRUE vs. PREDICTED inline
+    section for the blind well -- see prediction_pipeline_service.py's
+    render_prediction_image."""
+    try:
+        png_bytes = pps.render_prediction_image(blind_well_id, target, method)
         return Response(content=png_bytes, media_type="image/png")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

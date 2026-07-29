@@ -19,6 +19,9 @@ import type {
   InlineSectionResponse,
   NearestTraceResponse,
   RecalibrateResponse,
+  PredictionMethod,
+  PredictionResponse,
+  PredictionTarget,
   SaveTiePointsRequest,
   SectionWellLogsResponse,
   SeismicAttributesResponse,
@@ -231,6 +234,26 @@ export async function getCrosslineSection(
 
 export function getSectionImageUrl(orientation: "inline" | "crossline", lineNumber: number): string {
   return `${BASE_URL}/api/seismic/section-image?orientation=${orientation}&line_number=${lineNumber}`;
+}
+
+export async function getPrediction(
+  blindWellId: string,
+  target: PredictionTarget,
+  method: PredictionMethod,
+): Promise<PredictionResponse> {
+  const { data } = await http.get<PredictionResponse>("/api/seismic/prediction", {
+    params: { blind_well_id: blindWellId, target, method },
+  });
+  return data;
+}
+
+export function getPredictionImageUrl(
+  blindWellId: string,
+  target: PredictionTarget,
+  method: PredictionMethod,
+): string {
+  const params = new URLSearchParams({ blind_well_id: blindWellId, target, method });
+  return `${BASE_URL}/api/seismic/prediction-image?${params.toString()}`;
 }
 
 export async function getSectionWellLogs(

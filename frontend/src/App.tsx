@@ -3,6 +3,7 @@ import DashboardPage from "./pages/DashboardPage";
 import WellDetailPage from "./pages/WellDetailPage";
 import SeismicPage from "./pages/SeismicPage";
 import SyntheticSeismogramPage from "./pages/SyntheticSeismogramPage";
+import PredictionPage from "./pages/PredictionPage";
 import ErrorBoundary from "./components/ErrorBoundary";
 import ThemeToggle from "./components/ThemeToggle";
 
@@ -45,6 +46,9 @@ export default function App() {
               <NavLink to="/synthetic" className={navLinkClass}>
                 Synthetic Seismogram
               </NavLink>
+              <NavLink to="/prediction" className={navLinkClass}>
+                Prediction
+              </NavLink>
             </nav>
           </div>
 
@@ -82,6 +86,7 @@ export default function App() {
             <Route path="/wells/:wellId" element={<WellDetailPage />} />
             <Route path="/seismic" element={<SeismicPage />} />
             <Route path="/synthetic" element={<SyntheticSeismogramPage />} />
+            <Route path="/prediction" element={<PredictionPage />} />
           </Routes>
         </ErrorBoundary>
       </main>
