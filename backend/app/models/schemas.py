@@ -825,6 +825,9 @@ class PredictionResponse(BaseModel):
     inline_number: int | None = None
     crossline_number: int | None = None
     tie_correlation: float | None = Field(None, description="Direct-tie correlation for the blind well")
+    tie_best_freq_hz: float | None = Field(None, description="Winning Ricker wavelet frequency from the direct tie")
+    tie_polarity: int | None = Field(None, description="+1 or -1, from the direct tie")
+    tie_bulk_shift_ms: float | None = Field(None, description="Winning bulk time shift (ms) from the direct tie")
     excluded_wells: list[PredictionExcludedWell]
     n_train_wells: int
     result: PredictionResult | None = None

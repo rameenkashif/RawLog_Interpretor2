@@ -256,9 +256,18 @@ export function getPredictionImageUrl(
   return `${BASE_URL}/api/seismic/prediction-image?${params.toString()}`;
 }
 
-export function getPredictionHeatmapUrl(blindWellId: string): string {
+export function getPredictionLoocvHeatmapUrl(): string {
+  return `${BASE_URL}/api/seismic/prediction-loocv-heatmap`;
+}
+
+export function getPredictionFrequencyMapUrl(blindWellId: string): string {
   const params = new URLSearchParams({ blind_well_id: blindWellId });
-  return `${BASE_URL}/api/seismic/prediction-heatmap?${params.toString()}`;
+  return `${BASE_URL}/api/seismic/prediction-frequency-map?${params.toString()}`;
+}
+
+export function getPredictionInlineMapsUrl(blindWellId: string, method: PredictionMethod): string {
+  const params = new URLSearchParams({ blind_well_id: blindWellId, method });
+  return `${BASE_URL}/api/seismic/prediction-inline-maps?${params.toString()}`;
 }
 
 export async function getSectionWellLogs(

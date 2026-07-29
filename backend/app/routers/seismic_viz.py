@@ -166,16 +166,50 @@ async def prediction_image(
         _handle(exc)
 
 
-@router.get("/prediction-heatmap")
-async def prediction_heatmap(
-    blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
-) -> Response:
-    """Static (Matplotlib) PNG heatmap: blind R^2 for all 3 targets x 2
-    methods for one well -- see prediction_pipeline_service.py's
-    render_r2_heatmap_image."""
+@router.get("/prediction-loocv-heatmap")
+async def prediction_loocv_heatmap() -> Response:
+    """Static (Matplotlib) PNG heatmap: TRUE pooled leave-one-well-out R^2
+    (every well takes a turn held out) for all 3 targets x 2 methods --
+    see prediction_pipeline_service.py's render_full_loocv_heatmap_image.
+    Not scoped to any one blind well."""
     try:
-        png_bytes = pps.render_r2_heatmap_image(blind_well_id)
+        png_bytes = pps.render_full_loocv_heatmap_image()
         return Response(content=png_bytes, media_type="image/png")
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/prediction-frequency-map")
+async def prediction_frequency_map(
+    blind_well_id: str = Query(..., description="Well whose inline to show the frequency map for"),
+) -> Response:
+    """Static (Matplotlib) PNG: amplitude-spectrum frequency map for the
+    inline through the given well -- see prediction_pipeline_service.py's
+    render_frequency_map_image."""
+    try:
+        png_bytes = pps.render_frequency_map_image(blind_well_id)
+        return Response(content=png_bytes, media_type="image/png")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/prediction-inline-maps")
+async def prediction_inline_maps(
+    blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
+    method: str = Query("cwt", description="'cwt' or 'sswt'"),
+) -> Response:
+    """Static (Matplotlib) PNG: real seismic vs. predicted VSH/PHIE/SWE
+    painted across the WHOLE inline (not just the well's own location) --
+    EXPLORATORY, see prediction_pipeline_service.py's
+    render_property_inline_maps_image docstring for the R^2 caveat this
+    renders directly into the image."""
+    try:
+        png_bytes = pps.render_property_inline_maps_image(blind_well_id, method)
+        return Response(content=png_bytes, media_type="image/png")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         _handle(exc)
 

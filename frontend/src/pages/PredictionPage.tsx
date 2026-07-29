@@ -1,11 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import {
   getPrediction,
-  getPredictionHeatmapUrl,
+  getPredictionFrequencyMapUrl,
   getPredictionImageUrl,
+  getPredictionInlineMapsUrl,
+  getPredictionLoocvHeatmapUrl,
+  getSectionImageUrl,
   listWells,
 } from "@/api/client";
 import type { PredictionMethod, PredictionResponse, PredictionTarget } from "@/api/types";
@@ -35,19 +38,18 @@ function fmtR2(v: number | null): string {
 }
 
 /**
- * Prediction page: blind-well VSH/PHIE/SWE from CWT/SSWT amplitude via
- * Ridge regression, plotted as a true-vs-predicted inline section for
- * EACH property at once (plus an R² heatmap comparing all 3 properties x
- * 2 methods) -- ported from a user-supplied reference pipeline (see
- * backend/app/services/prediction_pipeline_service.py's docstring for
- * exactly what was kept vs. changed from that reference: only the
- * well->trace tie uses this app's own validated direct-tie method
- * instead of the reference script's hand-fit coordinate anchors).
+ * Prediction page: SEG-Y+LAS -> frequency maps -> well tie -> CWT/SSWT ->
+ * blind-well VSH/PHIE/SWE prediction -> inline display, ported from a
+ * user-supplied reference pipeline (see backend/app/services/
+ * prediction_pipeline_service.py's docstring for exactly what was kept
+ * vs. changed: only the well->trace tie uses this app's own validated
+ * direct-tie method instead of the reference script's hand-fit
+ * coordinate anchors -- everything else, including the Ridge regression
+ * model and full leave-one-well-out heatmap, mirrors the reference
+ * pipeline).
  *
  * Deliberately a separate page/model from the Seismic panel's Spectral
- * Property Prediction tab (RandomForest + full leave-one-well-out) --
- * this one holds out ONE named blind well at a time with Ridge
- * regression, matching the reference pipeline's own approach.
+ * Property Prediction tab (RandomForest).
  */
 export default function PredictionPage() {
   const wellsQuery = useQuery({ queryKey: ["wells"], queryFn: listWells });
@@ -90,14 +92,15 @@ export default function PredictionPage() {
     swe: sweQuery,
   };
 
-  // Excluded-wells list is identical across the three queries (it only
-  // depends on the tie, not the target/method) -- just use whichever
-  // loaded first.
+  // Tie/exclusion info is identical across the three queries (it only
+  // depends on the tie, not the target) -- just use whichever loaded
+  // first that reached "validated".
+  const tieInfo = [vshQuery.data, phieQuery.data, sweQuery.data].find((d) => d?.status === "validated");
   const excludedWells =
     vshQuery.data?.excluded_wells ?? phieQuery.data?.excluded_wells ?? sweQuery.data?.excluded_wells ?? [];
 
   return (
-    <div className="pb-12 space-y-4">
+    <div className="pb-12 space-y-5">
       <div className="relative overflow-hidden rounded-2xl border border-border bg-brand-gradient-soft px-5 py-4">
         <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-orange/10 blur-2xl" />
         <div className="relative">
@@ -157,20 +160,6 @@ export default function PredictionPage() {
         </div>
       )}
 
-      {blindWellId && (
-        <div className="bg-surface border border-border rounded-xl p-3 shadow-card">
-          <p className="text-xs font-semibold text-ink mb-2">
-            Blind R² across all properties &amp; methods -- {blindWellId}
-          </p>
-          <img
-            key={blindWellId}
-            src={getPredictionHeatmapUrl(blindWellId)}
-            alt={`${blindWellId} blind R2 heatmap`}
-            className="mx-auto max-w-sm rounded-lg"
-          />
-        </div>
-      )}
-
       {excludedWells.length > 0 && (
         <div className="space-y-1.5">
           <p className="text-xs font-semibold text-ink-muted">Excluded from training</p>
@@ -184,17 +173,101 @@ export default function PredictionPage() {
         </div>
       )}
 
-      {blindWellId &&
-        TARGETS.map(({ key, label }) => (
-          <PropertySection
-            key={key}
-            target={key}
-            label={label}
-            method={method}
-            blindWellId={blindWellId}
-            query={queriesByTarget[key]}
-          />
-        ))}
+      {blindWellId && (
+        <>
+          {/* 1. Frequency maps */}
+          <Section title="Frequency map">
+            <img
+              key={`freq-${blindWellId}`}
+              src={getPredictionFrequencyMapUrl(blindWellId)}
+              alt={`${blindWellId} frequency map`}
+              className="w-full rounded-lg"
+            />
+          </Section>
+
+          {/* 2. Time-domain inline section */}
+          {tieInfo?.inline_number != null && (
+            <Section title={`Time-domain inline section (Inline ${tieInfo.inline_number})`}>
+              <img
+                key={`section-${tieInfo.inline_number}`}
+                src={getSectionImageUrl("inline", tieInfo.inline_number)}
+                alt={`Inline ${tieInfo.inline_number} section`}
+                className="w-full rounded-lg"
+              />
+            </Section>
+          )}
+
+          {/* 3. Well tie for the selected well */}
+          {tieInfo && (
+            <Section title={`Well tie -- ${blindWellId}`}>
+              <div className="flex flex-wrap gap-2 px-1 pb-1">
+                <Badge tone="accent">
+                  IL {tieInfo.inline_number} / XL {tieInfo.crossline_number}
+                </Badge>
+                <Badge tone={tieInfo.tie_correlation !== null && tieInfo.tie_correlation >= 0.5 ? "green" : "orange"}>
+                  Correlation = {tieInfo.tie_correlation?.toFixed(3) ?? "n/a"}
+                </Badge>
+                <Badge tone="accent">Best freq = {tieInfo.tie_best_freq_hz?.toFixed(1) ?? "n/a"} Hz</Badge>
+                <Badge tone="accent">
+                  Polarity = {tieInfo.tie_polarity === 1 ? "normal" : tieInfo.tie_polarity === -1 ? "reversed" : "n/a"}
+                </Badge>
+                <Badge tone="accent">Bulk shift = {tieInfo.tie_bulk_shift_ms?.toFixed(1) ?? "n/a"} ms</Badge>
+              </div>
+            </Section>
+          )}
+
+          {/* 4. True vs predicted for the blind well, per property */}
+          <div className="space-y-4">
+            <p className="text-sm font-bold text-ink">True vs. predicted -- {blindWellId} (blind)</p>
+            {TARGETS.map(({ key, label }) => (
+              <PropertySection
+                key={key}
+                target={key}
+                label={label}
+                method={method}
+                blindWellId={blindWellId}
+                query={queriesByTarget[key]}
+              />
+            ))}
+          </div>
+
+          {/* 5. Full LOOCV heatmap */}
+          <Section title="Full leave-one-well-out R² (every well held out in turn)">
+            <img
+              key="full-loocv"
+              src={getPredictionLoocvHeatmapUrl()}
+              alt="Full LOOCV R2 heatmap"
+              className="mx-auto max-w-sm rounded-lg"
+            />
+          </Section>
+
+          {/* 6. Real vs predicted VSH/PHIE/SWE painted across the whole inline */}
+          <Section title={`Real vs. predicted VSH / PHIE / SWE across Inline ${tieInfo?.inline_number ?? ""}`}>
+            <p className="text-xs text-orange-strong bg-orange-soft/40 border border-orange/30 rounded-lg px-3 py-2 mb-2">
+              Exploratory, not a validated spatial map: blind R² for this pipeline has been near zero
+              or negative for most property/method combinations (see the LOOCV heatmap above) -- a
+              confidently colored map does not mean the colors are trustworthy. A real property value
+              only exists at the well itself; away from it, the right-hand panels are the model's
+              estimate only.
+            </p>
+            <img
+              key={`inline-maps-${blindWellId}-${method}`}
+              src={getPredictionInlineMapsUrl(blindWellId, method)}
+              alt={`${blindWellId} real vs predicted VSH/PHIE/SWE inline maps`}
+              className="w-full rounded-lg"
+            />
+          </Section>
+        </>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="bg-surface border border-border rounded-xl p-3 shadow-card space-y-2">
+      <p className="text-xs font-semibold text-ink">{title}</p>
+      {children}
     </div>
   );
 }
@@ -216,7 +289,7 @@ function PropertySection({
 
   return (
     <div className="space-y-2">
-      <p className="text-sm font-bold text-ink">{label}</p>
+      <p className="text-xs font-bold text-ink-muted">{label}</p>
 
       {query.isLoading && <div className="h-48 rounded-xl bg-surface-sunken animate-pulse" />}
       {query.isError && (
@@ -234,9 +307,6 @@ function PropertySection({
       {data && data.status === "validated" && data.result && (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2">
-            <Badge tone="accent">
-              Tied: IL {data.inline_number} / XL {data.crossline_number} (r={data.tie_correlation?.toFixed(3)})
-            </Badge>
             <Badge tone={data.result.r2 !== null && data.result.r2 > 0 ? "green" : "orange"}>
               Blind R² = {fmtR2(data.result.r2)}
             </Badge>
@@ -246,14 +316,14 @@ function PropertySection({
             <Badge tone="accent">{data.result.n_test_samples} blind samples</Badge>
           </div>
 
-          <div className="bg-surface border border-border rounded-xl p-2 shadow-card">
+          <div className="bg-surface-sunken border border-border rounded-xl p-2">
             <img
               key={`${blindWellId}-${target}-${method}`}
               src={getPredictionImageUrl(blindWellId, target, method)}
               alt={`${blindWellId} true vs predicted ${label}`}
               className="w-full rounded-lg"
             />
-            <p className="text-xs text-ink-faint px-2 pb-2 pt-1">
+            <p className="text-xs text-ink-faint px-2 pb-1 pt-1">
               Left: {blindWellId}'s real (logged) {label}, painted as a colored strip at its tied
               crossline. Right: the model's blind prediction at the same location -- this well's own
               data never appeared in training.

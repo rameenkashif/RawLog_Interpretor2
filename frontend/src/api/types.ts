@@ -334,6 +334,9 @@ export interface PredictionResponse {
   inline_number: number | null;
   crossline_number: number | null;
   tie_correlation: number | null;
+  tie_best_freq_hz: number | null;
+  tie_polarity: number | null;
+  tie_bulk_shift_ms: number | null;
   excluded_wells: PredictionExcludedWell[];
   n_train_wells: number;
   result: PredictionResult | null;
