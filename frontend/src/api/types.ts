@@ -544,6 +544,8 @@ export interface SpectralPropertyWellResult {
   well_id: string;
   r2: number | null;
   n_samples: number;
+  y_true: number[]; // this well's actual values, held out (never trained on)
+  y_pred: number[]; // predicted values, same sample order as y_true
 }
 
 export interface SpectralPropertyFeatureImportance {

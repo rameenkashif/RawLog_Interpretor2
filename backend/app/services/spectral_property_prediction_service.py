@@ -246,7 +246,16 @@ def _train_and_loocv(wells_features: dict[str, dict], method: str, property_name
         y_pred = model.predict(X_test)
 
         r2 = float(r2_score(y_test, y_pred)) if len(y_test) >= 2 else None
-        per_well_results.append({"well_id": held_out, "r2": r2, "n_samples": int(len(y_test))})
+        per_well_results.append({
+            "well_id": held_out,
+            "r2": r2,
+            "n_samples": int(len(y_test)),
+            # Held-out (never-trained-on) actual vs. predicted, for a
+            # blind-well predicted-vs-actual plot -- NOT in-sample, this
+            # well's own data never appeared in X_train/y_train above.
+            "y_true": y_test.tolist(),
+            "y_pred": y_pred.tolist(),
+        })
         all_true.extend(y_test.tolist())
         all_pred.extend(y_pred.tolist())
 

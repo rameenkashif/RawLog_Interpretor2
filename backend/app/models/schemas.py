@@ -757,6 +757,12 @@ class SpectralPropertyWellResult(BaseModel):
     well_id: str
     r2: float | None = Field(None, description="Held-out R^2 for this well when it was the leave-one-out fold")
     n_samples: int
+    y_true: list[float] = Field(
+        default_factory=list, description="This blind well's actual property values, held-out sample order"
+    )
+    y_pred: list[float] = Field(
+        default_factory=list, description="This blind well's predicted values (model never trained on it), same order as y_true"
+    )
 
 
 class SpectralPropertyFeatureImportance(BaseModel):

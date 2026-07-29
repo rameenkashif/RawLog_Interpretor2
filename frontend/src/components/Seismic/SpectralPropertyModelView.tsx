@@ -8,7 +8,10 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
+  Scatter,
+  ScatterChart,
   Tooltip,
   XAxis,
   YAxis,
@@ -21,6 +24,10 @@ import type {
 } from "@/api/types";
 import { useChartColors, type ChartColors } from "@/styles/tokens";
 import { Badge } from "@/components/Synthetic/QcBadges";
+
+// Which well's blind (held-out) predicted-vs-actual plot to show by
+// default -- a dropdown lets you switch to any other eligible well.
+const DEFAULT_BLIND_WELL = "Z-04_RAW";
 
 const PROPERTIES: { key: SpectralPropertyName; label: string }[] = [
   { key: "vsh", label: "VSH" },
@@ -64,6 +71,7 @@ function tooltipStyle(colors: ChartColors) {
 export default function SpectralPropertyModelView() {
   const colors = useChartColors();
   const [selectedProperty, setSelectedProperty] = useState<SpectralPropertyName>("vsh");
+  const [blindWell, setBlindWell] = useState(DEFAULT_BLIND_WELL);
   const query = useQuery({ queryKey: ["spectral-property-model"], queryFn: getSpectralPropertyModel });
   const data = query.data;
 
@@ -99,26 +107,45 @@ export default function SpectralPropertyModelView() {
         <div className="space-y-4">
           <LoocvSummaryChart results={data.results} colors={colors} />
 
-          <div className="flex gap-1.5">
-            {PROPERTIES.map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => setSelectedProperty(key)}
-                className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition-all ${
-                  selectedProperty === key
-                    ? "bg-brand-gradient text-white border-transparent shadow-card"
-                    : "bg-surface text-ink-muted border-border-strong hover:border-accent hover:text-accent"
-                }`}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex gap-1.5">
+              {PROPERTIES.map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setSelectedProperty(key)}
+                  className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition-all ${
+                    selectedProperty === key
+                      ? "bg-brand-gradient text-white border-transparent shadow-card"
+                      : "bg-surface text-ink-muted border-border-strong hover:border-accent hover:text-accent"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <label className="flex items-center gap-2 text-xs font-semibold text-ink-muted">
+              Blind well
+              <select
+                value={blindWell}
+                onChange={(e) => setBlindWell(e.target.value)}
+                className="text-xs border border-border-strong rounded-lg px-2 py-1"
               >
-                {label}
-              </button>
-            ))}
+                {data.eligible_well_ids.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           <PropertyDetail
             sswt={data.results[selectedProperty].sswt}
             cwt={data.results[selectedProperty].cwt}
             colors={colors}
+            propertyLabel={PROPERTIES.find((p) => p.key === selectedProperty)!.label}
+            blindWell={blindWell}
           />
         </div>
       )}
@@ -182,10 +209,14 @@ function PropertyDetail({
   sswt,
   cwt,
   colors,
+  propertyLabel,
+  blindWell,
 }: {
   sswt: SpectralPropertyMethodResult | null;
   cwt: SpectralPropertyMethodResult | null;
   colors: ChartColors;
+  propertyLabel: string;
+  blindWell: string;
 }) {
   if (!sswt && !cwt) {
     return (
@@ -197,10 +228,111 @@ function PropertyDetail({
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+      <PredictedVsActualChart
+        title={`SSWT: ${blindWell} predicted vs. actual ${propertyLabel}`}
+        result={sswt}
+        wellId={blindWell}
+        colors={colors}
+      />
+      <PredictedVsActualChart
+        title={`CWT: ${blindWell} predicted vs. actual ${propertyLabel}`}
+        result={cwt}
+        wellId={blindWell}
+        colors={colors}
+      />
       <FeatureImportanceChart title="SSWT feature importance by frequency" result={sswt} colors={colors} />
       <FeatureImportanceChart title="CWT feature importance by frequency" result={cwt} colors={colors} />
       <PerWellTable title="SSWT per-well (held-out) results" result={sswt} />
       <PerWellTable title="CWT per-well (held-out) results" result={cwt} />
+    </div>
+  );
+}
+
+/**
+ * Predicted-vs-actual scatter for ONE blind (held-out) well: this well's
+ * data never appeared in the training fold that produced these
+ * predictions (see spectral_property_prediction_service._train_and_loocv
+ * -- y_true/y_pred come straight from that well's held-out LOOCV fold).
+ * The dashed line is the 1:1 "perfect prediction" reference -- points
+ * near it are good, points far from it (in either direction) are the
+ * model missing this well's real values.
+ */
+function PredictedVsActualChart({
+  title,
+  result,
+  wellId,
+  colors,
+}: {
+  title: string;
+  result: SpectralPropertyMethodResult | null;
+  wellId: string;
+  colors: ChartColors;
+}) {
+  const well = result?.per_well.find((w) => w.well_id === wellId);
+
+  if (!result || !well || well.y_true.length === 0) {
+    return (
+      <div className="bg-surface border border-border rounded-xl p-4 shadow-card text-xs text-ink-faint">
+        {title}: unavailable ({wellId} wasn't part of this method's held-out validation).
+      </div>
+    );
+  }
+
+  const points = well.y_true.map((actual, i) => ({ actual, predicted: well.y_pred[i] }));
+  const allValues = [...well.y_true, ...well.y_pred];
+  const min = Math.min(...allValues);
+  const max = Math.max(...allValues);
+  const pad = (max - min) * 0.05 || 0.05;
+  const domain: [number, number] = [min - pad, max + pad];
+
+  return (
+    <div className="bg-surface border border-border rounded-xl p-4 shadow-card">
+      <p className="text-xs font-semibold text-ink mb-2">
+        {title}
+        <span className="ml-2 font-normal text-ink-faint">(r²={fmtR2(well.r2)}, n={well.n_samples})</span>
+      </p>
+      <ResponsiveContainer width="100%" height={220}>
+        <ScatterChart margin={{ top: 4, right: 8, left: 0, bottom: 20 }}>
+          <CartesianGrid stroke={colors.gridLine} />
+          <XAxis
+            type="number"
+            dataKey="actual"
+            domain={domain}
+            tick={{ fill: colors.inkMuted, fontSize: 11 }}
+            axisLine={{ stroke: colors.borderStrong }}
+            tickLine={false}
+            label={{ value: "Actual", position: "insideBottom", offset: -12, fill: colors.inkMuted, fontSize: 11 }}
+          />
+          <YAxis
+            type="number"
+            dataKey="predicted"
+            domain={domain}
+            tick={{ fill: colors.inkMuted, fontSize: 11 }}
+            axisLine={{ stroke: colors.borderStrong }}
+            tickLine={false}
+            label={{ value: "Predicted", angle: -90, position: "insideLeft", fill: colors.inkMuted, fontSize: 11 }}
+          />
+          <Tooltip
+            contentStyle={tooltipStyle(colors)}
+            formatter={(v: number) => v.toFixed(4)}
+            cursor={{ strokeDasharray: "3 3", stroke: colors.borderStrong }}
+          />
+          <ReferenceLine
+            segment={[
+              { x: domain[0], y: domain[0] },
+              { x: domain[1], y: domain[1] },
+            ]}
+            stroke={colors.inkFaint}
+            strokeDasharray="4 4"
+            ifOverflow="extendDomain"
+          />
+          <Scatter data={points} fill={colors.accentDeep} />
+        </ScatterChart>
+      </ResponsiveContainer>
+      <p className="text-xs text-ink-faint mt-1">
+        Dashed line = perfect prediction. This well was held out of training entirely for these
+        points -- not an in-sample fit.
+      </p>
     </div>
   );
 }
