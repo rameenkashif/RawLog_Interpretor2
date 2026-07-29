@@ -323,14 +323,13 @@ export interface PredictionResult {
 }
 
 export type PredictionTarget = "vsh" | "phie" | "swe";
-export type PredictionMethod = "cwt" | "sswt";
 
 export interface PredictionResponse {
   status: "validated" | "insufficient_data";
   message: string | null;
   blind_well_id: string;
   target: PredictionTarget;
-  method: PredictionMethod;
+  model_config_description: string;
   inline_number: number | null;
   crossline_number: number | null;
   tie_correlation: number | null;

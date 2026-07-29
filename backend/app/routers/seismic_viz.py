@@ -136,12 +136,14 @@ async def section_image(
 async def prediction(
     blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
     target: str = Query(..., description="'vsh', 'phie', or 'swe'"),
-    method: str = Query("cwt", description="'cwt' or 'sswt'"),
 ) -> PredictionResponse:
-    """Blind-well VSH/PHIE/SWE prediction (Ridge regression on CWT/SSWT
-    amplitude) -- see prediction_pipeline_service.py."""
+    """Blind-well VSH/PHIE/SWE prediction -- the "improved pipeline"
+    (PCA-3 + instantaneous attrs + per-property best model, see
+    prediction_pipeline_service.py's BEST_CONFIG). The spectrum/model
+    used is fixed per target, not caller-selectable, so it's returned in
+    the response's model_config field."""
     try:
-        return PredictionResponse(**pps.get_prediction_result(blind_well_id, target, method))
+        return PredictionResponse(**pps.get_prediction_result(blind_well_id, target))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -152,13 +154,12 @@ async def prediction(
 async def prediction_image(
     blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
     target: str = Query(..., description="'vsh', 'phie', or 'swe'"),
-    method: str = Query("cwt", description="'cwt' or 'sswt'"),
 ) -> Response:
     """Static (Matplotlib) PNG: side-by-side TRUE vs. PREDICTED inline
     section for the blind well -- see prediction_pipeline_service.py's
     render_prediction_image."""
     try:
-        png_bytes = pps.render_prediction_image(blind_well_id, target, method)
+        png_bytes = pps.render_prediction_image(blind_well_id, target)
         return Response(content=png_bytes, media_type="image/png")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -168,10 +169,10 @@ async def prediction_image(
 
 @router.get("/prediction-loocv-heatmap")
 async def prediction_loocv_heatmap() -> Response:
-    """Static (Matplotlib) PNG heatmap: TRUE pooled leave-one-well-out R^2
-    (every well takes a turn held out) for all 3 targets x 2 methods --
-    see prediction_pipeline_service.py's render_full_loocv_heatmap_image.
-    Not scoped to any one blind well."""
+    """Static (Matplotlib) PNG: TRUE pooled leave-one-well-out R^2 (every
+    well takes a turn held out) for VSH/PHIE/SWE, each under its own
+    BEST_CONFIG model -- see prediction_pipeline_service.py's
+    render_full_loocv_heatmap_image. Not scoped to any one blind well."""
     try:
         png_bytes = pps.render_full_loocv_heatmap_image()
         return Response(content=png_bytes, media_type="image/png")
@@ -198,15 +199,14 @@ async def prediction_frequency_map(
 @router.get("/prediction-inline-maps")
 async def prediction_inline_maps(
     blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
-    method: str = Query("cwt", description="'cwt' or 'sswt'"),
 ) -> Response:
     """Static (Matplotlib) PNG: real seismic vs. predicted VSH/PHIE/SWE
-    painted across the WHOLE inline (not just the well's own location) --
-    EXPLORATORY, see prediction_pipeline_service.py's
-    render_property_inline_maps_image docstring for the R^2 caveat this
-    renders directly into the image."""
+    painted across the WHOLE inline (not just the well's own location),
+    each property under its own BEST_CONFIG model -- EXPLORATORY, see
+    prediction_pipeline_service.py's render_property_inline_maps_image
+    docstring for the R^2 caveat this renders directly into the image."""
     try:
-        png_bytes = pps.render_property_inline_maps_image(blind_well_id, method)
+        png_bytes = pps.render_property_inline_maps_image(blind_well_id)
         return Response(content=png_bytes, media_type="image/png")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

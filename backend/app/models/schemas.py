@@ -821,7 +821,9 @@ class PredictionResponse(BaseModel):
     message: str | None = None
     blind_well_id: str
     target: str = Field(..., description="'vsh', 'phie', or 'swe'")
-    method: str = Field(..., description="'cwt' or 'sswt'")
+    model_config_description: str = Field(
+        ..., description="This target's fixed BEST_CONFIG recipe, e.g. 'SSWT + instantaneous attrs, PCA-3, RandomForest'"
+    )
     inline_number: int | None = None
     crossline_number: int | None = None
     tie_correlation: float | None = Field(None, description="Direct-tie correlation for the blind well")

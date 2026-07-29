@@ -11,7 +11,7 @@ import {
   getSectionImageUrl,
   listWells,
 } from "@/api/client";
-import type { PredictionMethod, PredictionResponse, PredictionTarget } from "@/api/types";
+import type { PredictionResponse, PredictionTarget } from "@/api/types";
 import { Badge } from "@/components/Synthetic/QcBadges";
 import { useAppStore } from "@/store/useAppStore";
 
@@ -19,10 +19,6 @@ const TARGETS: { key: PredictionTarget; label: string }[] = [
   { key: "vsh", label: "VSH" },
   { key: "phie", label: "PHIE" },
   { key: "swe", label: "SWE" },
-];
-const METHODS: { key: PredictionMethod; label: string }[] = [
-  { key: "cwt", label: "CWT" },
-  { key: "sswt", label: "SSWT" },
 ];
 
 function errorMessage(error: unknown): string {
@@ -40,23 +36,29 @@ function fmtR2(v: number | null): string {
 /**
  * Prediction page: SEG-Y+LAS -> frequency maps -> well tie -> CWT/SSWT ->
  * blind-well VSH/PHIE/SWE prediction -> inline display, ported from a
- * user-supplied reference pipeline (see backend/app/services/
- * prediction_pipeline_service.py's docstring for exactly what was kept
- * vs. changed: only the well->trace tie uses this app's own validated
+ * user-supplied reference pipeline. Runs the "improved" version of that
+ * pipeline (see backend/app/services/prediction_pipeline_service.py's
+ * docstring and BEST_CONFIG): PCA-3 dimensionality reduction,
+ * instantaneous attributes (Hilbert-transform envelope/phase/
+ * instantaneous frequency) plus a 5x5 spatial-neighborhood envelope
+ * average, and a pre-selected best model per property (Ridge/PLS/
+ * RandomForest, over CWT or SSWT) -- the fix set that moved the
+ * reference author's pooled LOOCV R^2 from catastrophically negative
+ * (-2 to -6, a raw 222-bin spectrum on ~40 samples/well) to small but
+ * real (VSH ~=+0.02, PHIE/SWE still <=0). Each property's exact recipe
+ * is fixed, not user-selectable -- see the "config" shown per property
+ * below. Only the well->trace tie uses this app's own validated
  * direct-tie method instead of the reference script's hand-fit
- * coordinate anchors -- everything else, including the Ridge regression
- * model and full leave-one-well-out heatmap, mirrors the reference
- * pipeline).
+ * coordinate anchors.
  *
  * Deliberately a separate page/model from the Seismic panel's Spectral
- * Property Prediction tab (RandomForest).
+ * Property Prediction tab (RandomForest on the raw, un-reduced spectrum).
  */
 export default function PredictionPage() {
   const wellsQuery = useQuery({ queryKey: ["wells"], queryFn: listWells });
   const activeWellId = useAppStore((s) => s.activeWellId);
 
   const [blindWellId, setBlindWellId] = useState<string | null>(null);
-  const [method, setMethod] = useState<PredictionMethod>("cwt");
 
   // Seed from the dashboard's shared active well, same convention as the
   // other well-scoped pages -- a manual pick below still overrides this.
@@ -69,21 +71,21 @@ export default function PredictionPage() {
   }, [activeWellId, wellsQuery.data]);
 
   // One query per property (a fixed set of exactly 3, so three explicit
-  // hooks instead of a dynamic useQueries -- all share the current
-  // method toggle).
+  // hooks instead of a dynamic useQueries) -- each uses its own fixed
+  // BEST_CONFIG recipe, no user-selectable method anymore.
   const vshQuery = useQuery({
-    queryKey: ["prediction", blindWellId, "vsh", method],
-    queryFn: () => getPrediction(blindWellId!, "vsh", method),
+    queryKey: ["prediction", blindWellId, "vsh"],
+    queryFn: () => getPrediction(blindWellId!, "vsh"),
     enabled: Boolean(blindWellId),
   });
   const phieQuery = useQuery({
-    queryKey: ["prediction", blindWellId, "phie", method],
-    queryFn: () => getPrediction(blindWellId!, "phie", method),
+    queryKey: ["prediction", blindWellId, "phie"],
+    queryFn: () => getPrediction(blindWellId!, "phie"),
     enabled: Boolean(blindWellId),
   });
   const sweQuery = useQuery({
-    queryKey: ["prediction", blindWellId, "swe", method],
-    queryFn: () => getPrediction(blindWellId!, "swe", method),
+    queryKey: ["prediction", blindWellId, "swe"],
+    queryFn: () => getPrediction(blindWellId!, "swe"),
     enabled: Boolean(blindWellId),
   });
   const queriesByTarget: Record<PredictionTarget, typeof vshQuery> = {
@@ -112,10 +114,11 @@ export default function PredictionPage() {
           </p>
           <h1 className="text-xl font-extrabold text-ink tracking-tight">Blind-Well Property Prediction</h1>
           <p className="text-sm text-ink-muted mt-1 max-w-2xl">
-            Holds one well out entirely, trains a Ridge regression on CWT/SSWT amplitude from every
-            other well, and predicts the held-out (blind) well's VSH/PHIE/SWE -- never trained on its
-            own data. Well location is resolved via the same direct nearest-trace tie validated on the
-            Well-to-Seismic Tie page, not a hand-fit coordinate transform.
+            Holds one well out entirely, trains a PCA-3 + instantaneous-attributes model (per-property
+            best config -- Ridge, PLS, or RandomForest, see badges below) on every other well, and
+            predicts the held-out (blind) well's VSH/PHIE/SWE -- never trained on its own data. Well
+            location is resolved via the same direct nearest-trace tie validated on the Well-to-Seismic
+            Tie page, not a hand-fit coordinate transform.
           </p>
         </div>
       </div>
@@ -136,22 +139,6 @@ export default function PredictionPage() {
             ))}
           </select>
         </label>
-
-        <div className="flex gap-1.5">
-          {METHODS.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setMethod(key)}
-              className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition-all ${
-                method === key
-                  ? "bg-brand-gradient text-white border-transparent shadow-card"
-                  : "bg-surface text-ink-muted border-border-strong hover:border-accent hover:text-accent"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
       </div>
 
       {!blindWellId && (
@@ -224,7 +211,6 @@ export default function PredictionPage() {
                 key={key}
                 target={key}
                 label={label}
-                method={method}
                 blindWellId={blindWellId}
                 query={queriesByTarget[key]}
               />
@@ -232,27 +218,28 @@ export default function PredictionPage() {
           </div>
 
           {/* 5. Full LOOCV heatmap */}
-          <Section title="Full leave-one-well-out R² (every well held out in turn)">
+          <Section title="Full leave-one-well-out R² (every well held out in turn) -- improved pipeline">
             <img
               key="full-loocv"
               src={getPredictionLoocvHeatmapUrl()}
               alt="Full LOOCV R2 heatmap"
-              className="mx-auto max-w-sm rounded-lg"
+              className="mx-auto max-w-md rounded-lg"
             />
           </Section>
 
           {/* 6. Real vs predicted VSH/PHIE/SWE painted across the whole inline */}
           <Section title={`Real vs. predicted VSH / PHIE / SWE across Inline ${tieInfo?.inline_number ?? ""}`}>
             <p className="text-xs text-orange-strong bg-orange-soft/40 border border-orange/30 rounded-lg px-3 py-2 mb-2">
-              Exploratory, not a validated spatial map: blind R² for this pipeline has been near zero
-              or negative for most property/method combinations (see the LOOCV heatmap above) -- a
-              confidently colored map does not mean the colors are trustworthy. A real property value
-              only exists at the well itself; away from it, the right-hand panels are the model's
-              estimate only.
+              Exploratory, not a validated spatial map: even the improved pipeline's blind R² has been
+              small or near zero for most properties (see the LOOCV heatmap above) -- a confidently
+              colored map does not mean the colors are trustworthy. A real property value only exists
+              at the well itself; away from it, the right-hand panels are the model's estimate only.
+              This is also the heaviest image on the page (per-trace SSWT + spatial-neighborhood
+              features along the whole inline) -- it may take a while to load.
             </p>
             <img
-              key={`inline-maps-${blindWellId}-${method}`}
-              src={getPredictionInlineMapsUrl(blindWellId, method)}
+              key={`inline-maps-${blindWellId}`}
+              src={getPredictionInlineMapsUrl(blindWellId)}
               alt={`${blindWellId} real vs predicted VSH/PHIE/SWE inline maps`}
               className="w-full rounded-lg"
             />
@@ -275,13 +262,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function PropertySection({
   target,
   label,
-  method,
   blindWellId,
   query,
 }: {
   target: PredictionTarget;
   label: string;
-  method: PredictionMethod;
   blindWellId: string;
   query: { data?: PredictionResponse; isLoading: boolean; isError: boolean; error: unknown };
 }) {
@@ -307,6 +292,7 @@ function PropertySection({
       {data && data.status === "validated" && data.result && (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2">
+            <Badge tone="accent">Config: {data.model_config_description}</Badge>
             <Badge tone={data.result.r2 !== null && data.result.r2 > 0 ? "green" : "orange"}>
               Blind R² = {fmtR2(data.result.r2)}
             </Badge>
@@ -318,8 +304,8 @@ function PropertySection({
 
           <div className="bg-surface-sunken border border-border rounded-xl p-2">
             <img
-              key={`${blindWellId}-${target}-${method}`}
-              src={getPredictionImageUrl(blindWellId, target, method)}
+              key={`${blindWellId}-${target}`}
+              src={getPredictionImageUrl(blindWellId, target)}
               alt={`${blindWellId} true vs predicted ${label}`}
               className="w-full rounded-lg"
             />

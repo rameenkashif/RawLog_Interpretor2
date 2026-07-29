@@ -19,7 +19,6 @@ import type {
   InlineSectionResponse,
   NearestTraceResponse,
   RecalibrateResponse,
-  PredictionMethod,
   PredictionResponse,
   PredictionTarget,
   SaveTiePointsRequest,
@@ -239,20 +238,15 @@ export function getSectionImageUrl(orientation: "inline" | "crossline", lineNumb
 export async function getPrediction(
   blindWellId: string,
   target: PredictionTarget,
-  method: PredictionMethod,
 ): Promise<PredictionResponse> {
   const { data } = await http.get<PredictionResponse>("/api/seismic/prediction", {
-    params: { blind_well_id: blindWellId, target, method },
+    params: { blind_well_id: blindWellId, target },
   });
   return data;
 }
 
-export function getPredictionImageUrl(
-  blindWellId: string,
-  target: PredictionTarget,
-  method: PredictionMethod,
-): string {
-  const params = new URLSearchParams({ blind_well_id: blindWellId, target, method });
+export function getPredictionImageUrl(blindWellId: string, target: PredictionTarget): string {
+  const params = new URLSearchParams({ blind_well_id: blindWellId, target });
   return `${BASE_URL}/api/seismic/prediction-image?${params.toString()}`;
 }
 
@@ -265,8 +259,8 @@ export function getPredictionFrequencyMapUrl(blindWellId: string): string {
   return `${BASE_URL}/api/seismic/prediction-frequency-map?${params.toString()}`;
 }
 
-export function getPredictionInlineMapsUrl(blindWellId: string, method: PredictionMethod): string {
-  const params = new URLSearchParams({ blind_well_id: blindWellId, method });
+export function getPredictionInlineMapsUrl(blindWellId: string): string {
+  const params = new URLSearchParams({ blind_well_id: blindWellId });
   return `${BASE_URL}/api/seismic/prediction-inline-maps?${params.toString()}`;
 }
 
