@@ -249,6 +249,58 @@ def get_prediction_result(blind_well_id: str, target: str, method: str) -> dict:
     }
 
 
+def render_r2_heatmap_image(blind_well_id: str) -> bytes:
+    """PNG heatmap: blind R^2 for all 3 targets x 2 methods (6
+    combinations) for one well, so it's visible at a glance which
+    target/method combination (if any) actually generalizes to this
+    blind well. Resolves every well's tie/features ONCE and reuses them
+    across all 6 combinations (_predict_blind alone is cheap; the tie
+    resolution _eligible_well_features does is the expensive part, and
+    is identical across all 6 -- only the target/method vary)."""
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from app.services import seismic_processor as sp
+
+    volume = sp.get_segy_volume()
+    well_features, _excluded = _eligible_well_features(volume)
+
+    targets = list(TARGET_LAS_NAMES.keys())
+    methods = list(METHOD_ENERGY_KEYS.keys())
+    grid = np.full((len(targets), len(methods)), np.nan)
+
+    if blind_well_id in well_features and len(well_features) >= 2:
+        for i, target in enumerate(targets):
+            for j, method in enumerate(methods):
+                pred = _predict_blind(well_features, blind_well_id, method, target)
+                if pred["r2"] is not None:
+                    grid[i, j] = pred["r2"]
+
+    fig, ax = plt.subplots(figsize=(4.5, 4), dpi=140)
+    finite = grid[np.isfinite(grid)]
+    vmax = float(np.max(np.abs(finite))) if finite.size else 1.0
+    im = ax.imshow(grid, cmap="RdBu", vmin=-vmax, vmax=vmax, aspect="auto")
+    ax.set_xticks(range(len(methods)), [m.upper() for m in methods])
+    ax.set_yticks(range(len(targets)), [t.upper() for t in targets])
+    for i in range(len(targets)):
+        for j in range(len(methods)):
+            val = grid[i, j]
+            text = f"{val:.3f}" if np.isfinite(val) else "n/a"
+            ax.text(j, i, text, ha="center", va="center", color="black", fontsize=10)
+    ax.set_title(f"Blind R²: {blind_well_id}")
+    fig.colorbar(im, ax=ax, label="R² (can be negative -- worse than the mean)", fraction=0.046)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
 def render_prediction_image(blind_well_id: str, target: str, method: str) -> bytes:
     """PNG bytes: side-by-side inline-section images (TRUE vs. PREDICTED
     target, painted as a colored strip at the blind well's crossline

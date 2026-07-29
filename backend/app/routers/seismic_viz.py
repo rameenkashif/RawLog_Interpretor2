@@ -166,6 +166,20 @@ async def prediction_image(
         _handle(exc)
 
 
+@router.get("/prediction-heatmap")
+async def prediction_heatmap(
+    blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
+) -> Response:
+    """Static (Matplotlib) PNG heatmap: blind R^2 for all 3 targets x 2
+    methods for one well -- see prediction_pipeline_service.py's
+    render_r2_heatmap_image."""
+    try:
+        png_bytes = pps.render_r2_heatmap_image(blind_well_id)
+        return Response(content=png_bytes, media_type="image/png")
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
 @router.get("/timeslice", response_model=TimeSliceResponse)
 async def time_slice(time_ms: float = Query(..., description="Requested TWT in ms; clamps to nearest sample")) -> TimeSliceResponse:
     try:

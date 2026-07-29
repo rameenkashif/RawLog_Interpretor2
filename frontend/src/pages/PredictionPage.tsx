@@ -2,8 +2,13 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AxiosError } from "axios";
-import { getPrediction, getPredictionImageUrl, listWells } from "@/api/client";
-import type { PredictionMethod, PredictionTarget } from "@/api/types";
+import {
+  getPrediction,
+  getPredictionHeatmapUrl,
+  getPredictionImageUrl,
+  listWells,
+} from "@/api/client";
+import type { PredictionMethod, PredictionResponse, PredictionTarget } from "@/api/types";
 import { Badge } from "@/components/Synthetic/QcBadges";
 import { useAppStore } from "@/store/useAppStore";
 
@@ -31,12 +36,13 @@ function fmtR2(v: number | null): string {
 
 /**
  * Prediction page: blind-well VSH/PHIE/SWE from CWT/SSWT amplitude via
- * Ridge regression, plotted as a true-vs-predicted inline section --
- * ported from a user-supplied reference pipeline (see backend/app/
- * services/prediction_pipeline_service.py's docstring for exactly what
- * was kept vs. changed from that reference: only the well->trace tie
- * uses this app's own validated direct-tie method instead of the
- * reference script's hand-fit coordinate anchors).
+ * Ridge regression, plotted as a true-vs-predicted inline section for
+ * EACH property at once (plus an R² heatmap comparing all 3 properties x
+ * 2 methods) -- ported from a user-supplied reference pipeline (see
+ * backend/app/services/prediction_pipeline_service.py's docstring for
+ * exactly what was kept vs. changed from that reference: only the
+ * well->trace tie uses this app's own validated direct-tie method
+ * instead of the reference script's hand-fit coordinate anchors).
  *
  * Deliberately a separate page/model from the Seismic panel's Spectral
  * Property Prediction tab (RandomForest + full leave-one-well-out) --
@@ -48,7 +54,6 @@ export default function PredictionPage() {
   const activeWellId = useAppStore((s) => s.activeWellId);
 
   const [blindWellId, setBlindWellId] = useState<string | null>(null);
-  const [target, setTarget] = useState<PredictionTarget>("vsh");
   const [method, setMethod] = useState<PredictionMethod>("cwt");
 
   // Seed from the dashboard's shared active well, same convention as the
@@ -61,13 +66,35 @@ export default function PredictionPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeWellId, wellsQuery.data]);
 
-  const predictionQuery = useQuery({
-    queryKey: ["prediction", blindWellId, target, method],
-    queryFn: () => getPrediction(blindWellId!, target, method),
+  // One query per property (a fixed set of exactly 3, so three explicit
+  // hooks instead of a dynamic useQueries -- all share the current
+  // method toggle).
+  const vshQuery = useQuery({
+    queryKey: ["prediction", blindWellId, "vsh", method],
+    queryFn: () => getPrediction(blindWellId!, "vsh", method),
     enabled: Boolean(blindWellId),
   });
+  const phieQuery = useQuery({
+    queryKey: ["prediction", blindWellId, "phie", method],
+    queryFn: () => getPrediction(blindWellId!, "phie", method),
+    enabled: Boolean(blindWellId),
+  });
+  const sweQuery = useQuery({
+    queryKey: ["prediction", blindWellId, "swe", method],
+    queryFn: () => getPrediction(blindWellId!, "swe", method),
+    enabled: Boolean(blindWellId),
+  });
+  const queriesByTarget: Record<PredictionTarget, typeof vshQuery> = {
+    vsh: vshQuery,
+    phie: phieQuery,
+    swe: sweQuery,
+  };
 
-  const data = predictionQuery.data;
+  // Excluded-wells list is identical across the three queries (it only
+  // depends on the tie, not the target/method) -- just use whichever
+  // loaded first.
+  const excludedWells =
+    vshQuery.data?.excluded_wells ?? phieQuery.data?.excluded_wells ?? sweQuery.data?.excluded_wells ?? [];
 
   return (
     <div className="pb-12 space-y-4">
@@ -108,22 +135,6 @@ export default function PredictionPage() {
         </label>
 
         <div className="flex gap-1.5">
-          {TARGETS.map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setTarget(key)}
-              className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition-all ${
-                target === key
-                  ? "bg-brand-gradient text-white border-transparent shadow-card"
-                  : "bg-surface text-ink-muted border-border-strong hover:border-accent hover:text-accent"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex gap-1.5">
           {METHODS.map(({ key, label }) => (
             <button
               key={key}
@@ -146,10 +157,71 @@ export default function PredictionPage() {
         </div>
       )}
 
-      {predictionQuery.isLoading && <div className="h-64 rounded-xl bg-surface-sunken animate-pulse" />}
-      {predictionQuery.isError && (
+      {blindWellId && (
+        <div className="bg-surface border border-border rounded-xl p-3 shadow-card">
+          <p className="text-xs font-semibold text-ink mb-2">
+            Blind R² across all properties &amp; methods -- {blindWellId}
+          </p>
+          <img
+            key={blindWellId}
+            src={getPredictionHeatmapUrl(blindWellId)}
+            alt={`${blindWellId} blind R2 heatmap`}
+            className="mx-auto max-w-sm rounded-lg"
+          />
+        </div>
+      )}
+
+      {excludedWells.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-semibold text-ink-muted">Excluded from training</p>
+          <div className="flex flex-wrap gap-2">
+            {excludedWells.map((w) => (
+              <Badge key={w.well_id} tone="orange">
+                {w.well_id} — {w.reason}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {blindWellId &&
+        TARGETS.map(({ key, label }) => (
+          <PropertySection
+            key={key}
+            target={key}
+            label={label}
+            method={method}
+            blindWellId={blindWellId}
+            query={queriesByTarget[key]}
+          />
+        ))}
+    </div>
+  );
+}
+
+function PropertySection({
+  target,
+  label,
+  method,
+  blindWellId,
+  query,
+}: {
+  target: PredictionTarget;
+  label: string;
+  method: PredictionMethod;
+  blindWellId: string;
+  query: { data?: PredictionResponse; isLoading: boolean; isError: boolean; error: unknown };
+}) {
+  const data = query.data;
+
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-bold text-ink">{label}</p>
+
+      {query.isLoading && <div className="h-48 rounded-xl bg-surface-sunken animate-pulse" />}
+      {query.isError && (
         <div className="border border-danger/30 bg-danger-soft text-danger text-sm rounded-xl px-4 py-3">
-          Failed to load: {errorMessage(predictionQuery.error)}
+          Failed to load {label}: {errorMessage(query.error)}
         </div>
       )}
 
@@ -160,7 +232,7 @@ export default function PredictionPage() {
       )}
 
       {data && data.status === "validated" && data.result && (
-        <div className="space-y-3">
+        <div className="space-y-2">
           <div className="flex flex-wrap gap-2">
             <Badge tone="accent">
               Tied: IL {data.inline_number} / XL {data.crossline_number} (r={data.tie_correlation?.toFixed(3)})
@@ -177,28 +249,15 @@ export default function PredictionPage() {
           <div className="bg-surface border border-border rounded-xl p-2 shadow-card">
             <img
               key={`${blindWellId}-${target}-${method}`}
-              src={getPredictionImageUrl(blindWellId!, target, method)}
-              alt={`${blindWellId} true vs predicted ${target.toUpperCase()}`}
+              src={getPredictionImageUrl(blindWellId, target, method)}
+              alt={`${blindWellId} true vs predicted ${label}`}
               className="w-full rounded-lg"
             />
             <p className="text-xs text-ink-faint px-2 pb-2 pt-1">
-              Left: {blindWellId}'s real (logged) {target.toUpperCase()}, painted as a colored strip at
-              its tied crossline. Right: the model's blind prediction at the same location -- this
-              well's own data never appeared in training.
+              Left: {blindWellId}'s real (logged) {label}, painted as a colored strip at its tied
+              crossline. Right: the model's blind prediction at the same location -- this well's own
+              data never appeared in training.
             </p>
-          </div>
-        </div>
-      )}
-
-      {data && data.excluded_wells.length > 0 && (
-        <div className="space-y-1.5">
-          <p className="text-xs font-semibold text-ink-muted">Excluded from training</p>
-          <div className="flex flex-wrap gap-2">
-            {data.excluded_wells.map((w) => (
-              <Badge key={w.well_id} tone="orange">
-                {w.well_id} — {w.reason}
-              </Badge>
-            ))}
           </div>
         </div>
       )}

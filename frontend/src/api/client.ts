@@ -256,6 +256,11 @@ export function getPredictionImageUrl(
   return `${BASE_URL}/api/seismic/prediction-image?${params.toString()}`;
 }
 
+export function getPredictionHeatmapUrl(blindWellId: string): string {
+  const params = new URLSearchParams({ blind_well_id: blindWellId });
+  return `${BASE_URL}/api/seismic/prediction-heatmap?${params.toString()}`;
+}
+
 export async function getSectionWellLogs(
   orientation: "inline" | "crossline",
   lineNumber: number,
