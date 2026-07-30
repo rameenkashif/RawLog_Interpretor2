@@ -683,11 +683,13 @@ class TestSearchBestTieFullWindow:
         return t_rc, rc, seismic_twt_ms, dt_ms, real_trace
 
     def test_recovers_known_freq_polarity_shift(self):
+        # 24.0, not 25.0 -- must be an exact member of DEFAULT_TIE_SEARCH_FREQS_HZ
+        # (8-64Hz, 2Hz step -- even integers only) for the exact-match assertion below.
         t_rc, rc, seismic_twt_ms, dt_ms, real_trace = self._embed_known_tie(
-            freq_hz=25.0, polarity=-1, shift_ms=14.0
+            freq_hz=24.0, polarity=-1, shift_ms=14.0
         )
         result = search_best_tie_full_window(t_rc, rc, seismic_twt_ms, dt_ms, real_trace)
-        assert result.best_freq_hz == 25.0
+        assert result.best_freq_hz == 24.0
         assert result.polarity == -1
         assert result.bulk_shift_ms == pytest.approx(14.0, abs=dt_ms)
         assert result.correlation > 0.9

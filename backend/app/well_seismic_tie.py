@@ -766,10 +766,20 @@ def reflectivity_from_time_axis(
     return t_rc, rc
 
 
-# Matches typical seismic bandwidth for a checkshot-free full-window search:
-# 13 candidates, 2.5 Hz apart, spanning 15-45 Hz.
+# Widened from the original 15-45Hz/2.5Hz-step (13 candidates) after a
+# real cross-implementation investigation found it excluded genuinely
+# winning frequencies for several wells (e.g. Z-02, Z-05, Z-08's best fits
+# sit at 8-14Hz, below the old 15Hz floor). This survey's own measured
+# amplitude spectrum peaks at ~20.8Hz with a -6dB band of 8-28.8Hz --
+# 8-64Hz covers that with margin. Quantified before applying: widening
+# the RANGE (not the step size) was what actually mattered -- the same
+# range at the old 2.5Hz step captured nearly all the correlation gain a
+# finer step added, so this also isn't primarily a step-size fix. Cost is
+# negligible (~1.3s vs ~0.6s total across 7 wells for the tie stage
+# alone, on this dataset). Also matches a reference implementation this
+# app's ties were cross-validated against, so the two stay comparable.
 DEFAULT_TIE_SEARCH_FREQS_HZ: tuple[float, ...] = tuple(
-    float(f) for f in np.arange(15.0, 45.0 + 1e-9, 2.5)
+    float(f) for f in np.arange(8.0, 64.0 + 1e-9, 2.0)
 )
 DEFAULT_TIE_SEARCH_MAX_SHIFT_MS = 100.0
 
