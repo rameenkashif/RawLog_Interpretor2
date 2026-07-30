@@ -883,9 +883,14 @@ def search_best_tie_full_window(
     best: dict | None = None
     for freq in candidate_freqs_hz:
         _, wav = ricker_wavelet(freq, seismic_dt_ms / 1000.0, wavelet_len_s)
-        synth = np.convolve(rc, wav, mode="same")
-        if len(synth) != len(rc):
-            synth = synth[: len(rc)] if len(synth) > len(rc) else np.pad(synth, (0, len(rc) - len(synth)))
+        # mode="full" + center-crop, not mode="same": "same" returns
+        # max(len(rc), len(wav)) rather than always len(rc), which breaks
+        # silently whenever the wavelet is longer than the reflectivity
+        # series (short well intervals) -- same fix already applied in
+        # build_synthetic/search_best_tie above.
+        full = np.convolve(rc, wav, mode="full")
+        start = (len(full) - len(rc)) // 2
+        synth = full[start : start + len(rc)]
         synth = synth - synth.mean()
         if synth.std() > 0:
             synth = synth / synth.std()
