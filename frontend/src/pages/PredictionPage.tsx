@@ -488,22 +488,25 @@ function CheckshotUploadPanel({ onUploaded }: { onUploaded: () => void }) {
             Stored: {Object.entries(lastResult).map(([w, n]) => `${w} (${n} pt)`).join(", ")}
           </p>
         )}
-        {statusQuery.data && (
-          <div>
-            <p className="font-semibold text-ink-muted">Current checkshot coverage</p>
-            {Object.keys(statusQuery.data.wells).length === 0 ? (
-              <p className="text-ink-faint">No checkshot data uploaded -- every well uses the statistical fallback.</p>
-            ) : (
-              <ul className="text-ink-faint">
-                {Object.entries(statusQuery.data.wells).map(([w, n]) => (
-                  <li key={w}>
-                    {w}: {n} point(s)
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
+        <div>
+          <p className="font-semibold text-ink-muted">Current checkshot coverage</p>
+          {statusQuery.isLoading && <p className="text-ink-faint">Checking…</p>}
+          {statusQuery.isError && (
+            <p className="text-danger">Failed to check: {errorMessage(statusQuery.error)}</p>
+          )}
+          {statusQuery.data && Object.keys(statusQuery.data.wells).length === 0 && (
+            <p className="text-ink-faint">No checkshot data uploaded -- every well uses the statistical fallback.</p>
+          )}
+          {statusQuery.data && Object.keys(statusQuery.data.wells).length > 0 && (
+            <ul className="text-ink-faint">
+              {Object.entries(statusQuery.data.wells).map(([w, n]) => (
+                <li key={w}>
+                  {w}: {n} point(s)
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </details>
   );
