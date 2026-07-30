@@ -23,6 +23,9 @@ backend/data/synthetic_processed/*.json
 # Dashboard-upload background pipeline cache (regenerable from re-upload)
 backend/data/well_processing_cache/*.json
 
+# Uploaded checkshot survey points (regenerable from re-upload)
+backend/data/checkshots/*.json
+
 # Node / frontend
 frontend/node_modules/
 frontend/dist/
