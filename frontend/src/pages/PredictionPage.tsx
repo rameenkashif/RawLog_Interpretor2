@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import {
   getPrediction,
   getPredictionFrequencyMapUrl,
+  getPredictionGridSearch,
   getPredictionImageUrl,
   getPredictionInlineMapsUrl,
   getPredictionLoocvHeatmapUrl,
@@ -59,6 +60,11 @@ export default function PredictionPage() {
   const activeWellId = useAppStore((s) => s.activeWellId);
 
   const [blindWellId, setBlindWellId] = useState<string | null>(null);
+  // Bumped whenever a grid search is force-rerun (see GridSearchPanel) --
+  // included in every query key AND appended to every image URL below so
+  // a new winning config actually refreshes everything on the page, not
+  // just the leaderboard that changed it.
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   // Seed from the dashboard's shared active well, same convention as the
   // other well-scoped pages -- a manual pick below still overrides this.
@@ -71,20 +77,20 @@ export default function PredictionPage() {
   }, [activeWellId, wellsQuery.data]);
 
   // One query per property (a fixed set of exactly 3, so three explicit
-  // hooks instead of a dynamic useQueries) -- each uses its own fixed
-  // BEST_CONFIG recipe, no user-selectable method anymore.
+  // hooks instead of a dynamic useQueries) -- each uses its own grid-
+  // search-selected config, not a user-selectable method.
   const vshQuery = useQuery({
-    queryKey: ["prediction", blindWellId, "vsh"],
+    queryKey: ["prediction", blindWellId, "vsh", refreshNonce],
     queryFn: () => getPrediction(blindWellId!, "vsh"),
     enabled: Boolean(blindWellId),
   });
   const phieQuery = useQuery({
-    queryKey: ["prediction", blindWellId, "phie"],
+    queryKey: ["prediction", blindWellId, "phie", refreshNonce],
     queryFn: () => getPrediction(blindWellId!, "phie"),
     enabled: Boolean(blindWellId),
   });
   const sweQuery = useQuery({
-    queryKey: ["prediction", blindWellId, "swe"],
+    queryKey: ["prediction", blindWellId, "swe", refreshNonce],
     queryFn: () => getPrediction(blindWellId!, "swe"),
     enabled: Boolean(blindWellId),
   });
@@ -162,7 +168,7 @@ export default function PredictionPage() {
 
       {blindWellId && (
         <>
-          {/* 1. Frequency maps */}
+          {/* 1. Frequency maps -- a plain FFT, unaffected by grid search config */}
           <Section title="Frequency map">
             <img
               key={`freq-${blindWellId}`}
@@ -213,6 +219,8 @@ export default function PredictionPage() {
                 label={label}
                 blindWellId={blindWellId}
                 query={queriesByTarget[key]}
+                refreshNonce={refreshNonce}
+                onConfigChanged={() => setRefreshNonce((n) => n + 1)}
               />
             ))}
           </div>
@@ -220,8 +228,8 @@ export default function PredictionPage() {
           {/* 5. Full LOOCV heatmap */}
           <Section title="Full leave-one-well-out R² (every well held out in turn) -- improved pipeline">
             <img
-              key="full-loocv"
-              src={getPredictionLoocvHeatmapUrl()}
+              key={`full-loocv-${refreshNonce}`}
+              src={`${getPredictionLoocvHeatmapUrl()}?_r=${refreshNonce}`}
               alt="Full LOOCV R2 heatmap"
               className="mx-auto max-w-md rounded-lg"
             />
@@ -238,8 +246,8 @@ export default function PredictionPage() {
               features along the whole inline) -- it may take a while to load.
             </p>
             <img
-              key={`inline-maps-${blindWellId}`}
-              src={getPredictionInlineMapsUrl(blindWellId)}
+              key={`inline-maps-${blindWellId}-${refreshNonce}`}
+              src={`${getPredictionInlineMapsUrl(blindWellId)}&_r=${refreshNonce}`}
               alt={`${blindWellId} real vs predicted VSH/PHIE/SWE inline maps`}
               className="w-full rounded-lg"
             />
@@ -264,11 +272,15 @@ function PropertySection({
   label,
   blindWellId,
   query,
+  refreshNonce,
+  onConfigChanged,
 }: {
   target: PredictionTarget;
   label: string;
   blindWellId: string;
   query: { data?: PredictionResponse; isLoading: boolean; isError: boolean; error: unknown };
+  refreshNonce: number;
+  onConfigChanged: () => void;
 }) {
   const data = query.data;
 
@@ -304,8 +316,8 @@ function PropertySection({
 
           <div className="bg-surface-sunken border border-border rounded-xl p-2">
             <img
-              key={`${blindWellId}-${target}`}
-              src={getPredictionImageUrl(blindWellId, target)}
+              key={`${blindWellId}-${target}-${refreshNonce}`}
+              src={`${getPredictionImageUrl(blindWellId, target)}&_r=${refreshNonce}`}
               alt={`${blindWellId} true vs predicted ${label}`}
               className="w-full rounded-lg"
             />
@@ -315,8 +327,87 @@ function PropertySection({
               data never appeared in training.
             </p>
           </div>
+
+          <GridSearchPanel target={target} label={label} onConfigChanged={onConfigChanged} />
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The 48-candidate leaderboard (spectrum x PCA option x instantaneous-
+ * attrs x model family) that actually picked this property's config --
+ * collapsed by default since it's a transparency/debugging aid, not
+ * something to read on every visit. "Re-run search" forces a fresh
+ * search (bypassing prediction_pipeline_service.py's in-process cache)
+ * and invalidates every prediction query, since a new winning config
+ * changes every image on the page for this target.
+ */
+function GridSearchPanel({
+  target,
+  label,
+  onConfigChanged,
+}: {
+  target: PredictionTarget;
+  label: string;
+  onConfigChanged: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const gridQuery = useQuery({
+    queryKey: ["prediction-grid-search", target],
+    queryFn: () => getPredictionGridSearch(target),
+    enabled: open,
+  });
+
+  const rerun = async () => {
+    await getPredictionGridSearch(target, true);
+    queryClient.invalidateQueries({ queryKey: ["prediction-grid-search", target] });
+    queryClient.invalidateQueries({ queryKey: ["prediction"] });
+    onConfigChanged();
+  };
+
+  return (
+    <details
+      className="text-xs border border-border rounded-lg px-3 py-2"
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer font-semibold text-ink-muted select-none">
+        Grid search that chose this config ({label})
+      </summary>
+      <div className="mt-2 space-y-2">
+        <button
+          onClick={rerun}
+          className="text-xs font-semibold px-3 py-1 rounded-full border border-border-strong bg-surface text-ink-muted hover:border-accent hover:text-accent transition-all"
+        >
+          Re-run search (can take a while)
+        </button>
+        {gridQuery.isLoading && <p className="text-ink-faint">Searching -- this can take a while...</p>}
+        {gridQuery.isError && (
+          <p className="text-danger">Failed to load: {errorMessage(gridQuery.error)}</p>
+        )}
+        {gridQuery.data && (
+          <table className="w-full text-left">
+            <thead>
+              <tr className="text-ink-faint">
+                <th className="font-semibold pr-2 py-0.5">Config</th>
+                <th className="font-semibold py-0.5">Pooled LOOCV R²</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gridQuery.data.leaderboard.slice(0, 10).map((entry, i) => (
+                <tr key={i} className="border-t border-border">
+                  <td className="pr-2 py-0.5 text-ink-muted">{entry.description}</td>
+                  <td className="py-0.5 text-ink-muted">
+                    {entry.error ? <span className="text-danger">failed</span> : fmtR2(entry.r2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </details>
   );
 }

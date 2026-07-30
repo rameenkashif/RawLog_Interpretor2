@@ -6,32 +6,39 @@ pipeline (full_pipeline.py / full_pipeline_2.py), upgraded to the
 "improved_pipeline.py" fix set the same author supplied after the first
 version's pooled LOOCV R^2 came back catastrophically negative (-2 to
 -6): raw 222-bin CWT/SSWT amplitude on ~40 samples/well was badly
-overfitting. The improved pipeline's fixes, all reproduced here:
+overfitting. Reproduced here:
 
-  1. PCA (n_components=3) on the CWT/SSWT spectrum before fitting --
-     the single biggest fix.
+  1. PCA on the CWT/SSWT spectrum before fitting (optional per config --
+     see point 4).
   2. Instantaneous attributes (envelope, cos/sin phase, instantaneous
      frequency, all via a Hilbert transform on the well's own trace) as
-     extra low-dimensional features.
+     extra low-dimensional features (optional per config).
   3. Spatial context: envelope mean/std over a 5x5 neighboring-trace
      window (porosity/lithology often has some lateral continuity).
-  4. A pre-selected best model PER PROPERTY (BEST_CONFIG below, taken
-     directly from the reference pipeline's own grid-search result):
-     spectrum (cwt/sswt), whether to use instantaneous attributes,
-     PCA component count, and model family (Ridge/PLS/RandomForest).
-
-ONLY the well->trace tie/coordinate-calibration step was changed from
-the reference pipelines (their steps 3-4): this module resolves each
-well via direct_tie_service.resolve_direct_tie (the proven direct
-nearest-trace + DPTM full-window-search tie already used elsewhere in
-this app) instead of the reference scripts' hand-fit, survey-specific
-coordinate anchors. Feature/target alignment is still by NEAREST seismic
-time-sample index with duplicate-depth averaging (matching the reference
-pipeline exactly, not this app's usual continuous interpolation).
+  4. A per-property model config -- (spectrum, use_instantaneous_attrs,
+     n_pca_components, model_name) -- chosen by an ACTUAL grid search run
+     by this module (run_grid_search / get_best_config below), not a
+     hardcoded value copied from an external run. This matters: after the
+     well-tie fix (point 5) changed how much real signal is actually in
+     the spectrum, the true best config for a property can change (e.g.
+     SWE's winner moved from PCA-3+Ridge to no-PCA raw-spectrum+
+     RandomForest once the tie was corrected) -- a hardcoded config from
+     a run against the OLD tie would silently stay wrong. Cached
+     in-process per target after the first search (see
+     _GRID_SEARCH_CACHE) since a full search is expensive -- see
+     run_grid_search's docstring for the cost and how to force a rerun.
+  5. Well->trace tie: resolved via direct_tie_service.resolve_direct_tie
+     (the proven direct nearest-trace + DPTM full-window-search tie
+     already used elsewhere in this app) instead of the reference
+     scripts' hand-fit, survey-specific coordinate anchors -- the ONLY
+     change from the reference pipelines' own steps 3-4. Feature/target
+     alignment is still by NEAREST seismic time-sample index with
+     duplicate-depth averaging (matching the reference pipeline exactly,
+     not this app's usual continuous interpolation).
 
 Deliberately a SEPARATE model/page from spectral_property_prediction_
-service.py (RandomForest on the full raw spectrum, no PCA/instantaneous
-attributes), not a replacement.
+service.py (RandomForest on the full raw spectrum always, no PCA/
+instantaneous attrs/config search), not a replacement.
 """
 
 from __future__ import annotations
@@ -48,23 +55,30 @@ TARGET_LAS_NAMES = {"vsh": "VSH", "phie": "PHIE", "swe": "SWE"}
 METHOD_ENERGY_KEYS = {"cwt": "energy", "sswt": "sswt_amplitude"}
 METHOD_FREQ_KEYS = {"cwt": "freq_hz", "sswt": "sswt_freq_hz"}
 
-# property -> (spectrum, use_instantaneous_attrs, n_pca_components, model_name)
-# -- taken directly from the reference "improved_pipeline"'s own grid
-# search over {Ridge, PLS, RandomForest} x {CWT, SSWT} x
-# {with/without instantaneous attrs}, selected by pooled LOOCV R^2 (the
-# honest metric, not a single well's score). Validated pooled LOOCV R^2
-# on the reference author's data: VSH ~= +0.015, PHIE ~= -0.07,
-# SWE ~= -0.09 -- still weak, but a real, measured improvement over the
-# raw-spectrum Ridge model's -2 to -6.
-BEST_CONFIG: dict[str, tuple[str, bool, int, str]] = {
-    "vsh": ("sswt", True, 3, "rf"),
-    "phie": ("sswt", False, 3, "ridge"),
-    "swe": ("sswt", True, 3, "ridge"),
-}
+# A model config: (spectrum, use_instantaneous_attrs, n_pca_components_or_None, model_name).
+Config = tuple[str, bool, int | None, str]
+
+# The grid search space, matching the reference "improved_pipeline"'s own
+# description of what it searched: spectrum x PCA component count
+# (including "no PCA" = raw spectrum) x with/without instantaneous attrs
+# x model family. 2 x 3 x 2 x 4 = 48 candidates per property.
+GRID_SPECTRA: tuple[str, ...] = ("cwt", "sswt")
+GRID_PCA_OPTIONS: tuple[int | None, ...] = (None, 3, 5)
+GRID_USE_INST_OPTIONS: tuple[bool, ...] = (True, False)
+GRID_MODEL_NAMES: tuple[str, ...] = ("ridge", "pls", "rf", "gb")
+
 RIDGE_ALPHA = 5.0
 SPATIAL_WINDOW = 2  # 5x5 neighboring-trace window (2*2+1)
 
 MIN_VALID_SAMPLES = 5
+
+# In-process cache: target -> {"best_config": Config, "best_r2": float|None,
+# "leaderboard": [...]}. Populated lazily by get_best_config the first time
+# each target is requested; persists for the life of the running backend
+# process (survives across requests, not across a restart) -- see
+# run_grid_search's docstring for why this matters and how to force a
+# rerun (e.g. after wells change).
+_GRID_SEARCH_CACHE: dict[str, dict] = {}
 
 
 @dataclass
@@ -254,29 +268,32 @@ def _eligible_well_features(volume) -> tuple[dict[str, WellPredictionFeatures], 
     return features, excluded
 
 
-def _assemble_features(well_features: dict[str, WellPredictionFeatures], well_id: str, target: str) -> np.ndarray:
-    spec_key, use_inst, _n_pca, _model_name = BEST_CONFIG[target]
+def _assemble_features(
+    well_features: dict[str, WellPredictionFeatures], well_id: str, config: Config
+) -> np.ndarray:
+    spec_key, use_inst, _n_pca, _model_name = config
     X = well_features[well_id].features[spec_key]
     if use_inst:
         X = np.concatenate([X, well_features[well_id].inst_attrs], axis=1)
     return X
 
 
-def _fit_model(well_features: dict[str, WellPredictionFeatures], train_ids: list[str], target: str):
-    """Fit BEST_CONFIG[target]'s exact recipe: StandardScaler -> PCA ->
-    {Ridge, PLS, RandomForest}. Returns (scaler, pca_or_None, model,
-    n_train_samples) so the SAME fitted pipeline can also be applied to a
-    full inline's worth of traces (render_property_inline_maps_image)
-    without duplicating the fit logic."""
+def _fit_model(well_features: dict[str, WellPredictionFeatures], train_ids: list[str], target: str, config: Config):
+    """Fit the given config's exact recipe: StandardScaler -> optional PCA
+    -> {Ridge, PLS, RandomForest, GradientBoosting}. Returns (scaler,
+    pca_or_None, model, n_train_samples) so the SAME fitted pipeline can
+    also be applied to a full inline's worth of traces
+    (render_property_inline_maps_image) without duplicating the fit
+    logic."""
     from sklearn.cross_decomposition import PLSRegression
     from sklearn.decomposition import PCA
-    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
     from sklearn.linear_model import Ridge
     from sklearn.preprocessing import StandardScaler
 
-    _spec_key, _use_inst, n_pca, model_name = BEST_CONFIG[target]
+    _spec_key, _use_inst, n_pca, model_name = config
 
-    X_train = np.vstack([_assemble_features(well_features, w, target) for w in train_ids])
+    X_train = np.vstack([_assemble_features(well_features, w, config) for w in train_ids])
     y_train = np.concatenate([well_features[w].targets[target] for w in train_ids])
 
     scaler = StandardScaler().fit(X_train)
@@ -285,6 +302,8 @@ def _fit_model(well_features: dict[str, WellPredictionFeatures], train_ids: list
     pca = None
     if n_pca is not None:
         n_components = min(n_pca, X_train_s.shape[0] - 1, X_train_s.shape[1])
+        if n_components < 1:
+            raise ValueError(f"Not enough training samples ({X_train_s.shape[0]}) for PCA-{n_pca}.")
         pca = PCA(n_components=n_components, random_state=0).fit(X_train_s)
         X_train_s = pca.transform(X_train_s)
 
@@ -297,8 +316,12 @@ def _fit_model(well_features: dict[str, WellPredictionFeatures], train_ids: list
         model = RandomForestRegressor(
             n_estimators=100, max_depth=3, min_samples_leaf=3, random_state=0
         ).fit(X_train_s, y_train)
+    elif model_name == "gb":
+        model = GradientBoostingRegressor(
+            n_estimators=100, max_depth=3, min_samples_leaf=3, random_state=0
+        ).fit(X_train_s, y_train)
     else:
-        raise ValueError(f"Unknown model_name {model_name!r} in BEST_CONFIG[{target!r}].")
+        raise ValueError(f"Unknown model_name {model_name!r} in config {config!r}.")
 
     return scaler, pca, model, int(len(y_train))
 
@@ -313,13 +336,15 @@ def _apply_model(scaler, pca, model, X: np.ndarray) -> np.ndarray:
     return np.clip(pred, 0.0, 1.0)
 
 
-def _predict_blind(well_features: dict[str, WellPredictionFeatures], blind_well_id: str, target: str) -> dict:
+def _predict_blind(
+    well_features: dict[str, WellPredictionFeatures], blind_well_id: str, target: str, config: Config
+) -> dict:
     from sklearn.metrics import r2_score
 
     train_ids = [w for w in well_features if w != blind_well_id]
-    scaler, pca, model, n_train_samples = _fit_model(well_features, train_ids, target)
+    scaler, pca, model, n_train_samples = _fit_model(well_features, train_ids, target, config)
     blind = well_features[blind_well_id]
-    X_test = _assemble_features(well_features, blind_well_id, target)
+    X_test = _assemble_features(well_features, blind_well_id, config)
     y_test = blind.targets[target]
     y_pred = _apply_model(scaler, pca, model, X_test)
 
@@ -336,13 +361,29 @@ def _predict_blind(well_features: dict[str, WellPredictionFeatures], blind_well_
     }
 
 
-def get_full_loocv_r2(target: str) -> dict:
-    """TRUE leave-one-well-out: every well takes a turn as the held-out
-    well, pooled into a single R^2 -- matches the reference
-    "improved_pipeline"'s own honest selection metric. Returns
-    {'r2': float|None, 'n_wells': int, 'per_well': {well_id: r2_or_None}}."""
+def _pooled_loocv_r2(well_features: dict[str, WellPredictionFeatures], target: str, config: Config) -> float | None:
+    """Pooled leave-one-well-out R^2 for ONE config: every well takes a
+    turn held out, true/pred pooled across all of them into a single
+    r2_score -- the honest selection metric run_grid_search uses (not a
+    single well's score, which is easy to overfit to by cherry-picking a
+    config that happens to help one well)."""
     from sklearn.metrics import r2_score
 
+    well_ids = list(well_features.keys())
+    all_true: list[float] = []
+    all_pred: list[float] = []
+    for held_out in well_ids:
+        pred = _predict_blind(well_features, held_out, target, config)
+        all_true.extend(pred["y_true"])
+        all_pred.extend(pred["y_pred"])
+    return float(r2_score(all_true, all_pred)) if len(all_true) >= 2 else None
+
+
+def get_full_loocv_r2(target: str) -> dict:
+    """TRUE leave-one-well-out under this target's grid-search-selected
+    config (get_best_config): every well takes a turn as the held-out
+    well, pooled into a single R^2. Returns {'r2': float|None,
+    'n_wells': int, 'per_well': {well_id: r2_or_None}}."""
     from app.services import seismic_processor as sp
 
     volume = sp.get_segy_volume()
@@ -351,11 +392,14 @@ def get_full_loocv_r2(target: str) -> dict:
     if len(well_ids) < 2:
         return {"r2": None, "n_wells": len(well_ids), "per_well": {}}
 
+    from sklearn.metrics import r2_score
+
+    config = get_best_config(target)
+    per_well: dict[str, float | None] = {}
     all_true: list[float] = []
     all_pred: list[float] = []
-    per_well: dict[str, float | None] = {}
     for held_out in well_ids:
-        pred = _predict_blind(well_features, held_out, target)
+        pred = _predict_blind(well_features, held_out, target, config)
         per_well[held_out] = pred["r2"]
         all_true.extend(pred["y_true"])
         all_pred.extend(pred["y_pred"])
@@ -364,11 +408,128 @@ def get_full_loocv_r2(target: str) -> dict:
     return {"r2": pooled_r2, "n_wells": len(well_ids), "per_well": per_well}
 
 
-def _config_description(target: str) -> str:
-    spec_key, use_inst, n_pca, model_name = BEST_CONFIG[target]
-    model_label = {"ridge": "Ridge", "pls": "PLS", "rf": "RandomForest"}[model_name]
+_MODEL_LABELS = {"ridge": "Ridge", "pls": "PLS", "rf": "RandomForest", "gb": "GradientBoosting"}
+
+
+def _config_description(config: Config) -> str:
+    spec_key, use_inst, n_pca, model_name = config
+    model_label = _MODEL_LABELS.get(model_name, model_name)
     inst_label = "+ instantaneous attrs" if use_inst else ""
-    return f"{spec_key.upper()} {inst_label}, PCA-{n_pca}, {model_label}".replace("  ", " ")
+    pca_label = f"PCA-{n_pca}" if n_pca is not None else "no PCA (raw spectrum)"
+    return f"{spec_key.upper()} {inst_label}, {pca_label}, {model_label}".replace("  ", " ").strip()
+
+
+def run_grid_search(target: str) -> dict:
+    """Search GRID_SPECTRA x GRID_PCA_OPTIONS x GRID_USE_INST_OPTIONS x
+    GRID_MODEL_NAMES (48 candidates) for `target`, scoring each by pooled
+    leave-one-well-out R^2 (every well held out in turn) -- the SAME
+    selection process and metric the reference "improved_pipeline" used,
+    run here against THIS app's own (corrected) well ties/features rather
+    than trusting a config chosen against a different tie. A candidate
+    that raises (e.g. a degenerate PCA/model fit) is recorded in the
+    leaderboard with r2=None and skipped as a possible winner, not
+    allowed to crash the whole search.
+
+    Cost: up to 48 candidates x n_wells pooled-LOOCV folds = e.g. ~330
+    fit/predict cycles for a 7-well field -- on the order of tens of
+    seconds to a few minutes depending on how many GradientBoosting/
+    RandomForest candidates end up in the mix. Well features
+    (tie + CWT/SSWT + instantaneous attrs) are resolved ONCE and reused
+    across every candidate, so this cost is all in repeated model
+    fitting, not repeated tie/spectral-decomposition work. See
+    get_best_config for the cache that avoids paying this more than once
+    per target per process lifetime.
+    """
+    from app.services import seismic_processor as sp
+
+    volume = sp.get_segy_volume()
+    well_features, excluded = _eligible_well_features(volume)
+    if len(well_features) < 2:
+        return {
+            "target": target,
+            "best_config": None,
+            "best_r2": None,
+            "n_wells": len(well_features),
+            "excluded_wells": excluded,
+            "leaderboard": [],
+        }
+
+    leaderboard: list[dict] = []
+    for spec_key in GRID_SPECTRA:
+        for n_pca in GRID_PCA_OPTIONS:
+            for use_inst in GRID_USE_INST_OPTIONS:
+                for model_name in GRID_MODEL_NAMES:
+                    config: Config = (spec_key, use_inst, n_pca, model_name)
+                    try:
+                        r2 = _pooled_loocv_r2(well_features, target, config)
+                        error = None
+                    except Exception as exc:  # noqa: BLE001 -- one bad candidate shouldn't kill the search
+                        r2 = None
+                        error = str(exc)
+                    leaderboard.append({
+                        "config": config,
+                        "description": _config_description(config),
+                        "r2": r2,
+                        "error": error,
+                    })
+
+    scored = [entry for entry in leaderboard if entry["r2"] is not None]
+    scored.sort(key=lambda entry: entry["r2"], reverse=True)
+    best = scored[0] if scored else None
+
+    leaderboard.sort(key=lambda entry: (entry["r2"] is None, -(entry["r2"] or 0.0)))
+    return {
+        "target": target,
+        "best_config": best["config"] if best else None,
+        "best_r2": best["r2"] if best else None,
+        "n_wells": len(well_features),
+        "excluded_wells": excluded,
+        "leaderboard": leaderboard,
+    }
+
+
+# Fallback used only if a grid search finds literally no working
+# candidate (e.g. too few wells for PCA/model fitting to succeed at all)
+# -- the simplest, least failure-prone recipe, not a claim it's good.
+_FALLBACK_CONFIG: Config = ("sswt", False, None, "ridge")
+
+
+def get_best_config(target: str, force: bool = False) -> Config:
+    """This target's grid-search-selected config, cached in-process after
+    the first call (see _GRID_SEARCH_CACHE) -- a real search is expensive
+    (run_grid_search), so it isn't re-run on every prediction request.
+    Pass force=True to invalidate the cache and re-search (e.g. after
+    wells/ties changed enough that the old winner might not hold)."""
+    if force or target not in _GRID_SEARCH_CACHE:
+        _GRID_SEARCH_CACHE[target] = run_grid_search(target)
+    result = _GRID_SEARCH_CACHE[target]
+    return result["best_config"] or _FALLBACK_CONFIG
+
+
+def get_grid_search_result(target: str, force: bool = False) -> dict:
+    """JSON-friendly grid search result for the /prediction-grid-search
+    endpoint: triggers/reuses the same cache get_best_config does (so
+    calling this also "warms" get_best_config's cache for `target`, and
+    vice versa -- one shared cache entry, not two)."""
+    if target not in TARGET_LAS_NAMES:
+        raise ValueError(f"target must be one of {list(TARGET_LAS_NAMES)}, got {target!r}.")
+
+    if force or target not in _GRID_SEARCH_CACHE:
+        _GRID_SEARCH_CACHE[target] = run_grid_search(target)
+    result = _GRID_SEARCH_CACHE[target]
+
+    best_config = result["best_config"]
+    return {
+        "target": target,
+        "best_config_description": _config_description(best_config) if best_config else None,
+        "best_r2": result["best_r2"],
+        "n_wells": result["n_wells"],
+        "excluded_wells": result["excluded_wells"],
+        "leaderboard": [
+            {"description": entry["description"], "r2": entry["r2"], "error": entry["error"]}
+            for entry in result["leaderboard"]
+        ],
+    }
 
 
 def get_prediction_result(blind_well_id: str, target: str) -> dict:
@@ -379,11 +540,12 @@ def get_prediction_result(blind_well_id: str, target: str) -> dict:
 
     volume = sp.get_segy_volume()
     well_features, excluded = _eligible_well_features(volume)
+    config = get_best_config(target)
 
     base = {
         "blind_well_id": blind_well_id,
         "target": target,
-        "model_config_description": _config_description(target),
+        "model_config_description": _config_description(config),
         "excluded_wells": excluded,
     }
 
@@ -417,7 +579,7 @@ def get_prediction_result(blind_well_id: str, target: str) -> dict:
             "result": None,
         }
 
-    pred = _predict_blind(well_features, blind_well_id, target)
+    pred = _predict_blind(well_features, blind_well_id, target, config)
     blind = well_features[blind_well_id]
     return {
         **base,
@@ -437,9 +599,10 @@ def get_prediction_result(blind_well_id: str, target: str) -> dict:
 def render_full_loocv_heatmap_image() -> bytes:
     """PNG: TRUE pooled leave-one-well-out R^2 (every well takes a turn
     held out, see get_full_loocv_r2) for each of VSH/PHIE/SWE under its
-    own BEST_CONFIG model -- the reference "improved_pipeline"'s own
-    honest selection metric. Independent of which well is currently
-    selected as "blind" elsewhere on the page."""
+    own grid-search-selected config (get_best_config) -- the reference
+    "improved_pipeline"'s own honest selection metric, computed here
+    rather than trusted from an external run. Independent of which well
+    is currently selected as "blind" elsewhere on the page."""
     import io
 
     import matplotlib
@@ -472,7 +635,10 @@ def render_full_loocv_heatmap_image() -> bytes:
     for j, target in enumerate(targets):
         val = grid[0, j]
         text = f"{val:.3f}" if np.isfinite(val) else "n/a"
-        ax.text(j, 0, f"{text}\n{_config_description(target)}", ha="center", va="center", color="black", fontsize=8)
+        ax.text(
+            j, 0, f"{text}\n{_config_description(get_best_config(target))}",
+            ha="center", va="center", color="black", fontsize=8,
+        )
     ax.set_title(f"Full LOOCV pooled R² -- improved pipeline (n={n_wells} wells)")
     fig.colorbar(im, ax=ax, label="R² (can be negative -- worse than the mean)", fraction=0.046)
     fig.tight_layout()
@@ -540,29 +706,30 @@ def render_frequency_map_image(blind_well_id: str) -> bytes:
 
 def render_property_inline_maps_image(blind_well_id: str) -> bytes:
     """PNG: for VSH, PHIE, and SWE, a real-vs-predicted pair along the
-    blind well's own inline, each using ITS OWN BEST_CONFIG model (PCA +
-    optional instantaneous attrs + the per-property best model family) --
-    LEFT is the actual (unmodified) seismic amplitude section, RIGHT is
-    the SAME inline with the blind-well-trained model's predicted
-    property value painted across EVERY trace along it (not just the
-    well's own location), each property in its own colormap. A real
-    property value doesn't exist away from a well, so "real" here means
-    the actual seismic data, not a true property map.
+    blind well's own inline, each using ITS OWN grid-search-selected
+    config (get_best_config: PCA + optional instantaneous attrs + the
+    per-property best model family) -- LEFT is the actual (unmodified)
+    seismic amplitude section, RIGHT is the SAME inline with the
+    blind-well-trained model's predicted property value painted across
+    EVERY trace along it (not just the well's own location), each
+    property in its own colormap. A real property value doesn't exist
+    away from a well, so "real" here means the actual seismic data, not a
+    true property map.
 
-    Heavier than the previous (raw-spectrum) version: every trace along
-    the inline now needs its own SSWT (BEST_CONFIG uses 'sswt' for all
-    three properties) AND, for VSH/SWE, its own instantaneous attributes
-    including a 5x5 spatial-neighborhood envelope average -- so this
-    also touches several NEIGHBORING inlines' traces, not just this one.
-    Per-trace envelope/spectral results are cached and reused across all
-    3 properties and across overlapping spatial windows rather than
-    recomputed.
+    Can be heavy depending on what the grid search picked: any property
+    whose winning config uses SSWT needs every trace along the inline to
+    get its own SSWT (the more expensive transform), and any property
+    using instantaneous attrs needs a 5x5 spatial-neighborhood envelope
+    average at every trace too -- touching several NEIGHBORING inlines'
+    traces, not just this one. Per-trace envelope/spectral results are
+    cached and reused across all 3 properties and across overlapping
+    spatial windows rather than recomputed.
 
     EXPLORATORY, not a validated spatial map: even this improved
-    pipeline's pooled LOOCV R^2 has been small (VSH ~=+0.02, PHIE/SWE
-    still <= 0) on real wells -- a confidently colored map does not mean
-    the colors are trustworthy. That caveat is rendered directly into the
-    image, not just documented here.
+    pipeline's pooled LOOCV R^2 has typically been small on real wells --
+    a confidently colored map does not mean the colors are trustworthy.
+    That caveat is rendered directly into the image, not just documented
+    here.
     """
     import io
 
@@ -581,8 +748,9 @@ def render_property_inline_maps_image(blind_well_id: str) -> bytes:
         raise ValueError(f"Only {len(well_features)} well(s) have a usable tie -- need at least 2.")
 
     targets = list(TARGET_LAS_NAMES.keys())
+    configs = {t: get_best_config(t) for t in targets}
     train_ids = [w for w in well_features if w != blind_well_id]
-    fitted = {t: _fit_model(well_features, train_ids, t) for t in targets}
+    fitted = {t: _fit_model(well_features, train_ids, t, configs[t]) for t in targets}
     blind = well_features[blind_well_id]
 
     section = volume.get_inline_section(blind.inline_number)
@@ -602,6 +770,8 @@ def render_property_inline_maps_image(blind_well_id: str) -> bytes:
     n_time = len(twt_axis_ms)
     pred_grids = {t: np.full((n_time, len(position_axis)), np.nan) for t in targets}
     spec_cache: dict[str, np.ndarray] = {}
+    need_sswt = any(configs[t][0] == "sswt" for t in targets)
+    need_inst = any(configs[t][1] for t in targets)
 
     geometry = volume.get_grid_geometry()
     il_pos = int(np.searchsorted(geometry["inlines_sorted"], blind.inline_number))
@@ -610,28 +780,32 @@ def render_property_inline_maps_image(blind_well_id: str) -> bytes:
         xl = int(xl)
         try:
             spec = volume.get_spectral_decomposition_trace(
-                blind.inline_number, xl, method="cwt", include_sswt=True
+                blind.inline_number, xl, method="cwt", include_sswt=need_sswt
             )
         except Exception:  # noqa: BLE001 -- a gap trace shouldn't abort the whole map
             continue
         spec_cache["cwt"] = np.array(spec["energy"], dtype=float)
-        spec_cache["sswt"] = np.array(spec["sswt_amplitude"], dtype=float)
+        if need_sswt:
+            spec_cache["sswt"] = np.array(spec["sswt_amplitude"], dtype=float)
 
         xl_pos = int(np.searchsorted(geometry["crosslines_sorted"], xl))
         trace_idx = int(geometry["grid_trace_idx"][il_pos, xl_pos])
         if trace_idx < 0:
             continue
-        envelope, phase, inst_freq = _instantaneous_attrs_full_trace(volume.get_trace(trace_idx), dt_ms)
-        neighbor_idxs = _spatial_neighbor_trace_indices(volume, blind.inline_number, xl)
-        neighbor_stack = np.stack([_cached_envelope(idx) for idx in neighbor_idxs] or [envelope], axis=0)
-        env_nbhd_mean = neighbor_stack.mean(axis=0)
-        env_nbhd_std = neighbor_stack.std(axis=0)
-        inst_attrs_full = np.stack(
-            [envelope, np.cos(phase), np.sin(phase), inst_freq, env_nbhd_mean, env_nbhd_std], axis=1
-        )  # (n_time, 6)
+
+        inst_attrs_full = None
+        if need_inst:
+            envelope, phase, inst_freq = _instantaneous_attrs_full_trace(volume.get_trace(trace_idx), dt_ms)
+            neighbor_idxs = _spatial_neighbor_trace_indices(volume, blind.inline_number, xl)
+            neighbor_stack = np.stack([_cached_envelope(idx) for idx in neighbor_idxs] or [envelope], axis=0)
+            env_nbhd_mean = neighbor_stack.mean(axis=0)
+            env_nbhd_std = neighbor_stack.std(axis=0)
+            inst_attrs_full = np.stack(
+                [envelope, np.cos(phase), np.sin(phase), inst_freq, env_nbhd_mean, env_nbhd_std], axis=1
+            )  # (n_time, 6)
 
         for t in targets:
-            spec_key, use_inst, _n_pca, _model_name = BEST_CONFIG[t]
+            spec_key, use_inst, _n_pca, _model_name = configs[t]
             X_line = spec_cache[spec_key]
             if use_inst:
                 X_line = np.concatenate([X_line, inst_attrs_full], axis=1)
@@ -649,7 +823,7 @@ def render_property_inline_maps_image(blind_well_id: str) -> bytes:
         ax_real.set_ylabel("Two-Way Time (ms)")
 
         im = ax_pred.imshow(pred_grids[t], aspect="auto", cmap=cmaps[t], vmin=0.0, vmax=1.0, extent=extent)
-        ax_pred.set_title(f"Predicted {t.upper()} ({_config_description(t)})")
+        ax_pred.set_title(f"Predicted {t.upper()} ({_config_description(configs[t])})")
         fig.colorbar(im, ax=ax_pred, label=t.upper(), fraction=0.04)
 
         for ax in (ax_real, ax_pred):
@@ -680,8 +854,8 @@ def render_prediction_image(blind_well_id: str, target: str) -> bytes:
     """PNG bytes: side-by-side inline-section images (TRUE vs. PREDICTED
     target, painted as a colored strip at the blind well's crossline
     position) -- direct port of the reference pipeline's
-    plot_inline_true_vs_pred, using this module's tie/features/BEST_CONFIG
-    model instead."""
+    plot_inline_true_vs_pred, using this module's tie/features and
+    grid-search-selected config (get_best_config) instead."""
     import io
 
     import matplotlib

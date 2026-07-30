@@ -19,6 +19,7 @@ import type {
   InlineSectionResponse,
   NearestTraceResponse,
   RecalibrateResponse,
+  PredictionGridSearchResponse,
   PredictionResponse,
   PredictionTarget,
   SaveTiePointsRequest,
@@ -241,6 +242,16 @@ export async function getPrediction(
 ): Promise<PredictionResponse> {
   const { data } = await http.get<PredictionResponse>("/api/seismic/prediction", {
     params: { blind_well_id: blindWellId, target },
+  });
+  return data;
+}
+
+export async function getPredictionGridSearch(
+  target: PredictionTarget,
+  force = false,
+): Promise<PredictionGridSearchResponse> {
+  const { data } = await http.get<PredictionGridSearchResponse>("/api/seismic/prediction-grid-search", {
+    params: { target, force },
   });
   return data;
 }

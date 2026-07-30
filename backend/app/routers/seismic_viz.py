@@ -22,6 +22,7 @@ from app.models.schemas import (
     CoordinateCalibrationReportResponse,
     CrosslineSectionResponse,
     InlineSectionResponse,
+    PredictionGridSearchResponse,
     PredictionResponse,
     RecalibrateRequest,
     RecalibrateResponse,
@@ -138,12 +139,37 @@ async def prediction(
     target: str = Query(..., description="'vsh', 'phie', or 'swe'"),
 ) -> PredictionResponse:
     """Blind-well VSH/PHIE/SWE prediction -- the "improved pipeline"
-    (PCA-3 + instantaneous attrs + per-property best model, see
-    prediction_pipeline_service.py's BEST_CONFIG). The spectrum/model
-    used is fixed per target, not caller-selectable, so it's returned in
-    the response's model_config field."""
+    (PCA + instantaneous attrs + per-property best model, chosen by an
+    actual in-app grid search, see prediction_pipeline_service.py's
+    run_grid_search/get_best_config). The winning recipe isn't
+    caller-selectable -- it's returned in model_config_description."""
     try:
         return PredictionResponse(**pps.get_prediction_result(blind_well_id, target))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/prediction-grid-search", response_model=PredictionGridSearchResponse)
+async def prediction_grid_search(
+    target: str = Query(..., description="'vsh', 'phie', or 'swe'"),
+    force: bool = Query(
+        False,
+        description=(
+            "Re-run the search even if a cached result exists (e.g. after wells/ties changed). "
+            "A full search is expensive -- tens of seconds to a few minutes -- so this defaults "
+            "to reusing the in-process cache, not re-searching on every call."
+        ),
+    ),
+) -> PredictionGridSearchResponse:
+    """The full 48-candidate leaderboard (spectrum x PCA option x
+    instantaneous-attrs x model family) for `target`, scored by pooled
+    leave-one-well-out R^2 -- see prediction_pipeline_service.py's
+    run_grid_search. This is what actually picks the config every other
+    /prediction* endpoint uses for that target."""
+    try:
+        return PredictionGridSearchResponse(**pps.get_grid_search_result(target, force=force))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

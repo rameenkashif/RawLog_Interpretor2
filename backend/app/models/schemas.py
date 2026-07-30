@@ -822,7 +822,7 @@ class PredictionResponse(BaseModel):
     blind_well_id: str
     target: str = Field(..., description="'vsh', 'phie', or 'swe'")
     model_config_description: str = Field(
-        ..., description="This target's fixed BEST_CONFIG recipe, e.g. 'SSWT + instantaneous attrs, PCA-3, RandomForest'"
+        ..., description="This target's grid-search-selected recipe, e.g. 'SSWT + instantaneous attrs, PCA-3, RandomForest'"
     )
     inline_number: int | None = None
     crossline_number: int | None = None
@@ -833,6 +833,23 @@ class PredictionResponse(BaseModel):
     excluded_wells: list[PredictionExcludedWell]
     n_train_wells: int
     result: PredictionResult | None = None
+
+
+class PredictionGridSearchEntry(BaseModel):
+    description: str
+    r2: float | None = Field(None, description="Pooled leave-one-well-out R^2 for this candidate, or null if it failed")
+    error: str | None = Field(None, description="Set if this candidate's fit raised, e.g. a degenerate PCA/model fit")
+
+
+class PredictionGridSearchResponse(BaseModel):
+    target: str
+    best_config_description: str | None = Field(None, description="null only if literally no candidate worked")
+    best_r2: float | None = None
+    n_wells: int
+    excluded_wells: list[PredictionExcludedWell]
+    leaderboard: list[PredictionGridSearchEntry] = Field(
+        ..., description="All 48 candidates, best pooled R^2 first (failures last)"
+    )
 
 
 # -----------------------------------------------------------------------------

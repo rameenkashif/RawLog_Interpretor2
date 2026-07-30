@@ -341,6 +341,21 @@ export interface PredictionResponse {
   result: PredictionResult | null;
 }
 
+export interface PredictionGridSearchEntry {
+  description: string;
+  r2: number | null;
+  error: string | null;
+}
+
+export interface PredictionGridSearchResponse {
+  target: PredictionTarget;
+  best_config_description: string | null;
+  best_r2: number | null;
+  n_wells: number;
+  excluded_wells: PredictionExcludedWell[];
+  leaderboard: PredictionGridSearchEntry[];
+}
+
 export interface SectionWellLogCurve {
   well_id: string;
   position_on_axis: number;
