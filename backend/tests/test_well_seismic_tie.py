@@ -668,9 +668,9 @@ class TestSearchBestTieFullWindow:
         rc[[10, 25, 40, 50]] = [0.1, -0.15, 0.08, -0.05]
 
         _, wav = ricker_wavelet(freq_hz, dt_ms / 1000.0, min(0.100, max(0.030, 0.6 * len(rc) * dt_ms / 1000.0)))
-        synth = np.convolve(rc, wav, mode="same")
-        if len(synth) != len(rc):
-            synth = synth[: len(rc)] if len(synth) > len(rc) else np.pad(synth, (0, len(rc) - len(synth)))
+        full = np.convolve(rc, wav, mode="full")
+        start = (len(full) - len(rc)) // 2
+        synth = full[start : start + len(rc)]
         synth = synth - synth.mean()
         if synth.std() > 0:
             synth = synth / synth.std()
@@ -699,6 +699,41 @@ class TestSearchBestTieFullWindow:
         result = search_best_tie_full_window(t_rc, rc, seismic_twt_ms, dt_ms, real_trace)
         assert result.polarity == 1
         assert result.bulk_shift_ms == pytest.approx(-20.0, abs=dt_ms)
+        assert result.correlation > 0.9
+
+    def test_recovers_known_tie_when_wavelet_is_longer_than_reflectivity_series(self):
+        # Regression test: search_best_tie_full_window used to build synth
+        # via np.convolve(rc, wav, mode="same") plus a truncate-first-N
+        # guard. numpy's "same" mode returns max(len(rc), len(wav)), not
+        # len(rc) -- for a SHORT reflectivity series (len(rc) below the
+        # ~15-sample point where the wavelet's 30ms length floor exceeds
+        # rc's own duration), the truncated "first N" slice grabbed the
+        # wrong (near-zero tail) part of the convolution response instead
+        # of the true, centered one. Fixed via mode="full" + center-crop.
+        dt_ms = 2.0
+        rng = np.random.default_rng(3)
+        t_rc = np.arange(2000.0, 2020.0, dt_ms)  # 10 samples
+        rc = np.zeros(len(t_rc))
+        rc[4] = 1.0
+
+        wavelet_len_s = min(0.100, max(0.030, 0.6 * len(rc) * dt_ms / 1000.0))
+        _, wav = ricker_wavelet(25.0, dt_ms / 1000.0, wavelet_len_s)
+        assert len(wav) > len(rc)  # confirms this test actually exercises the bug's regime
+
+        full = np.convolve(rc, wav, mode="full")
+        start = (len(full) - len(rc)) // 2
+        synth = full[start : start + len(rc)]
+        synth = synth - synth.mean()
+        synth = synth / synth.std()
+
+        seismic_twt_ms = np.arange(1900.0, 2100.0, dt_ms)
+        shift_ms = 12.0
+        t_shifted = t_rc + shift_ms
+        real_trace = np.interp(seismic_twt_ms, t_shifted, synth, left=0.0, right=0.0)
+        real_trace = real_trace + rng.normal(0, 0.01, len(real_trace))
+
+        result = search_best_tie_full_window(t_rc, rc, seismic_twt_ms, dt_ms, real_trace)
+        assert result.bulk_shift_ms == pytest.approx(shift_ms, abs=dt_ms)
         assert result.correlation > 0.9
 
     def test_output_arrays_share_reflectivity_length(self):
