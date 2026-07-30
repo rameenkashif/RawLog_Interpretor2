@@ -15,10 +15,12 @@ Mounted at a different prefix (/api/seismic) so the two don't collide.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
 
 from app.models.schemas import (
     AmplitudeSpectrumResponse,
+    CheckshotStatusResponse,
+    CheckshotUploadResponse,
     CoordinateCalibrationReportResponse,
     CrosslineSectionResponse,
     InlineSectionResponse,
@@ -45,6 +47,7 @@ from app.models.schemas import (
 )
 from app.coordinate_calibration import CoordinateCalibrationError
 from app.coordinate_tie_override_repository import WellTraceOverride, get_coordinate_tie_override_repository
+from app.services import checkshot_service
 from app.services import coordinate_calibration_service as ccs
 from app.services import prediction_pipeline_service as pps
 from app.services import section_image_service as swi
@@ -174,6 +177,34 @@ async def prediction_grid_search(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         _handle(exc)
+
+
+@router.post("/checkshot/upload", response_model=CheckshotUploadResponse)
+async def upload_checkshot(file: UploadFile = File(...)) -> CheckshotUploadResponse:
+    """Upload a real checkshot / time-depth-survey workbook (.xlsx, one
+    sheet per well, TWT(ms) + Depth(m) columns -- see checkshot_service.py
+    for the exact layout expected). Every well-to-seismic tie resolved via
+    direct_tie_service (Spectral Property Prediction, the Inline/
+    Crossline Section well-log overlay, and the Prediction page) picks
+    this up automatically on its next call -- no separate "apply" step.
+    Grid-search-selected model configs are cached per target
+    (prediction_pipeline_service._GRID_SEARCH_CACHE); re-run a search
+    with force=true (see /prediction-grid-search) to pick up a tie that
+    changed because of this upload."""
+    try:
+        content = await file.read()
+        counts = checkshot_service.store_checkshot_workbook(content)
+        return CheckshotUploadResponse(wells=counts)
+    except checkshot_service.CheckshotValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/checkshot/status", response_model=CheckshotStatusResponse)
+async def checkshot_status() -> CheckshotStatusResponse:
+    """well_id -> number of stored checkshot points, for every well with
+    any uploaded checkshot coverage. A well NOT in this list has no
+    checkshot data and will use the full statistical tie search."""
+    return CheckshotStatusResponse(wells=checkshot_service.get_checkshot_status())
 
 
 @router.get("/prediction-image")

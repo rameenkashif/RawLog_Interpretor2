@@ -9,6 +9,8 @@ import axios from "axios";
 import type {
   AmplitudeSpectrumResponse,
   ChatStreamEvent,
+  CheckshotStatusResponse,
+  CheckshotUploadResponse,
   CoordinateCalibrationReportResponse,
   CrosslineSectionResponse,
   CrossplotResponse,
@@ -273,6 +275,24 @@ export function getPredictionFrequencyMapUrl(blindWellId: string): string {
 export function getPredictionInlineMapsUrl(blindWellId: string): string {
   const params = new URLSearchParams({ blind_well_id: blindWellId });
   return `${BASE_URL}/api/seismic/prediction-inline-maps?${params.toString()}`;
+}
+
+/** Upload a real checkshot / time-depth-survey workbook (.xlsx, one sheet
+ * per well). Every well-to-seismic tie resolved via direct_tie_service
+ * (Spectral Property Prediction, Section well-log overlay, Prediction
+ * page) picks this up automatically on its next call. */
+export async function uploadCheckshotWorkbook(file: File): Promise<CheckshotUploadResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const { data } = await http.post<CheckshotUploadResponse>("/api/seismic/checkshot/upload", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
+}
+
+export async function getCheckshotStatus(): Promise<CheckshotStatusResponse> {
+  const { data } = await http.get<CheckshotStatusResponse>("/api/seismic/checkshot/status");
+  return data;
 }
 
 export async function getSectionWellLogs(

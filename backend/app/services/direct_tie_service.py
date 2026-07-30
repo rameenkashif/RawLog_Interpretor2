@@ -15,8 +15,23 @@ location-accurate than coordinate_calibration_service's calibrated fit --
 see spectral_property_prediction_service.py's docstring for the numbers)
 resolution lives in exactly one place, shared by every caller on the
 single-active-volume side that wants it: currently
-spectral_property_prediction_service.py and the Inline/Crossline Section
-well-log overlay (section_well_log_service.py).
+spectral_property_prediction_service.py, the Inline/Crossline Section
+well-log overlay (section_well_log_service.py), and
+prediction_pipeline_service.py.
+
+Checkshot-anchored tie: if a real checkshot survey has been uploaded for
+this well (see checkshot_service.py) and at least one of its stations
+falls within the well's own logged interval, the tie is anchored to that
+station's (depth, TWT) pair -- a constant shift -- and the search/
+correlation step only has to refine a SMALL residual
+(well_seismic_tie.CHECKSHOT_RESIDUAL_SEARCH_MS) around it, instead of
+searching the full +/-100ms statistical window blind. This is the FINAL,
+checkshot-corrected tie (superseding a purely statistical tie shown to be
+overfit for several wells once checked against real checkshot data) --
+see well_seismic_tie.checkshot_anchor_shift's docstring for exactly how
+the anchor is computed. A well with no uploaded/overlapping checkshot
+data transparently falls back to the original full statistical search,
+unchanged.
 """
 
 from __future__ import annotations
@@ -26,6 +41,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from app import well_seismic_tie as wst
+from app.services import checkshot_service
 from app.services.dashboard_upload_service import TIE_LOW_CONFIDENCE_THRESHOLD
 from app.services.spectral_petro_correlation_service import _extract_curve
 from app.services.tie_service import _load_config as _load_tie_config
@@ -49,13 +65,16 @@ class DirectTieResult:
     crossline_number: int
     distance_m: float
     correlation: float
-    bulk_shift_ms: float
+    bulk_shift_ms: float  # TOTAL shift = checkshot_anchor_shift_ms + the search's own residual/full shift
     best_freq_hz: float
     polarity: int
     boundary_pinned: bool
     low_confidence: bool
     depth_m: np.ndarray  # sorted, deduped, DEPT<->DPTM-valid depth samples
     dptm_ms: np.ndarray  # paired DPTM (well's own unshifted time axis), same length as depth_m
+    tie_source: str  # "checkshot (N valid pt)" or "statistical_fallback (no valid checkshot)"
+    checkshot_anchor_shift_ms: float  # 0.0 when tie_source is the statistical fallback
+    checkshot_n_valid_points: int
 
 
 def resolve_direct_tie(volume, well_id: str) -> DirectTieResult:
@@ -64,7 +83,7 @@ def resolve_direct_tie(volume, well_id: str) -> DirectTieResult:
     on a well that couldn't actually be tied."""
     config = _load_tie_config()
     max_radius_m = config.get("max_tie_search_radius_m")
-    max_shift_ms = float(config.get("tie_search_max_shift_ms", wst.DEFAULT_TIE_SEARCH_MAX_SHIFT_MS))
+    fallback_max_shift_ms = float(config.get("tie_search_max_shift_ms", wst.DEFAULT_TIE_SEARCH_MAX_SHIFT_MS))
 
     well_summary = well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
     if well_summary.well_x is None or well_summary.well_y is None:
@@ -85,12 +104,33 @@ def resolve_direct_tie(volume, well_id: str) -> DirectTieResult:
     rhob = _extract_curve(rows, "RHOB")
     dptm = _extract_curve(rows, "DPTM")
 
-    t_rc, rc = wst.reflectivity_from_time_axis(dptm, dt_log, rhob, volume.sample_interval_ms)
+    # Checkshot anchor: constant shift to the shallowest checkshot station
+    # inside the well's own DT/RHOB/DPTM-valid interval (see
+    # well_seismic_tie.checkshot_anchor_shift), then only a small residual
+    # window needs searching -- otherwise anchor_shift_ms is exactly 0.0
+    # and search_max_shift_ms falls back to the full statistical window,
+    # identical to this function's behavior before checkshot support.
+    valid_logs = (
+        np.isfinite(depth) & np.isfinite(dt_log) & np.isfinite(rhob) & np.isfinite(dptm) & (dt_log > 0) & (rhob > 0)
+    )
+    checkshot_points = checkshot_service.get_checkshot_points(well_id)
+    anchor_shift_ms, n_valid_checkshots = wst.checkshot_anchor_shift(
+        checkshot_points, depth[valid_logs], dptm[valid_logs]
+    )
+    if n_valid_checkshots >= 1:
+        search_max_shift_ms = wst.CHECKSHOT_RESIDUAL_SEARCH_MS
+        tie_source = f"checkshot ({n_valid_checkshots} valid pt)"
+    else:
+        search_max_shift_ms = fallback_max_shift_ms
+        tie_source = "statistical_fallback (no valid checkshot)"
+
+    t_rc, rc = wst.reflectivity_from_time_axis(dptm + anchor_shift_ms, dt_log, rhob, volume.sample_interval_ms)
     real_trace = volume.get_trace(trace_idx)
     tie = wst.search_best_tie_full_window(
-        t_rc, rc, volume.twt_axis_ms, volume.sample_interval_ms, real_trace, max_shift_ms=max_shift_ms
+        t_rc, rc, volume.twt_axis_ms, volume.sample_interval_ms, real_trace, max_shift_ms=search_max_shift_ms
     )
-    boundary_pinned = abs(tie.bulk_shift_ms) >= (1.0 - wst.BOUNDARY_PINNED_FRACTION) * max_shift_ms
+    total_bulk_shift_ms = anchor_shift_ms + tie.bulk_shift_ms
+    boundary_pinned = abs(tie.bulk_shift_ms) >= (1.0 - wst.BOUNDARY_PINNED_FRACTION) * search_max_shift_ms
     low_confidence = tie.correlation < TIE_LOW_CONFIDENCE_THRESHOLD or boundary_pinned
 
     # DEPT<->DPTM mapping -- independent of the DT/RHOB validity
@@ -116,11 +156,14 @@ def resolve_direct_tie(volume, well_id: str) -> DirectTieResult:
         crossline_number=crossline_number,
         distance_m=distance_m,
         correlation=tie.correlation,
-        bulk_shift_ms=tie.bulk_shift_ms,
+        bulk_shift_ms=total_bulk_shift_ms,
         best_freq_hz=tie.best_freq_hz,
         polarity=tie.polarity,
         boundary_pinned=boundary_pinned,
         low_confidence=low_confidence,
         depth_m=depth_v,
         dptm_ms=dptm_v,
+        tie_source=tie_source,
+        checkshot_anchor_shift_ms=anchor_shift_ms,
+        checkshot_n_valid_points=n_valid_checkshots,
     )

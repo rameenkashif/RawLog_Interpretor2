@@ -773,6 +773,56 @@ DEFAULT_TIE_SEARCH_FREQS_HZ: tuple[float, ...] = tuple(
 )
 DEFAULT_TIE_SEARCH_MAX_SHIFT_MS = 100.0
 
+# Once a real checkshot station anchors the tie to a constant shift (see
+# checkshot_anchor_shift below), search_best_tie_full_window only needs a
+# SMALL residual window around that anchor -- not the full +/-100ms
+# statistical search, which exists specifically because no checkshot is
+# normally available. 25ms matches the reference checkshot pipeline this
+# was ported from.
+CHECKSHOT_RESIDUAL_SEARCH_MS = 25.0
+
+
+def checkshot_anchor_shift(
+    checkshot_points: list[tuple[float, float]],
+    depth_m_valid: np.ndarray,
+    dptm_ms_valid: np.ndarray,
+) -> tuple[float, int]:
+    """Anchor a CONSTANT time shift to the shallowest real checkshot
+    station that falls within the well's own logged interval, so the
+    tie search only has to refine a small residual instead of searching
+    blind across +/-100ms.
+
+    checkshot_points: this well's (depth_m, twt_ms) checkshot stations,
+    any order.
+    depth_m_valid/dptm_ms_valid: the well's own DEPT<->DPTM samples,
+    restricted to where DT/RHOB/DPTM are all valid (the same interval the
+    reflectivity series is built from) -- a checkshot station shot above
+    the top of the logged interval can't anchor anything real, since
+    there's no DPTM value there to compare it against.
+
+    Only the SHALLOWEST valid point is used: a single point can only
+    support a constant shift, not a depth-varying drift correction (that
+    would need a real multi-point drift curve, which this single-anchor +
+    narrow-residual-search approach doesn't attempt).
+
+    Returns (anchor_shift_ms, n_valid_points). n_valid_points == 0 means
+    "no usable checkshot coverage for this well" -- anchor_shift_ms is
+    then exactly 0.0 and callers should fall back to the full statistical
+    search (DEFAULT_TIE_SEARCH_MAX_SHIFT_MS), not the narrow residual one.
+    """
+    if len(depth_m_valid) == 0 or not checkshot_points:
+        return 0.0, 0
+
+    log_start = float(np.min(depth_m_valid))
+    valid = sorted((p for p in checkshot_points if p[0] >= log_start), key=lambda p: p[0])
+    if not valid:
+        return 0.0, 0
+
+    d0, t0 = valid[0]
+    order = np.argsort(depth_m_valid)
+    dptm_at_d0 = float(np.interp(d0, depth_m_valid[order], dptm_ms_valid[order]))
+    return t0 - dptm_at_d0, len(valid)
+
 
 @dataclass
 class FullWindowTieResult:

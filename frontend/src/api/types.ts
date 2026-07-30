@@ -336,6 +336,7 @@ export interface PredictionResponse {
   tie_best_freq_hz: number | null;
   tie_polarity: number | null;
   tie_bulk_shift_ms: number | null;
+  tie_source: string | null;
   excluded_wells: PredictionExcludedWell[];
   n_train_wells: number;
   result: PredictionResult | null;
@@ -354,6 +355,14 @@ export interface PredictionGridSearchResponse {
   n_wells: number;
   excluded_wells: PredictionExcludedWell[];
   leaderboard: PredictionGridSearchEntry[];
+}
+
+export interface CheckshotUploadResponse {
+  wells: Record<string, number>; // well_id -> n_points stored
+}
+
+export interface CheckshotStatusResponse {
+  wells: Record<string, number>; // well_id -> n_points currently stored
 }
 
 export interface SectionWellLogCurve {

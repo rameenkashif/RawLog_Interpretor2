@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from app.well_seismic_tie import (
+    CHECKSHOT_RESIDUAL_SEARCH_MS,
     DEFAULT_CANDIDATE_FREQS_HZ,
     DEFAULT_TIE_SEARCH_FREQS_HZ,
     TieError,
@@ -9,6 +10,7 @@ from app.well_seismic_tie import (
     apply_stretch_squeeze,
     build_synthetic,
     calibrate_gardner_coefficients,
+    checkshot_anchor_shift,
     cross_correlate_and_shift,
     cross_check_delay_datum,
     depth_to_twt,
@@ -733,3 +735,50 @@ class TestSearchBestTieFullWindow:
                 np.array([2000.0, 2002.0]), np.array([0.1, 0.2]), np.arange(1900.0, 2100.0, 2.0), 2.0,
                 np.random.default_rng(0).normal(0, 1, 100),
             )
+
+
+class TestCheckshotAnchorShift:
+    def test_no_checkshot_points_returns_zero_shift(self):
+        depth = np.linspace(3000.0, 3100.0, 50)
+        dptm = np.linspace(2000.0, 2050.0, 50)
+        shift, n = checkshot_anchor_shift([], depth, dptm)
+        assert shift == 0.0
+        assert n == 0
+
+    def test_no_valid_depth_samples_returns_zero_shift(self):
+        shift, n = checkshot_anchor_shift([(3050.0, 2025.0)], np.array([]), np.array([]))
+        assert shift == 0.0
+        assert n == 0
+
+    def test_checkshot_point_above_log_start_is_excluded(self):
+        # log_start = 3000 -- a checkshot station shallower than the
+        # logged interval can't anchor anything (no DPTM there to compare
+        # against), so it must be excluded, not silently clamped.
+        depth = np.linspace(3000.0, 3100.0, 50)
+        dptm = np.linspace(2000.0, 2050.0, 50)
+        shift, n = checkshot_anchor_shift([(2500.0, 1800.0)], depth, dptm)
+        assert shift == 0.0
+        assert n == 0
+
+    def test_anchors_to_shallowest_valid_point(self):
+        # DPTM at depth=3050 is exactly 2025 (linear interp) -- a
+        # checkshot station reading 2040 there implies a +15ms anchor.
+        depth = np.linspace(3000.0, 3100.0, 101)  # 1m steps
+        dptm = np.linspace(2000.0, 2050.0, 101)  # 0.5ms/m
+        shift, n = checkshot_anchor_shift([(3050.0, 2040.0)], depth, dptm)
+        assert shift == pytest.approx(15.0)
+        assert n == 1
+
+    def test_uses_only_the_shallowest_of_several_valid_points(self):
+        depth = np.linspace(3000.0, 3200.0, 201)
+        dptm = np.linspace(2000.0, 2100.0, 201)  # 0.5ms/m
+        points = [(3150.0, 2100.0), (3050.0, 2040.0), (3100.0, 2070.0)]  # unordered
+        shift, n = checkshot_anchor_shift(points, depth, dptm)
+        # shallowest is 3050 -> DPTM there is 2025 -> anchor = 2040-2025 = 15
+        assert shift == pytest.approx(15.0)
+        assert n == 3  # all 3 fall within [log_start, log_end], just not used to anchor
+
+    def test_residual_search_ms_is_much_narrower_than_full_statistical_search(self):
+        from app.well_seismic_tie import DEFAULT_TIE_SEARCH_MAX_SHIFT_MS
+
+        assert CHECKSHOT_RESIDUAL_SEARCH_MS < DEFAULT_TIE_SEARCH_MAX_SHIFT_MS

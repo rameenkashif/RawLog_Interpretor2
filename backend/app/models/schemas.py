@@ -830,6 +830,11 @@ class PredictionResponse(BaseModel):
     tie_best_freq_hz: float | None = Field(None, description="Winning Ricker wavelet frequency from the direct tie")
     tie_polarity: int | None = Field(None, description="+1 or -1, from the direct tie")
     tie_bulk_shift_ms: float | None = Field(None, description="Winning bulk time shift (ms) from the direct tie")
+    tie_source: str | None = Field(
+        None,
+        description="'checkshot (N valid pt)' if a real checkshot station anchored this tie, else "
+        "'statistical_fallback (no valid checkshot)'",
+    )
     excluded_wells: list[PredictionExcludedWell]
     n_train_wells: int
     result: PredictionResult | None = None
@@ -850,6 +855,14 @@ class PredictionGridSearchResponse(BaseModel):
     leaderboard: list[PredictionGridSearchEntry] = Field(
         ..., description="All 48 candidates, best pooled R^2 first (failures last)"
     )
+
+
+class CheckshotUploadResponse(BaseModel):
+    wells: dict[str, int] = Field(..., description="well_id -> number of checkshot points stored")
+
+
+class CheckshotStatusResponse(BaseModel):
+    wells: dict[str, int] = Field(..., description="well_id -> number of checkshot points currently stored")
 
 
 # -----------------------------------------------------------------------------

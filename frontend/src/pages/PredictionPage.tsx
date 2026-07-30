@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 import {
+  getCheckshotStatus,
   getPrediction,
   getPredictionFrequencyMapUrl,
   getPredictionGridSearch,
@@ -11,6 +12,7 @@ import {
   getPredictionLoocvHeatmapUrl,
   getSectionImageUrl,
   listWells,
+  uploadCheckshotWorkbook,
 } from "@/api/client";
 import type { PredictionResponse, PredictionTarget } from "@/api/types";
 import { Badge } from "@/components/Synthetic/QcBadges";
@@ -145,6 +147,7 @@ export default function PredictionPage() {
             ))}
           </select>
         </label>
+        <CheckshotUploadPanel onUploaded={() => setRefreshNonce((n) => n + 1)} />
       </div>
 
       {!blindWellId && (
@@ -205,6 +208,9 @@ export default function PredictionPage() {
                   Polarity = {tieInfo.tie_polarity === 1 ? "normal" : tieInfo.tie_polarity === -1 ? "reversed" : "n/a"}
                 </Badge>
                 <Badge tone="accent">Bulk shift = {tieInfo.tie_bulk_shift_ms?.toFixed(1) ?? "n/a"} ms</Badge>
+                <Badge tone={tieInfo.tie_source?.startsWith("checkshot") ? "green" : "orange"}>
+                  Tie: {tieInfo.tie_source ?? "n/a"}
+                </Badge>
               </div>
             </Section>
           )}
@@ -406,6 +412,97 @@ function GridSearchPanel({
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * Upload a real checkshot / time-depth-survey workbook (.xlsx, one sheet
+ * per well) -- every well-to-seismic tie on this page (and elsewhere:
+ * Spectral Property Prediction, the Section well-log overlay) picks it up
+ * automatically via direct_tie_service, anchoring to the shallowest
+ * checkshot station inside the well's logged interval instead of the
+ * full +/-100ms statistical search. Uploading does NOT by itself re-run
+ * the per-property grid search (that's a separate, expensive step -- see
+ * each property's "Re-run search" button below) since a tie change alone
+ * doesn't guarantee a different config wins; bump refreshNonce so the
+ * plain <img> tie/prediction images at least reflect the corrected tie
+ * immediately.
+ */
+function CheckshotUploadPanel({ onUploaded }: { onUploaded: () => void }) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastResult, setLastResult] = useState<Record<string, number> | null>(null);
+
+  const statusQuery = useQuery({
+    queryKey: ["checkshot-status"],
+    queryFn: getCheckshotStatus,
+    enabled: open,
+  });
+
+  const handleFile = async (file: File) => {
+    setUploading(true);
+    setError(null);
+    try {
+      const result = await uploadCheckshotWorkbook(file);
+      setLastResult(result.wells);
+      queryClient.invalidateQueries({ queryKey: ["checkshot-status"] });
+      onUploaded();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <details
+      className="text-xs border border-border rounded-lg px-3 py-1.5"
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer font-semibold text-ink-muted select-none">Checkshot survey</summary>
+      <div className="mt-2 space-y-2 max-w-sm">
+        <p className="text-ink-faint">
+          Upload a real checkshot / time-depth-survey workbook (.xlsx, one sheet per well) to anchor
+          the well-to-seismic tie instead of the blind statistical search.
+        </p>
+        <input
+          type="file"
+          accept=".xlsx"
+          disabled={uploading}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) void handleFile(file);
+            e.target.value = "";
+          }}
+          className="text-xs"
+        />
+        {uploading && <p className="text-ink-faint">Uploading…</p>}
+        {error && <p className="text-danger">{error}</p>}
+        {lastResult && (
+          <p className="text-ink-muted">
+            Stored: {Object.entries(lastResult).map(([w, n]) => `${w} (${n} pt)`).join(", ")}
+          </p>
+        )}
+        {statusQuery.data && (
+          <div>
+            <p className="font-semibold text-ink-muted">Current checkshot coverage</p>
+            {Object.keys(statusQuery.data.wells).length === 0 ? (
+              <p className="text-ink-faint">No checkshot data uploaded -- every well uses the statistical fallback.</p>
+            ) : (
+              <ul className="text-ink-faint">
+                {Object.entries(statusQuery.data.wells).map(([w, n]) => (
+                  <li key={w}>
+                    {w}: {n} point(s)
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
       </div>
     </details>

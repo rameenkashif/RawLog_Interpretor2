@@ -34,7 +34,14 @@ overfitting. Reproduced here:
      change from the reference pipelines' own steps 3-4. Feature/target
      alignment is still by NEAREST seismic time-sample index with
      duplicate-depth averaging (matching the reference pipeline exactly,
-     not this app's usual continuous interpolation).
+     not this app's usual continuous interpolation). direct_tie_service
+     itself now anchors to a real checkshot station when one is available
+     for the well (see checkshot_service.py / well_seismic_tie.
+     checkshot_anchor_shift) instead of a blind +/-100ms statistical
+     search -- this module doesn't need to know which; it just gets a
+     more accurate tie automatically. Each well's tie_source
+     ("checkshot (N valid pt)" vs. "statistical_fallback") is surfaced in
+     the prediction response so this is never silently assumed.
 
 Deliberately a SEPARATE model/page from spectral_property_prediction_
 service.py (RandomForest on the full raw spectrum always, no PCA/
@@ -96,6 +103,7 @@ class WellPredictionFeatures:
     features: dict[str, np.ndarray]  # 'cwt'/'sswt' -> (n_samples, n_freq)
     freq_hz: dict[str, np.ndarray]  # 'cwt'/'sswt' -> (n_freq,)
     inst_attrs: np.ndarray  # (n_samples, 6): envelope, cos(phase), sin(phase), inst_freq, env_nbhd_mean, env_nbhd_std
+    tie_source: str = "unknown"  # "checkshot (N valid pt)" or "statistical_fallback" -- see direct_tie_service
 
 
 def _extract_curve(rows: list[dict], name: str) -> np.ndarray:
@@ -254,6 +262,7 @@ def _build_well_features(volume, well_id: str) -> WellPredictionFeatures:
         features=features,
         freq_hz=freq_hz,
         inst_attrs=inst_attrs,
+        tie_source=tie.tie_source,
     )
 
 
@@ -556,6 +565,7 @@ def get_prediction_result(blind_well_id: str, target: str) -> dict:
         "tie_best_freq_hz": None,
         "tie_polarity": None,
         "tie_bulk_shift_ms": None,
+        "tie_source": None,
     }
     if blind_well_id not in well_features:
         return {
@@ -591,6 +601,7 @@ def get_prediction_result(blind_well_id: str, target: str) -> dict:
         "tie_best_freq_hz": blind.best_freq_hz,
         "tie_polarity": blind.polarity,
         "tie_bulk_shift_ms": blind.bulk_shift_ms,
+        "tie_source": blind.tie_source,
         "n_train_wells": pred["n_train_wells"],
         "result": pred,
     }
