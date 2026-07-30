@@ -115,3 +115,45 @@ class TestStoreAndReadCheckshots:
             _workbook_bytes({"Z-02": [(1, "l", 2045, None, 3354.8), (2, "l", 2101, None, 3409.01)]})
         )
         assert len(checkshot_service.get_checkshot_points("Z-02")) == 2
+
+    def test_well_id_with_extra_suffix_matches_by_prefix(self):
+        # This app derives well_id from the LAS FILENAME (e.g.
+        # 'Z-02_RAW.las' -> 'Z-02_RAW'), which commonly doesn't match a
+        # checkshot workbook's sheet name (usually the field's base well
+        # name, 'Z-02', matching the LAS header's WELL mnemonic instead).
+        checkshot_service.store_checkshot_workbook(
+            _workbook_bytes({"Z-02": [(1, "l", 2045, None, 3354.8), (2, "l", 2101, None, 3409.01)]})
+        )
+        assert checkshot_service.get_checkshot_points("Z-02_RAW") == [(3354.8, 2045.0), (3409.01, 2101.0)]
+
+    def test_prefix_match_is_case_insensitive(self):
+        checkshot_service.store_checkshot_workbook(
+            _workbook_bytes({"z-02": [(1, "l", 2045, None, 3354.8)]})
+        )
+        assert checkshot_service.get_checkshot_points("Z-02_RAW") == [(3354.8, 2045.0)]
+
+    def test_prefix_match_requires_a_real_boundary(self):
+        # 'Z-02' must NOT match a well_id of 'Z-020...' -- '2' immediately
+        # after the prefix is alphanumeric, not a real name boundary.
+        checkshot_service.store_checkshot_workbook(
+            _workbook_bytes({"Z-02": [(1, "l", 2045, None, 3354.8)]})
+        )
+        assert checkshot_service.get_checkshot_points("Z-020_RAW") == []
+
+    def test_exact_match_preferred_over_prefix_match(self):
+        checkshot_service.store_checkshot_workbook(
+            _workbook_bytes({
+                "Z-02": [(1, "l", 1000, None, 1000.0)],
+                "Z-02_RAW": [(1, "l", 2045, None, 3354.8)],
+            })
+        )
+        assert checkshot_service.get_checkshot_points("Z-02_RAW") == [(3354.8, 2045.0)]
+
+    def test_status_still_keyed_by_original_sheet_name(self):
+        # get_checkshot_status is a diagnostic listing of what was
+        # actually uploaded -- it must NOT be affected by the lookup
+        # fallback used for tie resolution.
+        checkshot_service.store_checkshot_workbook(
+            _workbook_bytes({"Z-02": [(1, "l", 2045, None, 3354.8)]})
+        )
+        assert checkshot_service.get_checkshot_status() == {"Z-02": 1}
