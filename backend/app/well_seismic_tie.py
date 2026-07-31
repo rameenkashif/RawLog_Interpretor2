@@ -767,19 +767,28 @@ def reflectivity_from_time_axis(
 
 
 # Widened from the original 15-45Hz/2.5Hz-step (13 candidates) after a
-# real cross-implementation investigation found it excluded genuinely
-# winning frequencies for several wells (e.g. Z-02, Z-05, Z-08's best fits
-# sit at 8-14Hz, below the old 15Hz floor). This survey's own measured
-# amplitude spectrum peaks at ~20.8Hz with a -6dB band of 8-28.8Hz --
-# 8-64Hz covers that with margin. Quantified before applying: widening
-# the RANGE (not the step size) was what actually mattered -- the same
-# range at the old 2.5Hz step captured nearly all the correlation gain a
-# finer step added, so this also isn't primarily a step-size fix. Cost is
-# negligible (~1.3s vs ~0.6s total across 7 wells for the tie stage
-# alone, on this dataset). Also matches a reference implementation this
-# app's ties were cross-validated against, so the two stay comparable.
+# cross-implementation investigation found it excluded genuinely winning
+# frequencies for several wells. Floor set to 12Hz (not the reference
+# implementation's 8Hz, and not back to 15Hz) based on downstream
+# evidence, not just tie correlation:
+#   - This survey's own amplitude spectrum has real energy from 8-28.8Hz
+#     (-6dB band), so 8-13Hz isn't spectrally implausible on its own --
+#     ruling out "aliasing artifact" as the concern.
+#   - BUT an 8Hz floor measurably hurt downstream pooled LOOCV R^2 for
+#     SWE (-0.19 vs -0.03 at a 12Hz floor) and PHIE, while only Z-05's
+#     tie actually used anything below 12Hz (Z-02/Z-08's real winners
+#     are AT 12Hz; Z-06 -- the well this investigation started from --
+#     was never really below 15Hz to begin with, landing at 20Hz
+#     regardless of floor). A 12Hz floor recovers nearly all of that
+#     regression (SWE/PHIE clearly better than even the original 15Hz
+#     floor) at a small, near-zero-either-way cost to VSH.
+#   - i.e. the search-space width itself was measurably overfitting
+#     downstream generalization in the 8-11Hz sliver specifically, even
+#     though that band isn't literally noise -- caught by comparing
+#     actual pooled LOOCV R^2 across floor choices, not by inspecting
+#     spectra alone.
 DEFAULT_TIE_SEARCH_FREQS_HZ: tuple[float, ...] = tuple(
-    float(f) for f in np.arange(8.0, 64.0 + 1e-9, 2.0)
+    float(f) for f in np.arange(12.0, 64.0 + 1e-9, 2.0)
 )
 DEFAULT_TIE_SEARCH_MAX_SHIFT_MS = 100.0
 
