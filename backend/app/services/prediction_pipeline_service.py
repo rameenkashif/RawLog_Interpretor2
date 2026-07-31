@@ -16,17 +16,28 @@ overfitting. Reproduced here:
   3. Spatial context: envelope mean/std over a 5x5 neighboring-trace
      window (porosity/lithology often has some lateral continuity).
   4. A per-property model config -- (spectrum, use_instantaneous_attrs,
-     n_pca_components, model_name) -- chosen by an ACTUAL grid search run
-     by this module (run_grid_search / get_best_config below), not a
-     hardcoded value copied from an external run. This matters: after the
-     well-tie fix (point 5) changed how much real signal is actually in
-     the spectrum, the true best config for a property can change (e.g.
-     SWE's winner moved from PCA-3+Ridge to no-PCA raw-spectrum+
-     RandomForest once the tie was corrected) -- a hardcoded config from
-     a run against the OLD tie would silently stay wrong. Cached
-     in-process per target after the first search (see
-     _GRID_SEARCH_CACHE) since a full search is expensive -- see
-     run_grid_search's docstring for the cost and how to force a rerun.
+     n_pca_components, model_name, target_block_half_ms) -- chosen by an
+     ACTUAL grid search run by this module (run_grid_search /
+     get_best_config below), not a hardcoded value copied from an
+     external run. This matters: after the well-tie fix (point 5) changed
+     how much real signal is actually in the spectrum, the true best
+     config for a property can change (e.g. SWE's winner moved from
+     PCA-3+Ridge to no-PCA raw-spectrum+RandomForest once the tie was
+     corrected) -- a hardcoded config from a run against the OLD tie
+     would silently stay wrong. Cached in-process per target after the
+     first search (see _GRID_SEARCH_CACHE) since a full search is
+     expensive -- see run_grid_search's docstring for the cost and how
+     to force a rerun.
+
+     target_block_half_ms (log "blocking"): the true log's target value
+     is averaged over a +/-block_half_ms window around each seismic
+     sample's own time (matching the reference pipeline's coarser
+     vertical resolution) before fitting -- a real grid axis, not a
+     fixed per-property rule, since which properties benefit is
+     empirical, not assumed (see GRID_BLOCK_HALF_OPTIONS/_block_average).
+     A candidate that collapses target variance (a near-constant blocked
+     signal a model could trivially "fit" without learning anything real)
+     is skipped, not silently allowed to win.
   5. Well->trace tie: resolved via direct_tie_service.resolve_direct_tie
      (the proven direct nearest-trace + DPTM full-window-search tie
      already used elsewhere in this app) instead of the reference
@@ -62,22 +73,31 @@ TARGET_LAS_NAMES = {"vsh": "VSH", "phie": "PHIE", "swe": "SWE"}
 METHOD_ENERGY_KEYS = {"cwt": "energy", "sswt": "sswt_amplitude"}
 METHOD_FREQ_KEYS = {"cwt": "freq_hz", "sswt": "sswt_freq_hz"}
 
-# A model config: (spectrum, use_instantaneous_attrs, n_pca_components_or_None, model_name).
-Config = tuple[str, bool, int | None, str]
+# A model config: (spectrum, use_instantaneous_attrs, n_pca_components_or_None,
+# model_name, target_block_half_ms).
+Config = tuple[str, bool, int | None, str, float]
 
 # The grid search space, matching the reference "improved_pipeline"'s own
 # description of what it searched: spectrum x PCA component count
 # (including "no PCA" = raw spectrum) x with/without instantaneous attrs
-# x model family. 2 x 3 x 2 x 4 = 48 candidates per property.
+# x model family x target-blocking window. 2 x 3 x 2 x 4 x 3 = 144
+# candidates per property.
 GRID_SPECTRA: tuple[str, ...] = ("cwt", "sswt")
 GRID_PCA_OPTIONS: tuple[int | None, ...] = (None, 3, 5)
 GRID_USE_INST_OPTIONS: tuple[bool, ...] = (True, False)
 GRID_MODEL_NAMES: tuple[str, ...] = ("ridge", "pls", "rf", "gb")
+GRID_BLOCK_HALF_OPTIONS: tuple[float, ...] = (1.0, 2.0, 4.0)
 
 RIDGE_ALPHA = 5.0
 SPATIAL_WINDOW = 2  # 5x5 neighboring-trace window (2*2+1)
 
 MIN_VALID_SAMPLES = 5
+
+# A blocked target's std dropping below this fraction of the RAW (pre-
+# blocking) target's std signals collapse -- a near-constant target a
+# model could trivially "fit" without learning anything real, not just
+# lost resolution. Matches the reference pipeline's default.
+MIN_BLOCK_VARIANCE_FRACTION = 0.2
 
 # In-process cache: target -> {"best_config": Config, "best_r2": float|None,
 # "leaderboard": [...]}. Populated lazily by get_best_config the first time
@@ -104,6 +124,36 @@ class WellPredictionFeatures:
     freq_hz: dict[str, np.ndarray]  # 'cwt'/'sswt' -> (n_freq,)
     inst_attrs: np.ndarray  # (n_samples, 6): envelope, cos(phase), sin(phase), inst_freq, env_nbhd_mean, env_nbhd_std
     tie_source: str = "unknown"  # "checkshot (N valid pt)" or "statistical_fallback" -- see direct_tie_service
+
+
+@dataclass
+class _WellRawCache:
+    """Everything about a well that does NOT depend on target_block_half_ms
+    -- tie, CWT/SSWT spectrum, instantaneous attrs -- built ONCE per well
+    and reused across every block_half candidate the grid search tries,
+    plus the RAW (un-blocked, one entry per valid log sample) target
+    values/time positions needed to build any block_half variant cheaply
+    afterward (see _block_average / _well_features_for_block). Mirrors
+    the reference pipeline's build_cached_well_data's own blocking-
+    independent cache."""
+
+    well_id: str
+    inline_number: int
+    crossline_number: int
+    correlation: float
+    best_freq_hz: float
+    polarity: int
+    bulk_shift_ms: float
+    tie_source: str
+    depths_m: np.ndarray  # tight (block_half=1.0) blocked depth axis -- fixed regardless of the TARGET's own block_half, matching the reference's depth_u
+    twt_ms: np.ndarray  # seismic time axis at uniq_idx -- doesn't vary with blocking
+    features: dict[str, np.ndarray]  # 'cwt'/'sswt' -> (n_uniq, n_freq)
+    freq_hz: dict[str, np.ndarray]
+    inst_attrs: np.ndarray  # (n_uniq, 6)
+    uniq_idx: np.ndarray  # unique nearest-seismic-sample indices
+    time_ms: np.ndarray  # FULL spectral time axis (not just at uniq_idx) -- each output sample's own true time, needed by _block_average
+    t_valid: np.ndarray  # RAW per-sample time positions (post-tie-shift), one entry per valid raw log sample
+    targets_raw: dict[str, np.ndarray]  # RAW per-sample VSH/PHIE/SWE values, aligned with t_valid
 
 
 def _extract_curve(rows: list[dict], name: str) -> np.ndarray:
@@ -184,7 +234,27 @@ def _instantaneous_attrs_at_indices(
     ], axis=1)
 
 
-def _build_well_features(volume, well_id: str) -> WellPredictionFeatures:
+def _block_average(
+    raw: np.ndarray,
+    t_valid: np.ndarray,
+    uniq_idx: np.ndarray,
+    time_ms: np.ndarray,
+    half_ms: float,
+    min_variance_fraction: float = MIN_BLOCK_VARIANCE_FRACTION,
+) -> np.ndarray | None:
+    """Average `raw`'s per-sample values within +/-half_ms of each output
+    seismic sample's own time -- matching the reference "improved_
+    pipeline"'s block_average (log-target smoothing at the seismic's
+    coarser vertical resolution). Returns None (signaling "skip, unsafe")
+    if the averaged result's std drops below min_variance_fraction of the
+    RAW (pre-blocking) signal's std -- see MIN_BLOCK_VARIANCE_FRACTION."""
+    out = np.array([raw[np.abs(t_valid - time_ms[ui]) <= half_ms].mean() for ui in uniq_idx])
+    if raw.std() > 0 and out.std() < min_variance_fraction * raw.std():
+        return None
+    return out
+
+
+def _build_well_raw_cache(volume, well_id: str) -> _WellRawCache:
     """Raises TieError/WellNotFoundError/SegyVolumeError -- caller treats
     that as "excluded", never silently proceeding on a well that
     couldn't actually be tied or aligned."""
@@ -225,17 +295,18 @@ def _build_well_features(volume, well_id: str) -> WellPredictionFeatures:
     targets_v = {k: v[in_range] for k, v in targets_v.items()}
 
     # Nearest seismic-time-sample index per depth (matching the reference
-    # pipeline exactly, not this app's usual continuous interpolation),
-    # then average away duplicate depths landing on the same sample --
-    # routine given log sampling is far finer than the seismic's ~2-4ms.
+    # pipeline exactly, not this app's usual continuous interpolation).
     idxs = np.array([int(np.argmin(np.abs(time_ms - t))) for t in t_shifted])
-    uniq_idx, inverse = np.unique(idxs, return_inverse=True)
+    uniq_idx = np.unique(idxs)
 
-    def _agg(arr: np.ndarray) -> np.ndarray:
-        return np.array([arr[inverse == k].mean() for k in range(len(uniq_idx))])
-
-    agg_depth = _agg(depth_v)
-    agg_targets = {k: _agg(v) for k, v in targets_v.items()}
+    # Depth axis is always TIGHT (block_half=1.0) regardless of the
+    # TARGET's own block_half -- matching the reference's
+    # depth_u = block_average(depths, 1.0).
+    depth_blocked = _block_average(depth_v, t_shifted, uniq_idx, time_ms, 1.0)
+    if depth_blocked is None:
+        raise wst.TieError(
+            f"Well '{well_id}': depth axis collapsed under tight (1ms) blocking -- check log sampling."
+        )
 
     features: dict[str, np.ndarray] = {}
     freq_hz: dict[str, np.ndarray] = {}
@@ -248,7 +319,7 @@ def _build_well_features(volume, well_id: str) -> WellPredictionFeatures:
         volume, tie.trace_idx, tie.inline_number, tie.crossline_number, uniq_idx, volume.sample_interval_ms
     )
 
-    return WellPredictionFeatures(
+    return _WellRawCache(
         well_id=well_id,
         inline_number=tie.inline_number,
         crossline_number=tie.crossline_number,
@@ -256,31 +327,70 @@ def _build_well_features(volume, well_id: str) -> WellPredictionFeatures:
         best_freq_hz=tie.best_freq_hz,
         polarity=tie.polarity,
         bulk_shift_ms=tie.bulk_shift_ms,
-        depths_m=agg_depth,
+        tie_source=tie.tie_source,
+        depths_m=depth_blocked,
         twt_ms=time_ms[uniq_idx],
-        targets=agg_targets,
         features=features,
         freq_hz=freq_hz,
         inst_attrs=inst_attrs,
-        tie_source=tie.tie_source,
+        uniq_idx=uniq_idx,
+        time_ms=time_ms,
+        t_valid=t_shifted,
+        targets_raw=targets_v,
     )
 
 
-def _eligible_well_features(volume) -> tuple[dict[str, WellPredictionFeatures], list[dict]]:
-    features: dict[str, WellPredictionFeatures] = {}
+def _eligible_well_raw_caches(volume) -> tuple[dict[str, _WellRawCache], list[dict]]:
+    raw_caches: dict[str, _WellRawCache] = {}
     excluded: list[dict] = []
     for summary in well_service.list_well_summaries():
         try:
-            features[summary.well_id] = _build_well_features(volume, summary.well_id)
+            raw_caches[summary.well_id] = _build_well_raw_cache(volume, summary.well_id)
         except (wst.TieError, well_service.WellNotFoundError) as exc:
             excluded.append({"well_id": summary.well_id, "reason": str(exc)})
-    return features, excluded
+    return raw_caches, excluded
+
+
+def _well_features_for_block(
+    raw_caches: dict[str, _WellRawCache], target: str, block_half_ms: float
+) -> dict[str, WellPredictionFeatures] | None:
+    """Builds per-well WellPredictionFeatures for `target` at this exact
+    block_half_ms, by re-blocking each well's RAW per-sample target
+    values (cheap -- everything else is reused from raw_caches unchanged).
+    Returns None if blocking collapses target variance (_block_average)
+    for ANY well -- an unsafe window is skipped entirely for this
+    (target, block_half) combination, matching the reference pipeline's
+    run_grid_search (which builds every well's blocked target before
+    trying any model config, and skips the whole block_half on the first
+    collapse rather than checking per model candidate)."""
+    well_features: dict[str, WellPredictionFeatures] = {}
+    for well_id, raw in raw_caches.items():
+        target_blocked = _block_average(raw.targets_raw[target], raw.t_valid, raw.uniq_idx, raw.time_ms, block_half_ms)
+        if target_blocked is None:
+            return None
+        well_features[well_id] = WellPredictionFeatures(
+            well_id=raw.well_id,
+            inline_number=raw.inline_number,
+            crossline_number=raw.crossline_number,
+            correlation=raw.correlation,
+            best_freq_hz=raw.best_freq_hz,
+            polarity=raw.polarity,
+            bulk_shift_ms=raw.bulk_shift_ms,
+            depths_m=raw.depths_m,
+            twt_ms=raw.twt_ms,
+            targets={target: target_blocked},
+            features=raw.features,
+            freq_hz=raw.freq_hz,
+            inst_attrs=raw.inst_attrs,
+            tie_source=raw.tie_source,
+        )
+    return well_features
 
 
 def _assemble_features(
     well_features: dict[str, WellPredictionFeatures], well_id: str, config: Config
 ) -> np.ndarray:
-    spec_key, use_inst, _n_pca, _model_name = config
+    spec_key, use_inst, _n_pca, _model_name, _block_half_ms = config
     X = well_features[well_id].features[spec_key]
     if use_inst:
         X = np.concatenate([X, well_features[well_id].inst_attrs], axis=1)
@@ -300,7 +410,7 @@ def _fit_model(well_features: dict[str, WellPredictionFeatures], train_ids: list
     from sklearn.linear_model import Ridge
     from sklearn.preprocessing import StandardScaler
 
-    _spec_key, _use_inst, n_pca, model_name = config
+    _spec_key, _use_inst, n_pca, model_name, _block_half_ms = config
 
     X_train = np.vstack([_assemble_features(well_features, w, config) for w in train_ids])
     y_train = np.concatenate([well_features[w].targets[target] for w in train_ids])
@@ -396,14 +506,18 @@ def get_full_loocv_r2(target: str) -> dict:
     from app.services import seismic_processor as sp
 
     volume = sp.get_segy_volume()
-    well_features, _excluded = _eligible_well_features(volume)
-    well_ids = list(well_features.keys())
+    raw_caches, _excluded = _eligible_well_raw_caches(volume)
+    well_ids = list(raw_caches.keys())
     if len(well_ids) < 2:
         return {"r2": None, "n_wells": len(well_ids), "per_well": {}}
 
     from sklearn.metrics import r2_score
 
     config = get_best_config(target)
+    well_features = _well_features_for_block(raw_caches, target, config[4])
+    if well_features is None:
+        return {"r2": None, "n_wells": len(well_ids), "per_well": {}}
+
     per_well: dict[str, float | None] = {}
     all_true: list[float] = []
     all_pred: list[float] = []
@@ -421,66 +535,80 @@ _MODEL_LABELS = {"ridge": "Ridge", "pls": "PLS", "rf": "RandomForest", "gb": "Gr
 
 
 def _config_description(config: Config) -> str:
-    spec_key, use_inst, n_pca, model_name = config
+    spec_key, use_inst, n_pca, model_name, block_half_ms = config
     model_label = _MODEL_LABELS.get(model_name, model_name)
     inst_label = "+ instantaneous attrs" if use_inst else ""
     pca_label = f"PCA-{n_pca}" if n_pca is not None else "no PCA (raw spectrum)"
-    return f"{spec_key.upper()} {inst_label}, {pca_label}, {model_label}".replace("  ", " ").strip()
+    block_label = f"block ±{block_half_ms:g}ms"
+    return f"{spec_key.upper()} {inst_label}, {pca_label}, {model_label}, {block_label}".replace("  ", " ").strip()
 
 
 def run_grid_search(target: str) -> dict:
     """Search GRID_SPECTRA x GRID_PCA_OPTIONS x GRID_USE_INST_OPTIONS x
-    GRID_MODEL_NAMES (48 candidates) for `target`, scoring each by pooled
-    leave-one-well-out R^2 (every well held out in turn) -- the SAME
-    selection process and metric the reference "improved_pipeline" used,
-    run here against THIS app's own (corrected) well ties/features rather
-    than trusting a config chosen against a different tie. A candidate
-    that raises (e.g. a degenerate PCA/model fit) is recorded in the
-    leaderboard with r2=None and skipped as a possible winner, not
-    allowed to crash the whole search.
+    GRID_MODEL_NAMES x GRID_BLOCK_HALF_OPTIONS (144 candidates) for
+    `target`, scoring each by pooled leave-one-well-out R^2 (every well
+    held out in turn) -- the SAME selection process and metric the
+    reference "improved_pipeline" used, run here against THIS app's own
+    (corrected) well ties/features rather than trusting a config chosen
+    against a different tie. A candidate that raises (e.g. a degenerate
+    PCA/model fit), or whose block_half collapses target variance for any
+    well (_well_features_for_block), is recorded in the leaderboard with
+    r2=None and skipped as a possible winner, not allowed to crash the
+    whole search.
 
-    Cost: up to 48 candidates x n_wells pooled-LOOCV folds = e.g. ~330
-    fit/predict cycles for a 7-well field -- on the order of tens of
-    seconds to a few minutes depending on how many GradientBoosting/
-    RandomForest candidates end up in the mix. Well features
-    (tie + CWT/SSWT + instantaneous attrs) are resolved ONCE and reused
-    across every candidate, so this cost is all in repeated model
-    fitting, not repeated tie/spectral-decomposition work. See
+    Cost: up to 144 candidates x n_wells pooled-LOOCV folds -- on the
+    order of a few minutes for a 7-well field. Blocking-independent well
+    data (tie + CWT/SSWT + instantaneous attrs) is resolved ONCE per well
+    (_eligible_well_raw_caches) and reused across every candidate; each
+    block_half's re-blocked targets are also built ONCE and reused across
+    that block_half's 48 (spectrum x PCA x inst x model) inner candidates,
+    not rebuilt per candidate -- so the added cost of the block_half axis
+    is roughly 3x model-fitting time, not 3x everything. See
     get_best_config for the cache that avoids paying this more than once
     per target per process lifetime.
     """
     from app.services import seismic_processor as sp
 
     volume = sp.get_segy_volume()
-    well_features, excluded = _eligible_well_features(volume)
-    if len(well_features) < 2:
+    raw_caches, excluded = _eligible_well_raw_caches(volume)
+    if len(raw_caches) < 2:
         return {
             "target": target,
             "best_config": None,
             "best_r2": None,
-            "n_wells": len(well_features),
+            "n_wells": len(raw_caches),
             "excluded_wells": excluded,
             "leaderboard": [],
         }
 
     leaderboard: list[dict] = []
-    for spec_key in GRID_SPECTRA:
-        for n_pca in GRID_PCA_OPTIONS:
-            for use_inst in GRID_USE_INST_OPTIONS:
-                for model_name in GRID_MODEL_NAMES:
-                    config: Config = (spec_key, use_inst, n_pca, model_name)
-                    try:
-                        r2 = _pooled_loocv_r2(well_features, target, config)
-                        error = None
-                    except Exception as exc:  # noqa: BLE001 -- one bad candidate shouldn't kill the search
-                        r2 = None
-                        error = str(exc)
-                    leaderboard.append({
-                        "config": config,
-                        "description": _config_description(config),
-                        "r2": r2,
-                        "error": error,
-                    })
+    for block_half_ms in GRID_BLOCK_HALF_OPTIONS:
+        well_features = _well_features_for_block(raw_caches, target, block_half_ms)
+        for spec_key in GRID_SPECTRA:
+            for n_pca in GRID_PCA_OPTIONS:
+                for use_inst in GRID_USE_INST_OPTIONS:
+                    for model_name in GRID_MODEL_NAMES:
+                        config: Config = (spec_key, use_inst, n_pca, model_name, block_half_ms)
+                        if well_features is None:
+                            leaderboard.append({
+                                "config": config,
+                                "description": _config_description(config),
+                                "r2": None,
+                                "error": f"block_half={block_half_ms:g}ms collapsed target variance for at least one well",
+                            })
+                            continue
+                        try:
+                            r2 = _pooled_loocv_r2(well_features, target, config)
+                            error = None
+                        except Exception as exc:  # noqa: BLE001 -- one bad candidate shouldn't kill the search
+                            r2 = None
+                            error = str(exc)
+                        leaderboard.append({
+                            "config": config,
+                            "description": _config_description(config),
+                            "r2": r2,
+                            "error": error,
+                        })
 
     scored = [entry for entry in leaderboard if entry["r2"] is not None]
     scored.sort(key=lambda entry: entry["r2"], reverse=True)
@@ -491,7 +619,7 @@ def run_grid_search(target: str) -> dict:
         "target": target,
         "best_config": best["config"] if best else None,
         "best_r2": best["r2"] if best else None,
-        "n_wells": len(well_features),
+        "n_wells": len(raw_caches),
         "excluded_wells": excluded,
         "leaderboard": leaderboard,
     }
@@ -500,7 +628,7 @@ def run_grid_search(target: str) -> dict:
 # Fallback used only if a grid search finds literally no working
 # candidate (e.g. too few wells for PCA/model fitting to succeed at all)
 # -- the simplest, least failure-prone recipe, not a claim it's good.
-_FALLBACK_CONFIG: Config = ("sswt", False, None, "ridge")
+_FALLBACK_CONFIG: Config = ("sswt", False, None, "ridge", 1.0)
 
 
 def get_best_config(target: str, force: bool = False) -> Config:
@@ -548,7 +676,7 @@ def get_prediction_result(blind_well_id: str, target: str) -> dict:
     from app.services import seismic_processor as sp
 
     volume = sp.get_segy_volume()
-    well_features, excluded = _eligible_well_features(volume)
+    raw_caches, excluded = _eligible_well_raw_caches(volume)
     config = get_best_config(target)
 
     base = {
@@ -567,7 +695,7 @@ def get_prediction_result(blind_well_id: str, target: str) -> dict:
         "tie_bulk_shift_ms": None,
         "tie_source": None,
     }
-    if blind_well_id not in well_features:
+    if blind_well_id not in raw_caches:
         return {
             **base,
             **empty_tie_fields,
@@ -576,14 +704,28 @@ def get_prediction_result(blind_well_id: str, target: str) -> dict:
             "n_train_wells": 0,
             "result": None,
         }
-    if len(well_features) < 2:
+    if len(raw_caches) < 2:
         return {
             **base,
             **empty_tie_fields,
             "status": "insufficient_data",
             "message": (
-                f"Only {len(well_features)} well(s) have a usable tie -- need at least 2 (the "
+                f"Only {len(raw_caches)} well(s) have a usable tie -- need at least 2 (the "
                 "blind well plus at least one other to train on)."
+            ),
+            "n_train_wells": 0,
+            "result": None,
+        }
+
+    well_features = _well_features_for_block(raw_caches, target, config[4])
+    if well_features is None:
+        return {
+            **base,
+            **empty_tie_fields,
+            "status": "insufficient_data",
+            "message": (
+                f"This target's grid-search-selected config uses block_half={config[4]:g}ms, which "
+                "collapses target variance for at least one currently-tied well."
             ),
             "n_train_wells": 0,
             "result": None,
@@ -624,11 +766,11 @@ def render_full_loocv_heatmap_image() -> bytes:
     from app.services import seismic_processor as sp
 
     volume = sp.get_segy_volume()
-    well_features, _excluded = _eligible_well_features(volume)
+    raw_caches, _excluded = _eligible_well_raw_caches(volume)
 
     targets = list(TARGET_LAS_NAMES.keys())
     values = np.full(len(targets), np.nan)
-    n_wells = len(well_features)
+    n_wells = len(raw_caches)
 
     if n_wells >= 2:
         for i, target in enumerate(targets):
@@ -752,17 +894,25 @@ def render_property_inline_maps_image(blind_well_id: str) -> bytes:
     from app.services import seismic_processor as sp
 
     volume = sp.get_segy_volume()
-    well_features, _excluded = _eligible_well_features(volume)
-    if blind_well_id not in well_features:
+    raw_caches, _excluded = _eligible_well_raw_caches(volume)
+    if blind_well_id not in raw_caches:
         raise ValueError(f"'{blind_well_id}' does not currently have a usable direct tie.")
-    if len(well_features) < 2:
-        raise ValueError(f"Only {len(well_features)} well(s) have a usable tie -- need at least 2.")
+    if len(raw_caches) < 2:
+        raise ValueError(f"Only {len(raw_caches)} well(s) have a usable tie -- need at least 2.")
 
     targets = list(TARGET_LAS_NAMES.keys())
     configs = {t: get_best_config(t) for t in targets}
-    train_ids = [w for w in well_features if w != blind_well_id]
-    fitted = {t: _fit_model(well_features, train_ids, t, configs[t]) for t in targets}
-    blind = well_features[blind_well_id]
+    train_ids = [w for w in raw_caches if w != blind_well_id]
+    fitted = {}
+    for t in targets:
+        well_features_t = _well_features_for_block(raw_caches, t, configs[t][4])
+        if well_features_t is None:
+            raise ValueError(
+                f"'{t}''s grid-search-selected config uses block_half={configs[t][4]:g}ms, which "
+                "collapses target variance for at least one currently-tied well."
+            )
+        fitted[t] = _fit_model(well_features_t, train_ids, t, configs[t])
+    blind = raw_caches[blind_well_id]
 
     section = volume.get_inline_section(blind.inline_number)
     amplitude = np.array(section["amplitude"], dtype=float)  # (n_samples, n_traces)
