@@ -189,9 +189,10 @@ export function getSeismicExportUrl(datasetId: string): string {
 export async function getWellSeismicTie(
   wellId: string,
   seismicDatasetId: string,
+  freqHz?: number,
 ): Promise<WellSeismicTieResponse> {
   const { data } = await http.get<WellSeismicTieResponse>(`/tie/${wellId}`, {
-    params: { seismic_dataset_id: seismicDatasetId },
+    params: { seismic_dataset_id: seismicDatasetId, ...(freqHz != null ? { freq_hz: freqHz } : {}) },
   });
   return data;
 }
@@ -203,6 +204,19 @@ export async function getAllWellSeismicTies(
     params: { seismic_dataset_id: seismicDatasetId },
   });
   return data;
+}
+
+/** URL for the static (Matplotlib) PNG: the tie's Ricker wavelet plus the
+ * inline section through the well's own tied trace, with the synthetic
+ * trace overlaid as a wiggle -- see tie_service.render_tie_section_image. */
+export function getTieSectionImageUrl(
+  wellId: string,
+  seismicDatasetId: string,
+  freqHz?: number,
+): string {
+  const params = new URLSearchParams({ seismic_dataset_id: seismicDatasetId });
+  if (freqHz != null) params.set("freq_hz", String(freqHz));
+  return `${BASE_URL}/tie/${wellId}/section-image?${params.toString()}`;
 }
 
 // -----------------------------------------------------------------------------

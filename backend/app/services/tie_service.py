@@ -133,7 +133,15 @@ def _trace_inline_crossline(trace_inline: np.ndarray, trace_crossline: np.ndarra
     )
 
 
-def get_well_seismic_tie(well_id: str, dataset_id: str) -> WellSeismicTieResponse:
+def _compute_tie(well_id: str, dataset_id: str, freq_hz: float | None = None) -> dict:
+    """Shared by get_well_seismic_tie and render_tie_section_image.
+
+    freq_hz: when given, the frequency search is pinned to this single
+    candidate (polarity and bulk shift are still optimized around it) --
+    a manual override of the normal auto-optimized frequency sweep, for
+    a reviewer who wants to see what a specific wavelet frequency's tie
+    looks like rather than trusting the automatic best-correlation pick.
+    """
     config = _load_config()
     max_shift_ms = float(config.get("tie_search_max_shift_ms", 100.0))
 
@@ -164,32 +172,134 @@ def get_well_seismic_tie(well_id: str, dataset_id: str) -> WellSeismicTieRespons
     real_trace = traces[trace_idx].astype(float)
 
     t_rc, rc = reflectivity_from_time_axis(curves["DPTM"], curves["DT"], curves["RHOB"], seismic_dt_ms)
-    tie = search_best_tie_full_window(
-        t_rc, rc, twt_axis_ms, seismic_dt_ms, real_trace, max_shift_ms=max_shift_ms
-    )
+    search_kwargs = {"max_shift_ms": max_shift_ms}
+    if freq_hz is not None:
+        search_kwargs["candidate_freqs_hz"] = (float(freq_hz),)
+    tie = search_best_tie_full_window(t_rc, rc, twt_axis_ms, seismic_dt_ms, real_trace, **search_kwargs)
     boundary_pinned = abs(tie.bulk_shift_ms) >= (1.0 - BOUNDARY_PINNED_FRACTION) * max_shift_ms
 
+    return dict(
+        tie=tie,
+        trace_idx=trace_idx,
+        inline=inline,
+        crossline=crossline,
+        distance_m=distance_m,
+        tie_method=tie_method,
+        geometry_warning=geometry_warning,
+        boundary_pinned=boundary_pinned,
+        max_shift_ms=max_shift_ms,
+        traces=traces,
+        twt_axis_ms=twt_axis_ms,
+        trace_inline=trace_inline,
+        trace_crossline=trace_crossline,
+        seismic_dt_ms=seismic_dt_ms,
+    )
+
+
+def get_well_seismic_tie(well_id: str, dataset_id: str, freq_hz: float | None = None) -> WellSeismicTieResponse:
+    r = _compute_tie(well_id, dataset_id, freq_hz)
+    tie = r["tie"]
     return WellSeismicTieResponse(
         well_id=well_id,
         dataset_id=dataset_id,
-        trace_index=trace_idx,
-        distance_m=distance_m,
-        tie_method=tie_method,
-        inline=inline,
-        crossline=crossline,
+        trace_index=r["trace_idx"],
+        distance_m=r["distance_m"],
+        tie_method=r["tie_method"],
+        inline=r["inline"],
+        crossline=r["crossline"],
         best_freq_hz=tie.best_freq_hz,
         polarity=tie.polarity,
         bulk_shift_ms=tie.bulk_shift_ms,
         correlation=tie.correlation,
-        max_shift_ms=max_shift_ms,
-        boundary_pinned=boundary_pinned,
+        max_shift_ms=r["max_shift_ms"],
+        boundary_pinned=r["boundary_pinned"],
         n_used=tie.n_used,
         time_ms=tie.time_ms.tolist(),
         synthetic_amplitude=tie.synthetic_amplitude.tolist(),
         seismic_amplitude=tie.seismic_amplitude.tolist(),
         reflectivity=tie.reflectivity.tolist(),
-        geometry_warning=geometry_warning,
+        geometry_warning=r["geometry_warning"],
     )
+
+
+def render_tie_section_image(well_id: str, dataset_id: str, freq_hz: float | None = None) -> bytes:
+    """PNG: the Ricker wavelet used for this tie (left) + the inline
+    section through the well's own tied trace, with the tie's synthetic
+    trace overlaid as a filled wiggle at the well's crossline position
+    (right) -- lets a reviewer see how the single-trace synthetic-vs-real
+    match (the interactive overlay chart above) sits inside the
+    surrounding section, not just at that one trace in isolation.
+    freq_hz: same manual-override meaning as get_well_seismic_tie's."""
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from app.well_seismic_tie import ricker_wavelet
+
+    r = _compute_tie(well_id, dataset_id, freq_hz)
+    tie = r["tie"]
+    inline, crossline = r["inline"], r["crossline"]
+    if inline is None or crossline is None:
+        raise TieError(
+            f"Well '{well_id}''s tied trace has no inline/crossline header info -- cannot render a section."
+        )
+
+    traces = r["traces"]
+    twt_axis_ms = r["twt_axis_ms"]
+    trace_inline_f = np.asarray(r["trace_inline"], dtype=float)
+    trace_crossline_f = np.asarray(r["trace_crossline"], dtype=float)
+    seismic_dt_ms = r["seismic_dt_ms"]
+
+    finite = np.isfinite(trace_inline_f) & np.isfinite(trace_crossline_f)
+    mask = finite & (np.round(trace_inline_f) == inline)
+    idxs = np.where(mask)[0]
+    if len(idxs) < 2:
+        raise TieError(f"Only {len(idxs)} trace(s) share inline {inline} -- not enough to render a section.")
+    order = np.argsort(trace_crossline_f[idxs])
+    idxs = idxs[order]
+    xl_axis = trace_crossline_f[idxs]
+    amplitude = traces[idxs].T.astype(float)  # (n_samples, n_traces_in_line)
+    max_abs = float(np.abs(amplitude).max()) or 1e-6
+
+    _, wavelet = ricker_wavelet(tie.best_freq_hz, seismic_dt_ms / 1000.0)
+    wav_t_ms = (np.arange(len(wavelet)) - len(wavelet) // 2) * seismic_dt_ms
+
+    fig, (ax_wav, ax_sec) = plt.subplots(1, 2, figsize=(11, 6), dpi=150, gridspec_kw={"width_ratios": [1, 4]})
+
+    ax_wav.plot(wavelet, wav_t_ms, color="0.2", linewidth=1)
+    ax_wav.fill_betweenx(wav_t_ms, 0, wavelet, where=(wavelet >= 0), color="#DC2626", alpha=0.6)
+    ax_wav.fill_betweenx(wav_t_ms, 0, wavelet, where=(wavelet < 0), color="#2563EB", alpha=0.6)
+    ax_wav.invert_yaxis()
+    ax_wav.axvline(0, color="0.6", linewidth=0.6)
+    ax_wav.set_ylabel("Time (ms)")
+    ax_wav.set_xlabel("Amplitude")
+    ax_wav.set_title(f"Ricker {tie.best_freq_hz:.0f}Hz")
+
+    mesh = ax_sec.pcolormesh(
+        xl_axis, twt_axis_ms, amplitude, cmap="seismic", vmin=-max_abs, vmax=max_abs, shading="auto"
+    )
+    ax_sec.invert_yaxis()
+    ax_sec.set_xlabel("Crossline")
+    ax_sec.set_title(f"Inline {inline} -- synthetic vs. seismic at {well_id}")
+    fig.colorbar(mesh, ax=ax_sec, label="Amplitude", pad=0.01)
+
+    syn = np.asarray(tie.synthetic_amplitude, dtype=float)
+    syn_norm = syn / (np.abs(syn).max() or 1e-6)
+    deflection = (float(xl_axis.max() - xl_axis.min()) or 1.0) * 0.03
+    xs = crossline + syn_norm * deflection
+    ax_sec.fill_betweenx(tie.time_ms, crossline, xs, color="black", alpha=0.85, linewidth=0)
+    ax_sec.plot(xs, tie.time_ms, color="black", linewidth=0.6)
+    ax_sec.axvline(crossline, color="black", linestyle=":", linewidth=0.8)
+    ax_sec.text(crossline, float(twt_axis_ms.min()), f" {well_id}", fontsize=8, va="bottom")
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
 
 
 def get_all_well_ties(dataset_id: str) -> WellSeismicTieBatchResponse:

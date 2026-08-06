@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Plot from "react-plotly.js";
-import { getAllWellSeismicTies, getWellSeismicTie, listSeismic } from "@/api/client";
+import { getAllWellSeismicTies, getTieSectionImageUrl, getWellSeismicTie, listSeismic } from "@/api/client";
 import type { WellSeismicTieRow } from "@/api/types";
 import { useChartColors, usePlotlyLayout, type ChartColors } from "@/styles/tokens";
 import { useAppStore } from "@/store/useAppStore";
@@ -34,6 +34,23 @@ export default function WellSeismicTie() {
   const [sortAsc, setSortAsc] = useState(false);
   const activeWellId = useAppStore((s) => s.activeWellId);
   const activeDatasetId = useAppStore((s) => s.activeDatasetId);
+
+  // Manual wavelet-frequency override for the selected well's tie -- null
+  // means "auto-optimize over the full frequency grid" (the default).
+  const [manualFreqHz, setManualFreqHz] = useState<number | null>(null);
+  const [freqDraft, setFreqDraft] = useState<string>("");
+  const [sectionImageError, setSectionImageError] = useState(false);
+
+  // A newly selected well starts back at auto-optimize -- a pinned
+  // frequency from a previous well is very unlikely to make sense for a
+  // different one.
+  useEffect(() => {
+    setManualFreqHz(null);
+  }, [selectedWellId]);
+
+  useEffect(() => {
+    setSectionImageError(false);
+  }, [selectedWellId, manualFreqHz, datasetId]);
 
   useEffect(() => {
     if (!datasetId && datasetsQuery.data && datasetsQuery.data.length > 0) {
@@ -74,10 +91,22 @@ export default function WellSeismicTie() {
   }, [batchQuery.data]);
 
   const detailQuery = useQuery({
-    queryKey: ["well-seismic-tie", selectedWellId, datasetId],
-    queryFn: () => getWellSeismicTie(selectedWellId!, datasetId!),
+    queryKey: ["well-seismic-tie", selectedWellId, datasetId, manualFreqHz],
+    queryFn: () => getWellSeismicTie(selectedWellId!, datasetId!, manualFreqHz ?? undefined),
     enabled: Boolean(selectedWellId && datasetId),
   });
+
+  // Keep the frequency input showing the currently-resolved frequency
+  // (auto-optimized, or the pinned value echoed back) so it always reflects
+  // what's actually plotted rather than a stale draft.
+  useEffect(() => {
+    if (detailQuery.data) setFreqDraft(detailQuery.data.best_freq_hz.toFixed(1));
+  }, [detailQuery.data]);
+
+  function applyFreqDraft() {
+    const v = parseFloat(freqDraft);
+    if (!Number.isNaN(v) && v > 0) setManualFreqHz(v);
+  }
 
   const sortedRows = useMemo(() => {
     const rows = batchQuery.data?.rows ?? [];
@@ -305,6 +334,44 @@ export default function WellSeismicTie() {
 
       {selectedWellId && (
         <div className="space-y-3">
+          <div className="bg-surface border border-border rounded-xl shadow-card px-4 py-3 flex flex-wrap items-center gap-3">
+            <span className="text-xs font-semibold text-ink-muted">Wavelet frequency</span>
+            <input
+              type="number"
+              step={0.5}
+              min={1}
+              value={freqDraft}
+              onChange={(e) => setFreqDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyFreqDraft();
+              }}
+              className="w-24 text-sm border border-border-strong rounded-lg px-2 py-1"
+            />
+            <span className="text-xs text-ink-faint">Hz</span>
+            <button
+              type="button"
+              onClick={applyFreqDraft}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-accent text-white hover:opacity-90 transition-opacity"
+            >
+              Apply
+            </button>
+            <button
+              type="button"
+              onClick={() => setManualFreqHz(null)}
+              disabled={manualFreqHz === null}
+              className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-border-strong text-ink-muted disabled:opacity-40 disabled:cursor-not-allowed hover:bg-surface-sunken transition-colors"
+            >
+              Auto-optimize
+            </button>
+            {manualFreqHz !== null ? (
+              <span className="text-xs text-orange-strong font-medium">
+                Manual override: {manualFreqHz.toFixed(1)}Hz (polarity/shift re-optimized around it)
+              </span>
+            ) : (
+              <span className="text-xs text-ink-faint">Auto-optimizing over the full frequency grid</span>
+            )}
+          </div>
+
           {detailQuery.isLoading && <div className="h-96 rounded-xl bg-surface-sunken animate-pulse" />}
 
           {detailQuery.isError && (
@@ -336,58 +403,76 @@ export default function WellSeismicTie() {
                 {detailQuery.data.bulk_shift_ms.toFixed(0)}ms
               </p>
 
-              <div className="flex justify-center">
-              <Plot
-                data={[
-                  {
-                    x: detailQuery.data.synthetic_amplitude.map((v) => Math.max(v, 0)),
-                    y: detailQuery.data.time_ms,
-                    type: "scatter",
-                    mode: "lines",
-                    fill: "tozerox",
-                    fillcolor: `${colors.orange}4D`,
-                    line: { width: 0 },
-                    showlegend: false,
-                    hoverinfo: "skip",
-                  },
-                  {
-                    x: detailQuery.data.seismic_amplitude,
-                    y: detailQuery.data.time_ms,
-                    type: "scatter",
-                    mode: "lines",
-                    name: "Extracted seismic",
-                    line: { color: colors.ink, width: 1.5 },
-                  },
-                  {
-                    x: detailQuery.data.synthetic_amplitude,
-                    y: detailQuery.data.time_ms,
-                    type: "scatter",
-                    mode: "lines",
-                    name: "Synthetic",
-                    line: { color: colors.orange, width: 1.5 },
-                  },
-                ]}
-                layout={{
-                  ...plotlyLayout,
-                  autosize: true,
-                  height: 560,
-                  width: 420,
-                  xaxis: {
-                    ...plotlyLayout.xaxis,
-                    title: { text: "Normalized amplitude" },
-                    zeroline: true,
-                    zerolinecolor: colors.borderStrong,
-                  },
-                  yaxis: {
-                    ...plotlyLayout.yaxis,
-                    title: { text: "Two-Way Time (ms)" },
-                    autorange: "reversed",
-                  },
-                  legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.06, yanchor: "bottom" },
-                  margin: { t: 30, r: 20, b: 50, l: 55 },
-                }}
-                config={{ displaylogo: false }}
-              />
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 items-start">
+                <div className="lg:col-span-2">
+                  <Plot
+                    data={[
+                      {
+                        x: detailQuery.data.synthetic_amplitude.map((v) => Math.max(v, 0)),
+                        y: detailQuery.data.time_ms,
+                        type: "scatter",
+                        mode: "lines",
+                        fill: "tozerox",
+                        fillcolor: `${colors.orange}4D`,
+                        line: { width: 0 },
+                        showlegend: false,
+                        hoverinfo: "skip",
+                      },
+                      {
+                        x: detailQuery.data.seismic_amplitude,
+                        y: detailQuery.data.time_ms,
+                        type: "scatter",
+                        mode: "lines",
+                        name: "Extracted seismic",
+                        line: { color: colors.ink, width: 1.5 },
+                      },
+                      {
+                        x: detailQuery.data.synthetic_amplitude,
+                        y: detailQuery.data.time_ms,
+                        type: "scatter",
+                        mode: "lines",
+                        name: "Synthetic",
+                        line: { color: colors.orange, width: 1.5 },
+                      },
+                    ]}
+                    layout={{
+                      ...plotlyLayout,
+                      autosize: true,
+                      height: 560,
+                      xaxis: {
+                        ...plotlyLayout.xaxis,
+                        title: { text: "Normalized amplitude" },
+                        zeroline: true,
+                        zerolinecolor: colors.borderStrong,
+                      },
+                      yaxis: {
+                        ...plotlyLayout.yaxis,
+                        title: { text: "Two-Way Time (ms)" },
+                        autorange: "reversed",
+                      },
+                      legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.06, yanchor: "bottom" },
+                      margin: { t: 30, r: 20, b: 50, l: 55 },
+                    }}
+                    style={{ width: "100%" }}
+                    useResizeHandler
+                    config={{ displaylogo: false }}
+                  />
+                </div>
+
+                <div className="lg:col-span-3">
+                  {sectionImageError ? (
+                    <div className="h-full min-h-[300px] flex items-center justify-center text-center text-xs text-ink-faint border border-dashed border-border rounded-lg p-4">
+                      Section view unavailable for this well (no inline/crossline geometry on the tied trace).
+                    </div>
+                  ) : (
+                    <img
+                      src={getTieSectionImageUrl(selectedWellId, datasetId!, manualFreqHz ?? undefined)}
+                      alt={`${selectedWellId} inline section with tie overlay`}
+                      className="w-full h-auto rounded-lg border border-border"
+                      onError={() => setSectionImageError(true)}
+                    />
+                  )}
+                </div>
               </div>
             </div>
           )}

@@ -179,6 +179,135 @@ class TestTieResultFields:
         assert result.crossline is not None
 
 
+class TestManualFrequencyOverride:
+    def _coords_dataset(self, seismic_repo, well_x, well_y, n_traces=50):
+        xs = well_x - 1000 + np.arange(n_traces) * 40.0
+        headers = [
+            {
+                segyio.TraceField.CDP_X: int(xs[i]),
+                segyio.TraceField.CDP_Y: int(well_y),
+                segyio.TraceField.SourceGroupScalar: 1,
+                segyio.TraceField.INLINE_3D: 100,
+                segyio.TraceField.CROSSLINE_3D: 200 + i,
+            }
+            for i in range(n_traces)
+        ]
+        segy_bytes = _write_segy(seismic_repo.base_dir, headers)
+        return seismic_service.process_and_store_segy_bytes(segy_bytes, "freq_override.sgy", repo=seismic_repo)
+
+    def test_freq_hz_pins_the_result_to_that_frequency(self, monkeypatch, repos, loaded_well):
+        well_repo, seismic_repo = repos
+        _patch_services(monkeypatch, well_repo, seismic_repo)
+        summary = self._coords_dataset(seismic_repo, loaded_well.well_x, loaded_well.well_y)
+
+        auto = tie_service.get_well_seismic_tie(loaded_well.well_id, summary.dataset_id)
+        manual = tie_service.get_well_seismic_tie(loaded_well.well_id, summary.dataset_id, freq_hz=37.0)
+
+        assert manual.best_freq_hz == 37.0
+        # Polarity/shift are still (re-)optimized for the pinned frequency,
+        # not just copied from the auto search.
+        assert manual.polarity in (1, -1)
+        assert -100.0 <= manual.bulk_shift_ms <= 100.0
+        # Not asserting manual != auto's freq: on random synthetic test
+        # noise the auto search could coincidentally land on 37Hz too --
+        # the meaningful assertion is that the override is honored exactly.
+
+    def test_no_freq_hz_still_auto_optimizes(self, monkeypatch, repos, loaded_well):
+        well_repo, seismic_repo = repos
+        _patch_services(monkeypatch, well_repo, seismic_repo)
+        summary = self._coords_dataset(seismic_repo, loaded_well.well_x, loaded_well.well_y)
+
+        result = tie_service.get_well_seismic_tie(loaded_well.well_id, summary.dataset_id, freq_hz=None)
+        assert result.best_freq_hz > 0
+
+
+class TestRenderTieSectionImage:
+    def test_returns_nonempty_png(self, monkeypatch, repos, loaded_well):
+        well_repo, seismic_repo = repos
+        _patch_services(monkeypatch, well_repo, seismic_repo)
+        n_traces = 50
+        xs = loaded_well.well_x - 1000 + np.arange(n_traces) * 40.0
+        headers = [
+            {
+                segyio.TraceField.CDP_X: int(xs[i]),
+                segyio.TraceField.CDP_Y: int(loaded_well.well_y),
+                segyio.TraceField.SourceGroupScalar: 1,
+                segyio.TraceField.INLINE_3D: 100,
+                segyio.TraceField.CROSSLINE_3D: 200 + i,
+            }
+            for i in range(n_traces)
+        ]
+        segy_bytes = _write_segy(seismic_repo.base_dir, headers)
+        summary = seismic_service.process_and_store_segy_bytes(segy_bytes, "section.sgy", repo=seismic_repo)
+
+        png_bytes = tie_service.render_tie_section_image(loaded_well.well_id, summary.dataset_id)
+        assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"  # PNG magic bytes
+        assert len(png_bytes) > 1000
+
+    def test_honors_freq_hz_override(self, monkeypatch, repos, loaded_well):
+        well_repo, seismic_repo = repos
+        _patch_services(monkeypatch, well_repo, seismic_repo)
+        n_traces = 50
+        xs = loaded_well.well_x - 1000 + np.arange(n_traces) * 40.0
+        headers = [
+            {
+                segyio.TraceField.CDP_X: int(xs[i]),
+                segyio.TraceField.CDP_Y: int(loaded_well.well_y),
+                segyio.TraceField.SourceGroupScalar: 1,
+                segyio.TraceField.INLINE_3D: 100,
+                segyio.TraceField.CROSSLINE_3D: 200 + i,
+            }
+            for i in range(n_traces)
+        ]
+        segy_bytes = _write_segy(seismic_repo.base_dir, headers)
+        summary = seismic_service.process_and_store_segy_bytes(segy_bytes, "section2.sgy", repo=seismic_repo)
+
+        png_bytes = tie_service.render_tie_section_image(loaded_well.well_id, summary.dataset_id, freq_hz=30.0)
+        assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_raises_when_inline_missing(self, monkeypatch, repos, loaded_well):
+        well_repo, seismic_repo = repos
+        _patch_services(monkeypatch, well_repo, seismic_repo)
+        n_traces = 6000
+        headers = [{} for _ in range(n_traces)]
+        segy_bytes = _write_segy(seismic_repo.base_dir, headers, n_samples=150)
+        summary = seismic_service.process_and_store_segy_bytes(segy_bytes, "no_inline.sgy", repo=seismic_repo)
+
+        # A real SEG-Y with genuinely absent (non-standard-location) 3D
+        # geometry is what this guards against, but segyio's own byte
+        # locations default to the standard bytes regardless of whether
+        # this test's synthetic headers set them, so the round-tripped
+        # dataset would read back inline/crossline as 0 (a "valid" value),
+        # not "missing". Patch the loaded dataset's inline/crossline arrays
+        # to NaN directly -- the same "not available" convention segy_loader
+        # itself uses when it can't resolve geometry byte locations at all
+        # -- to exercise the actual missing-geometry guard in
+        # render_tie_section_image.
+        real_get_dataset = tie_service.seismic_service.get_seismic_dataset
+
+        def _get_dataset_no_geometry(dataset_id):
+            metadata, traces, twt_axis_ms, trace_x, trace_y, trace_inline, trace_crossline, attrs = (
+                real_get_dataset(dataset_id)
+            )
+            return (
+                metadata,
+                traces,
+                twt_axis_ms,
+                trace_x,
+                trace_y,
+                np.full_like(trace_inline, np.nan),
+                np.full_like(trace_crossline, np.nan),
+                attrs,
+            )
+
+        monkeypatch.setattr(tie_service.seismic_service, "get_seismic_dataset", _get_dataset_no_geometry)
+
+        from app.well_seismic_tie import TieError
+
+        with pytest.raises(TieError):
+            tie_service.render_tie_section_image(loaded_well.well_id, summary.dataset_id)
+
+
 class TestBatchTie:
     @pytest.fixture
     def loaded_wells(self, repos):
