@@ -306,57 +306,6 @@ export interface CrosslineSectionResponse {
   amplitude: number[][]; // shape (n_samples, n_traces_in_line)
 }
 
-export interface PredictionExcludedWell {
-  well_id: string;
-  reason: string;
-}
-
-export interface PredictionResult {
-  r2: number | null;
-  n_train_samples: number;
-  n_train_wells: number;
-  n_test_samples: number;
-  y_true: number[];
-  y_pred: number[];
-  depths_m: number[];
-  twt_ms: number[];
-}
-
-export type PredictionTarget = "vsh" | "phie" | "swe";
-
-export interface PredictionResponse {
-  status: "validated" | "insufficient_data";
-  message: string | null;
-  blind_well_id: string;
-  target: PredictionTarget;
-  model_config_description: string;
-  inline_number: number | null;
-  crossline_number: number | null;
-  tie_correlation: number | null;
-  tie_best_freq_hz: number | null;
-  tie_polarity: number | null;
-  tie_bulk_shift_ms: number | null;
-  tie_source: string | null;
-  excluded_wells: PredictionExcludedWell[];
-  n_train_wells: number;
-  result: PredictionResult | null;
-}
-
-export interface PredictionGridSearchEntry {
-  description: string;
-  r2: number | null;
-  error: string | null;
-}
-
-export interface PredictionGridSearchResponse {
-  target: PredictionTarget;
-  best_config_description: string | null;
-  best_r2: number | null;
-  n_wells: number;
-  excluded_wells: PredictionExcludedWell[];
-  leaderboard: PredictionGridSearchEntry[];
-}
-
 export interface CheckshotUploadResponse {
   wells: Record<string, number>; // well_id -> n_points stored
 }

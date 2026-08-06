@@ -21,9 +21,6 @@ import type {
   InlineSectionResponse,
   NearestTraceResponse,
   RecalibrateResponse,
-  PredictionGridSearchResponse,
-  PredictionResponse,
-  PredictionTarget,
   SaveTiePointsRequest,
   SectionWellLogsResponse,
   SeismicAttributesResponse,
@@ -238,49 +235,10 @@ export function getSectionImageUrl(orientation: "inline" | "crossline", lineNumb
   return `${BASE_URL}/api/seismic/section-image?orientation=${orientation}&line_number=${lineNumber}`;
 }
 
-export async function getPrediction(
-  blindWellId: string,
-  target: PredictionTarget,
-): Promise<PredictionResponse> {
-  const { data } = await http.get<PredictionResponse>("/api/seismic/prediction", {
-    params: { blind_well_id: blindWellId, target },
-  });
-  return data;
-}
-
-export async function getPredictionGridSearch(
-  target: PredictionTarget,
-  force = false,
-): Promise<PredictionGridSearchResponse> {
-  const { data } = await http.get<PredictionGridSearchResponse>("/api/seismic/prediction-grid-search", {
-    params: { target, force },
-  });
-  return data;
-}
-
-export function getPredictionImageUrl(blindWellId: string, target: PredictionTarget): string {
-  const params = new URLSearchParams({ blind_well_id: blindWellId, target });
-  return `${BASE_URL}/api/seismic/prediction-image?${params.toString()}`;
-}
-
-export function getPredictionLoocvHeatmapUrl(): string {
-  return `${BASE_URL}/api/seismic/prediction-loocv-heatmap`;
-}
-
-export function getPredictionFrequencyMapUrl(blindWellId: string): string {
-  const params = new URLSearchParams({ blind_well_id: blindWellId });
-  return `${BASE_URL}/api/seismic/prediction-frequency-map?${params.toString()}`;
-}
-
-export function getPredictionInlineMapsUrl(blindWellId: string): string {
-  const params = new URLSearchParams({ blind_well_id: blindWellId });
-  return `${BASE_URL}/api/seismic/prediction-inline-maps?${params.toString()}`;
-}
-
 /** Upload a real checkshot / time-depth-survey workbook (.xlsx, one sheet
  * per well). Every well-to-seismic tie resolved via direct_tie_service
- * (Spectral Property Prediction, Section well-log overlay, Prediction
- * page) picks this up automatically on its next call. */
+ * (Spectral Property Prediction, Section well-log overlay) picks this up
+ * automatically on its next call. */
 export async function uploadCheckshotWorkbook(file: File): Promise<CheckshotUploadResponse> {
   const form = new FormData();
   form.append("file", file);

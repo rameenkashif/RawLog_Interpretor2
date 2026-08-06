@@ -15,9 +15,8 @@ location-accurate than coordinate_calibration_service's calibrated fit --
 see spectral_property_prediction_service.py's docstring for the numbers)
 resolution lives in exactly one place, shared by every caller on the
 single-active-volume side that wants it: currently
-spectral_property_prediction_service.py, the Inline/Crossline Section
-well-log overlay (section_well_log_service.py), and
-prediction_pipeline_service.py.
+spectral_property_prediction_service.py and the Inline/Crossline Section
+well-log overlay (section_well_log_service.py).
 
 Checkshot-anchored tie: if a real checkshot survey has been uploaded for
 this well (see checkshot_service.py) and at least one of its stations

@@ -24,8 +24,6 @@ from app.models.schemas import (
     CoordinateCalibrationReportResponse,
     CrosslineSectionResponse,
     InlineSectionResponse,
-    PredictionGridSearchResponse,
-    PredictionResponse,
     RecalibrateRequest,
     RecalibrateResponse,
     SectionWellLogsResponse,
@@ -49,7 +47,6 @@ from app.coordinate_calibration import CoordinateCalibrationError
 from app.coordinate_tie_override_repository import WellTraceOverride, get_coordinate_tie_override_repository
 from app.services import checkshot_service
 from app.services import coordinate_calibration_service as ccs
-from app.services import prediction_pipeline_service as pps
 from app.services import section_image_service as swi
 from app.services import section_well_log_service as swl
 from app.services import seismic_processor as sp
@@ -136,61 +133,14 @@ async def section_image(
         _handle(exc)
 
 
-@router.get("/prediction", response_model=PredictionResponse)
-async def prediction(
-    blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
-    target: str = Query(..., description="'vsh', 'phie', or 'swe'"),
-) -> PredictionResponse:
-    """Blind-well VSH/PHIE/SWE prediction -- the "improved pipeline"
-    (PCA + instantaneous attrs + per-property best model, chosen by an
-    actual in-app grid search, see prediction_pipeline_service.py's
-    run_grid_search/get_best_config). The winning recipe isn't
-    caller-selectable -- it's returned in model_config_description."""
-    try:
-        return PredictionResponse(**pps.get_prediction_result(blind_well_id, target))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        _handle(exc)
-
-
-@router.get("/prediction-grid-search", response_model=PredictionGridSearchResponse)
-async def prediction_grid_search(
-    target: str = Query(..., description="'vsh', 'phie', or 'swe'"),
-    force: bool = Query(
-        False,
-        description=(
-            "Re-run the search even if a cached result exists (e.g. after wells/ties changed). "
-            "A full search is expensive -- tens of seconds to a few minutes -- so this defaults "
-            "to reusing the in-process cache, not re-searching on every call."
-        ),
-    ),
-) -> PredictionGridSearchResponse:
-    """The full 48-candidate leaderboard (spectrum x PCA option x
-    instantaneous-attrs x model family) for `target`, scored by pooled
-    leave-one-well-out R^2 -- see prediction_pipeline_service.py's
-    run_grid_search. This is what actually picks the config every other
-    /prediction* endpoint uses for that target."""
-    try:
-        return PredictionGridSearchResponse(**pps.get_grid_search_result(target, force=force))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        _handle(exc)
-
-
 @router.post("/checkshot/upload", response_model=CheckshotUploadResponse)
 async def upload_checkshot(file: UploadFile = File(...)) -> CheckshotUploadResponse:
     """Upload a real checkshot / time-depth-survey workbook (.xlsx, one
     sheet per well, TWT(ms) + Depth(m) columns -- see checkshot_service.py
     for the exact layout expected). Every well-to-seismic tie resolved via
     direct_tie_service (Spectral Property Prediction, the Inline/
-    Crossline Section well-log overlay, and the Prediction page) picks
-    this up automatically on its next call -- no separate "apply" step.
-    Grid-search-selected model configs are cached per target
-    (prediction_pipeline_service._GRID_SEARCH_CACHE); re-run a search
-    with force=true (see /prediction-grid-search) to pick up a tie that
-    changed because of this upload."""
+    Crossline Section well-log overlay) picks this up automatically on
+    its next call -- no separate "apply" step."""
     try:
         content = await file.read()
         counts = checkshot_service.store_checkshot_workbook(content)
@@ -205,70 +155,6 @@ async def checkshot_status() -> CheckshotStatusResponse:
     any uploaded checkshot coverage. A well NOT in this list has no
     checkshot data and will use the full statistical tie search."""
     return CheckshotStatusResponse(wells=checkshot_service.get_checkshot_status())
-
-
-@router.get("/prediction-image")
-async def prediction_image(
-    blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
-    target: str = Query(..., description="'vsh', 'phie', or 'swe'"),
-) -> Response:
-    """Static (Matplotlib) PNG: side-by-side TRUE vs. PREDICTED inline
-    section for the blind well -- see prediction_pipeline_service.py's
-    render_prediction_image."""
-    try:
-        png_bytes = pps.render_prediction_image(blind_well_id, target)
-        return Response(content=png_bytes, media_type="image/png")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        _handle(exc)
-
-
-@router.get("/prediction-loocv-heatmap")
-async def prediction_loocv_heatmap() -> Response:
-    """Static (Matplotlib) PNG: TRUE pooled leave-one-well-out R^2 (every
-    well takes a turn held out) for VSH/PHIE/SWE, each under its own
-    BEST_CONFIG model -- see prediction_pipeline_service.py's
-    render_full_loocv_heatmap_image. Not scoped to any one blind well."""
-    try:
-        png_bytes = pps.render_full_loocv_heatmap_image()
-        return Response(content=png_bytes, media_type="image/png")
-    except Exception as exc:  # noqa: BLE001
-        _handle(exc)
-
-
-@router.get("/prediction-frequency-map")
-async def prediction_frequency_map(
-    blind_well_id: str = Query(..., description="Well whose inline to show the frequency map for"),
-) -> Response:
-    """Static (Matplotlib) PNG: amplitude-spectrum frequency map for the
-    inline through the given well -- see prediction_pipeline_service.py's
-    render_frequency_map_image."""
-    try:
-        png_bytes = pps.render_frequency_map_image(blind_well_id)
-        return Response(content=png_bytes, media_type="image/png")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        _handle(exc)
-
-
-@router.get("/prediction-inline-maps")
-async def prediction_inline_maps(
-    blind_well_id: str = Query(..., description="Well to hold out and predict blind"),
-) -> Response:
-    """Static (Matplotlib) PNG: real seismic vs. predicted VSH/PHIE/SWE
-    painted across the WHOLE inline (not just the well's own location),
-    each property under its own BEST_CONFIG model -- EXPLORATORY, see
-    prediction_pipeline_service.py's render_property_inline_maps_image
-    docstring for the R^2 caveat this renders directly into the image."""
-    try:
-        png_bytes = pps.render_property_inline_maps_image(blind_well_id)
-        return Response(content=png_bytes, media_type="image/png")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        _handle(exc)
 
 
 @router.get("/timeslice", response_model=TimeSliceResponse)

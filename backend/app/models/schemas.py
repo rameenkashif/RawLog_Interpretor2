@@ -794,69 +794,6 @@ class SpectralPropertyModelResponse(BaseModel):
     )
 
 
-# -----------------------------------------------------------------------------
-# Prediction page (blind-well VSH/PHIE/SWE via Ridge regression on CWT/SSWT
-# amplitude, ported from a user-supplied reference pipeline -- see
-# prediction_pipeline_service.py for exactly what was and wasn't changed
-# from that reference).
-# -----------------------------------------------------------------------------
-class PredictionExcludedWell(BaseModel):
-    well_id: str
-    reason: str
-
-
-class PredictionResult(BaseModel):
-    r2: float | None
-    n_train_samples: int
-    n_train_wells: int
-    n_test_samples: int
-    y_true: list[float]
-    y_pred: list[float]
-    depths_m: list[float]
-    twt_ms: list[float]
-
-
-class PredictionResponse(BaseModel):
-    status: str = Field(..., description="'validated' or 'insufficient_data'")
-    message: str | None = None
-    blind_well_id: str
-    target: str = Field(..., description="'vsh', 'phie', or 'swe'")
-    model_config_description: str = Field(
-        ..., description="This target's grid-search-selected recipe, e.g. 'SSWT + instantaneous attrs, PCA-3, RandomForest'"
-    )
-    inline_number: int | None = None
-    crossline_number: int | None = None
-    tie_correlation: float | None = Field(None, description="Direct-tie correlation for the blind well")
-    tie_best_freq_hz: float | None = Field(None, description="Winning Ricker wavelet frequency from the direct tie")
-    tie_polarity: int | None = Field(None, description="+1 or -1, from the direct tie")
-    tie_bulk_shift_ms: float | None = Field(None, description="Winning bulk time shift (ms) from the direct tie")
-    tie_source: str | None = Field(
-        None,
-        description="'checkshot (N valid pt)' if a real checkshot station anchored this tie, else "
-        "'statistical_fallback (no valid checkshot)'",
-    )
-    excluded_wells: list[PredictionExcludedWell]
-    n_train_wells: int
-    result: PredictionResult | None = None
-
-
-class PredictionGridSearchEntry(BaseModel):
-    description: str
-    r2: float | None = Field(None, description="Pooled leave-one-well-out R^2 for this candidate, or null if it failed")
-    error: str | None = Field(None, description="Set if this candidate's fit raised, e.g. a degenerate PCA/model fit")
-
-
-class PredictionGridSearchResponse(BaseModel):
-    target: str
-    best_config_description: str | None = Field(None, description="null only if literally no candidate worked")
-    best_r2: float | None = None
-    n_wells: int
-    excluded_wells: list[PredictionExcludedWell]
-    leaderboard: list[PredictionGridSearchEntry] = Field(
-        ..., description="All 48 candidates, best pooled R^2 first (failures last)"
-    )
-
-
 class CheckshotUploadResponse(BaseModel):
     wells: dict[str, int] = Field(..., description="well_id -> number of checkshot points stored")
 
