@@ -260,8 +260,18 @@ def render_tie_section_image(well_id: str, dataset_id: str, freq_hz: float | Non
         raise TieError(f"Only {len(idxs)} trace(s) share inline {inline} -- not enough to render a section.")
     order = np.argsort(trace_crossline_f[idxs])
     idxs = idxs[order]
-    xl_axis = trace_crossline_f[idxs]
-    amplitude = traces[idxs].T.astype(float)  # (n_samples, n_traces_in_line)
+    xl_full = trace_crossline_f[idxs]
+
+    # Zoom to a window of traces straddling the well's own trace rather than
+    # the whole inline -- a multi-kilometre inline squeezes the handful of
+    # traces that actually matter for this tie into an unreadable sliver.
+    HALF_WINDOW_TRACES = 20
+    center_pos = int(np.argmin(np.abs(xl_full - crossline)))
+    lo = max(0, center_pos - HALF_WINDOW_TRACES)
+    hi = min(len(idxs), center_pos + HALF_WINDOW_TRACES + 1)
+    window_idxs = idxs[lo:hi]
+    xl_axis = trace_crossline_f[window_idxs]
+    amplitude = traces[window_idxs].T.astype(float)  # (n_samples, n_traces_in_window)
     max_abs = float(np.abs(amplitude).max()) or 1e-6
 
     _, wavelet = ricker_wavelet(tie.best_freq_hz, seismic_dt_ms / 1000.0)
@@ -286,13 +296,22 @@ def render_tie_section_image(well_id: str, dataset_id: str, freq_hz: float | Non
     ax_sec.set_title(f"Inline {inline} -- synthetic vs. seismic at {well_id}")
     fig.colorbar(mesh, ax=ax_sec, label="Amplitude", pad=0.01)
 
+    # Synthetic overlay drawn the same way as the wavelet panel -- a
+    # red/blue filled wiggle straddling the well's trace position, not a
+    # solid silhouette -- so it reads as a seismic trace, not a blob.
     syn = np.asarray(tie.synthetic_amplitude, dtype=float)
     syn_norm = syn / (np.abs(syn).max() or 1e-6)
-    deflection = (float(xl_axis.max() - xl_axis.min()) or 1.0) * 0.03
+    trace_spacing = float(np.median(np.abs(np.diff(xl_axis)))) if len(xl_axis) > 1 else 1.0
+    deflection = trace_spacing * 3.0
     xs = crossline + syn_norm * deflection
-    ax_sec.fill_betweenx(tie.time_ms, crossline, xs, color="black", alpha=0.85, linewidth=0)
-    ax_sec.plot(xs, tie.time_ms, color="black", linewidth=0.6)
-    ax_sec.axvline(crossline, color="black", linestyle=":", linewidth=0.8)
+    ax_sec.fill_betweenx(
+        tie.time_ms, crossline, xs, where=(syn_norm >= 0), color="#DC2626", alpha=0.8, linewidth=0, interpolate=True
+    )
+    ax_sec.fill_betweenx(
+        tie.time_ms, crossline, xs, where=(syn_norm < 0), color="#2563EB", alpha=0.8, linewidth=0, interpolate=True
+    )
+    ax_sec.plot(xs, tie.time_ms, color="black", linewidth=0.7)
+    ax_sec.axvline(crossline, color="0.3", linestyle=":", linewidth=0.7)
     ax_sec.text(crossline, float(twt_axis_ms.min()), f" {well_id}", fontsize=8, va="bottom")
 
     fig.tight_layout()
