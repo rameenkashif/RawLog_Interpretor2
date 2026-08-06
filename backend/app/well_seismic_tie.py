@@ -768,27 +768,24 @@ def reflectivity_from_time_axis(
 
 # Widened from the original 15-45Hz/2.5Hz-step (13 candidates) after a
 # cross-implementation investigation found it excluded genuinely winning
-# frequencies for several wells. Floor set to 12Hz (not the reference
-# implementation's 8Hz, and not back to 15Hz) based on downstream
-# evidence, not just tie correlation:
-#   - This survey's own amplitude spectrum has real energy from 8-28.8Hz
-#     (-6dB band), so 8-13Hz isn't spectrally implausible on its own --
-#     ruling out "aliasing artifact" as the concern.
-#   - BUT an 8Hz floor measurably hurt downstream pooled LOOCV R^2 for
-#     SWE (-0.19 vs -0.03 at a 12Hz floor) and PHIE, while only Z-05's
-#     tie actually used anything below 12Hz (Z-02/Z-08's real winners
-#     are AT 12Hz; Z-06 -- the well this investigation started from --
-#     was never really below 15Hz to begin with, landing at 20Hz
-#     regardless of floor). A 12Hz floor recovers nearly all of that
-#     regression (SWE/PHIE clearly better than even the original 15Hz
-#     floor) at a small, near-zero-either-way cost to VSH.
-#   - i.e. the search-space width itself was measurably overfitting
-#     downstream generalization in the 8-11Hz sliver specifically, even
-#     though that band isn't literally noise -- caught by comparing
-#     actual pooled LOOCV R^2 across floor choices, not by inspecting
-#     spectra alone.
+# frequencies for several wells. Floor is 8Hz (matching a reference
+# implementation this app's ties were cross-validated against) -- a
+# 12Hz floor was tried first based on which floor gave the best
+# *pooled LOOCV* R^2 for a downstream VSH/PHIE/SWE prediction model (since
+# removed) on the full 7-well set, but that comparison used the same
+# wells for config selection AND scoring, which is exactly the kind of
+# leakage this codebase has fixed elsewhere (see checkshot anchoring, the
+# mode='same' convolution bug). Re-checked with a genuinely nested
+# cross-validation (outer 7-fold holdout well, inner 6-well pooled LOOCV
+# for config selection ONLY, config never sees the outer test well) --
+# under that honest evaluation, 8Hz beat 12Hz for every property checked
+# (VSH, SWE; both pooled and outlier-robust per-well aggregation),
+# reversing what the leakier full-data comparison suggested. Lesson that
+# outlasts the model that surfaced it: pooled LOOCV over a handful of
+# wells is a config-selection tool, not an honest accuracy number --
+# never report it as "the accuracy" without a genuinely nested check.
 DEFAULT_TIE_SEARCH_FREQS_HZ: tuple[float, ...] = tuple(
-    float(f) for f in np.arange(12.0, 64.0 + 1e-9, 2.0)
+    float(f) for f in np.arange(8.0, 64.0 + 1e-9, 2.0)
 )
 DEFAULT_TIE_SEARCH_MAX_SHIFT_MS = 100.0
 

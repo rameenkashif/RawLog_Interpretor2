@@ -1,6 +1,6 @@
 # Bulk-shift search half-width for search_best_tie_full_window's full-window
 # frequency/polarity/shift sweep, ms. Wavelet frequency candidates are
-# well_seismic_tie.DEFAULT_TIE_SEARCH_FREQS_HZ (12-64 Hz, 2 Hz steps) --
+# well_seismic_tie.DEFAULT_TIE_SEARCH_FREQS_HZ (8-64 Hz, 2 Hz steps) --
 # not configured here, since changing "the" frequency search space changes
 # what a tie even means, not just how far it searches for one.
 tie_search_max_shift_ms: 100
