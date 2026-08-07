@@ -173,6 +173,36 @@ async def trace_overlay_image(
         _handle(exc)
 
 
+@router.get("/{well_id}/section-image")
+async def section_image(
+    well_id: str,
+    wavelet_method: str = Query("statistical"),
+    wavelet_freq_hz: float = Query(25.0, gt=0),
+    density_method: str = Query("rhob"),
+    apply_saved_tie: bool = Query(True),
+    max_shift_ms: float = Query(wst.DEFAULT_MAX_SHIFT_MS, gt=0),
+    auto_optimize_tie: bool = Query(False),
+) -> Response:
+    """Static (Matplotlib) PNG: the inline section around the well's tied
+    trace, synthetic overlaid as a wiggle -- see
+    synthetic_seismogram_service.render_section_image. Same idea as the
+    main Seismic page's Well-to-Seismic Tie section image, applied to this
+    feature's single active SEG-Y volume."""
+    try:
+        png_bytes = sss.render_section_image(
+            well_id,
+            wavelet_method=wavelet_method,
+            wavelet_freq_hz=wavelet_freq_hz,
+            density_method=density_method,
+            apply_saved_tie=apply_saved_tie,
+            max_shift_ms=max_shift_ms,
+            auto_optimize_tie=auto_optimize_tie,
+        )
+        return Response(content=png_bytes, media_type="image/png")
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
 @router.get("/{well_id}/nearest-trace", response_model=NearestTraceResponse)
 async def nearest_trace(well_id: str) -> NearestTraceResponse:
     try:

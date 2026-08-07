@@ -19,12 +19,18 @@ type Domain = "time" | "frequency";
 export default function SyntheticTraceOverlay({ result }: { result: SyntheticSeismogramResponse }) {
   const [domain, setDomain] = useState<Domain>("time");
 
-  const src = getSyntheticImageUrl(result.well_id, "trace-overlay", {
+  const overlaySrc = getSyntheticImageUrl(result.well_id, "trace-overlay", {
     waveletMethod: result.wavelet_method,
     waveletFreqHz: result.wavelet_freq_hz,
     densityMethod: result.density_method,
     autoOptimizeTie: result.auto_optimize_tie,
     domain,
+  });
+  const sectionSrc = getSyntheticImageUrl(result.well_id, "section", {
+    waveletMethod: result.wavelet_method,
+    waveletFreqHz: result.wavelet_freq_hz,
+    densityMethod: result.density_method,
+    autoOptimizeTie: result.auto_optimize_tie,
   });
 
   return (
@@ -67,12 +73,21 @@ export default function SyntheticTraceOverlay({ result }: { result: SyntheticSei
         </div>
       )}
 
-      <div className="bg-surface border border-border rounded-xl p-4 shadow-card">
-        <img
-          src={src}
-          alt={`${result.well_id} synthetic vs. real trace, ${domain} domain`}
-          className="w-full h-auto"
-        />
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 items-start">
+        <div className="lg:col-span-2 bg-surface border border-border rounded-xl p-4 shadow-card">
+          <img
+            src={overlaySrc}
+            alt={`${result.well_id} synthetic vs. real trace, ${domain} domain`}
+            className="w-full h-auto"
+          />
+        </div>
+        <div className="lg:col-span-3 bg-surface border border-border rounded-xl p-4 shadow-card">
+          <img
+            src={sectionSrc}
+            alt={`${result.well_id} inline section with synthetic overlay`}
+            className="w-full h-auto"
+          />
+        </div>
       </div>
     </div>
   );

@@ -296,6 +296,11 @@ class TestRenderImages:
         )
         assert png_bytes[:8] == PNG_MAGIC
 
+    def test_section_image_returns_nonempty_png(self, aligned_well):
+        png_bytes = sss.render_section_image(aligned_well.well_id, wavelet_method="ricker", wavelet_freq_hz=25.0)
+        assert png_bytes[:8] == PNG_MAGIC
+        assert len(png_bytes) > 1000
+
 
 class TestNearestTrace:
     def test_returns_geometry(self, aligned_well):

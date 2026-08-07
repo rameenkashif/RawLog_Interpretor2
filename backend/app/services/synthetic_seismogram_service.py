@@ -537,6 +537,91 @@ def render_trace_overlay_image(well_id: str, domain: str = "time", **generate_kw
     return buf.getvalue()
 
 
+def render_section_image(well_id: str, **generate_kwargs) -> bytes:
+    """PNG: the inline section around the well's tied trace, zoomed to a
+    handful of traces either side, with the synthetic (shifted) overlaid as
+    a red/blue filled wiggle at the well's crossline position -- same
+    convention as tie_service.render_tie_section_image on the main Seismic
+    page's Well-to-Seismic Tie, applied here to this feature's single
+    active SEG-Y volume via SegyVolume.get_inline_section instead of an
+    uploaded dataset."""
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    result = generate(well_id, **generate_kwargs)
+    volume = sp.get_segy_volume()
+    inline, crossline = result["nearest_inline"], result["nearest_crossline"]
+    section = volume.get_inline_section(inline)
+
+    xl_full = np.asarray(section["crossline_axis"], dtype=float)
+    twt_axis_ms = np.asarray(section["twt_axis_ms"], dtype=float)
+    amplitude_full = np.asarray(section["amplitude"], dtype=float)  # (n_samples, n_traces_in_line)
+
+    # Zoom to a small window of traces straddling the well's own trace --
+    # see tie_service.render_tie_section_image's identical reasoning.
+    HALF_WINDOW_TRACES = 6
+    center_pos = int(np.argmin(np.abs(xl_full - crossline)))
+    lo = max(0, center_pos - HALF_WINDOW_TRACES)
+    hi = min(len(xl_full), center_pos + HALF_WINDOW_TRACES + 1)
+    xl_axis = xl_full[lo:hi]
+    amplitude_window = amplitude_full[:, lo:hi]
+
+    # Zoom vertically to where the synthetic actually has content (its
+    # zero-padding elsewhere on the full seismic axis marks "outside the
+    # tied window"), not the volume's entire recorded time range.
+    syn = np.asarray(result["shifted_synthetic"], dtype=float)
+    t_full = np.asarray(result["seismic_twt_ms"], dtype=float)
+    nonzero_idx = np.nonzero(syn)[0]
+    if len(nonzero_idx) > 0:
+        y_data_lo, y_data_hi = float(t_full[nonzero_idx[0]]), float(t_full[nonzero_idx[-1]])
+    else:
+        y_data_lo, y_data_hi = float(t_full[0]), float(t_full[-1])
+    pad = max((y_data_hi - y_data_lo) * 0.25, 20.0)
+    y_lo, y_hi = y_data_lo - pad, y_data_hi + pad
+    time_mask = (twt_axis_ms >= y_lo) & (twt_axis_ms <= y_hi)
+    if time_mask.sum() < 2:
+        time_mask = np.ones_like(twt_axis_ms, dtype=bool)
+        y_lo, y_hi = float(twt_axis_ms.min()), float(twt_axis_ms.max())
+    twt_axis_ms = twt_axis_ms[time_mask]
+    amplitude_window = amplitude_window[time_mask, :]
+    max_abs = float(np.abs(amplitude_window).max()) or 1e-6
+
+    fig, ax = plt.subplots(figsize=(8, 6), dpi=150)
+    mesh = ax.pcolormesh(
+        xl_axis, twt_axis_ms, amplitude_window, cmap="seismic", vmin=-max_abs, vmax=max_abs, shading="auto"
+    )
+    ax.set_ylim(y_hi, y_lo)  # bottom=later time, top=earlier
+    ax.set_xlabel("Crossline")
+    ax.set_ylabel("Two-Way Time (ms)")
+    ax.set_title(f"Inline {inline} — synthetic vs. seismic at {well_id}", fontsize=11)
+    fig.colorbar(mesh, ax=ax, label="Amplitude", pad=0.02)
+
+    syn_window = syn[time_mask]
+    syn_norm = syn_window / (np.abs(syn_window).max() or 1e-6)
+    trace_spacing = float(np.median(np.abs(np.diff(xl_axis)))) if len(xl_axis) > 1 else 1.0
+    deflection = trace_spacing * 3.0
+    xs = crossline + syn_norm * deflection
+    ax.fill_betweenx(
+        twt_axis_ms, crossline, xs, where=(syn_norm >= 0), color="#DC2626", alpha=0.8, linewidth=0, interpolate=True
+    )
+    ax.fill_betweenx(
+        twt_axis_ms, crossline, xs, where=(syn_norm < 0), color="#2563EB", alpha=0.8, linewidth=0, interpolate=True
+    )
+    ax.plot(xs, twt_axis_ms, color="black", linewidth=0.7)
+    ax.axvline(crossline, color="0.3", linestyle=":", linewidth=0.7)
+    ax.text(crossline, float(twt_axis_ms.min()), f" {well_id}", fontsize=8, va="bottom")
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
 def save_tie_points(well_id: str, points: list[dict], wavelet_method: str, wavelet_freq_hz: float) -> TiePointSet:
     """Persist manual stretch/squeeze control points for a well so they
     survive across sessions instead of being recomputed from scratch."""

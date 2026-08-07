@@ -156,6 +156,14 @@ class TestImageEndpoints:
         resp = client.get("/api/synthetic/DOES_NOT_EXIST/impedance-image")
         assert resp.status_code == 404
 
+    def test_section_image_ok(self, client):
+        resp = client.get(
+            "/api/synthetic/Z-02_RAW/section-image",
+            params={"wavelet_method": "ricker", "wavelet_freq_hz": 30},
+        )
+        assert resp.status_code == 200
+        assert resp.content[:8] == PNG_MAGIC
+
 
 class TestNearestTraceEndpoint:
     def test_ok(self, client):

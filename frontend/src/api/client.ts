@@ -522,7 +522,7 @@ export function getSyntheticExportUrl(
  * render_trace_overlay_image. */
 export function getSyntheticImageUrl(
   wellId: string,
-  kind: "impedance" | "wavelet" | "trace-overlay",
+  kind: "impedance" | "wavelet" | "trace-overlay" | "section",
   opts: {
     waveletMethod?: WaveletMethod;
     waveletFreqHz?: number;
