@@ -108,14 +108,15 @@ class TestGenerate:
         assert result["applied_tie_points"] == []
         assert "sonic" in result["time_depth_note"].lower()
         assert "vertical" in result["vertical_assumption_note"].lower()
-        # This test's synthetic SEG-Y uses a real (non-zero) recording delay
-        # (DELAY_MS=2030), matching the actual production survey -- the
-        # synthetic trace must be anchored onto that same absolute time
-        # window, not silently come out all-zero from a 0-based sonic
-        # integration curve having no overlap with it (see well_seismic_tie
-        # depth_to_twt/build_synthetic's t0_ms anchoring).
+        # Depth-time now uses Z-02's own real DPTM curve directly (an
+        # absolute two-way-time reference, ~2101-2173 ms -- see
+        # data/raw/Z-02_raw.las), the same source tie_service.py uses, not
+        # this page's own from-scratch sonic integration anchored at the
+        # survey's first sample time (DELAY_MS=2030) -- this test's
+        # synthetic SEG-Y window (80 samples * 2ms starting at 2030ms =
+        # 2030-2188ms) was sized to bracket that real range.
         assert max(abs(v) for v in result["synthetic"]) > 0.0
-        assert result["reflectivity_twt_ms"][0] == pytest.approx(2030.0, abs=1.0)
+        assert result["reflectivity_twt_ms"][0] == pytest.approx(2101.1, abs=1.0)
         # Fixes #7/#8/#9: datum plausibility check, bulk-shift search
         # range, and boundary-pinned reliability flag are all surfaced,
         # not just the raw correlation number.
@@ -141,7 +142,11 @@ class TestGenerate:
             aligned_well.well_id, wavelet_method="ricker", wavelet_freq_hz=25.0, auto_optimize_tie=True
         )
         assert result["auto_optimize_tie"] is True
-        assert result["wavelet_freq_hz"] in wst.DEFAULT_CANDIDATE_FREQS_HZ
+        # Ricker auto-optimize now searches the same frequency grid as the
+        # main Seismic page's Well-to-Seismic Tie (well_seismic_tie.
+        # search_best_tie_full_window), not this module's own older
+        # search_best_tie/DEFAULT_CANDIDATE_FREQS_HZ grid.
+        assert result["wavelet_freq_hz"] in wst.DEFAULT_TIE_SEARCH_FREQS_HZ
         assert result["polarity"] in (1, -1)
         assert result["tie_search_note"] is not None
         assert "Auto-optimized" in result["tie_search_note"]
@@ -201,12 +206,16 @@ class TestGenerate:
         with pytest.raises(sss.SyntheticSeismogramError):
             sss.generate(aligned_well.well_id, wavelet_method="bogus")
 
-    def test_crs_mismatch_still_raises(self, well_repo):
+    def test_far_outside_survey_raises_clear_error(self, well_repo):
         # Unmodified real Z-02 -- its converted coordinates are far outside
-        # this test's narrow synthetic survey extent.
+        # this test's narrow synthetic survey extent. generate() now uses
+        # the same raw nearest-trace resolution as tie_service.py (no
+        # CRS-calibrated fit, no CrsMismatchError), so this is caught by
+        # tie_config.yaml's max_tie_search_radius_m instead, as a generic
+        # TieError -- see test_seismic_processor.py's analogous test.
         las_bytes = Z02_PATH.read_bytes()
         result = well_service.process_and_store_las_bytes(las_bytes, "Z-02_raw.las", repo=well_repo)
-        with pytest.raises(sp.CrsMismatchError):
+        with pytest.raises(wst.TieError, match="outside max_tie_search_radius_m"):
             sss.generate(result.well_id)
 
     def test_missing_dt_raises_missing_curve(self, aligned_well, well_repo):
@@ -259,10 +268,10 @@ class TestNearestTrace:
         assert result["inline"] in INLINES
         assert result["crossline"] in CROSSLINES
 
-    def test_crs_mismatch_raises(self, well_repo):
+    def test_far_outside_survey_raises_clear_error(self, well_repo):
         las_bytes = Z02_PATH.read_bytes()
         result = well_service.process_and_store_las_bytes(las_bytes, "Z-02_raw.las", repo=well_repo)
-        with pytest.raises(sp.CrsMismatchError):
+        with pytest.raises(wst.TieError, match="outside max_tie_search_radius_m"):
             sss.nearest_trace(result.well_id)
 
 

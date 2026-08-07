@@ -14,6 +14,7 @@ import {
 import { getWellTieViz, listWells } from "@/api/client";
 import { useChartColors } from "@/styles/tokens";
 import { useAppStore } from "@/store/useAppStore";
+import { isLowConfidenceTie } from "@/utils/tieConfidence";
 
 function errorMessage(error: unknown): string {
   if (error instanceof AxiosError) {
@@ -34,10 +35,12 @@ function rms(values: number[]): number {
 /**
  * Synthetic-vs-real trace overlay for a well tie computed directly against
  * the SEG-Y volume (app/services/seismic_processor.py get_well_tie) --
- * distinct from the upload-pipeline tie on the main Seismic page
- * (WellSeismicTie.tsx / /tie/{well_id}), which ties against a manually
- * uploaded+processed dataset instead of this feature's single active
- * volume. A 1D line overlay fits Recharts fine, unlike the 2D sections.
+ * the SAME tie algorithm as the main Seismic page's Well-to-Seismic Tie
+ * (WellSeismicTie.tsx / /tie/{well_id}: the well's own DPTM curve jointly
+ * searched over Ricker frequency, polarity, and bulk shift against the
+ * nearest real trace, via direct_tie_service.resolve_direct_tie), just
+ * applied to this feature's single active volume instead of an uploaded
+ * dataset. A 1D line overlay fits Recharts fine, unlike the 2D sections.
  *
  * Each curve is independently RMS-normalized for DISPLAY only (see
  * SyntheticTraceOverlay.tsx's identical fix) -- the synthetic and the raw
@@ -48,7 +51,10 @@ export default function WellTieView() {
   const colors = useChartColors();
   const wellsQuery = useQuery({ queryKey: ["wells"], queryFn: listWells });
   const [wellId, setWellId] = useState<string | null>(null);
-  const [waveletFreqHz, setWaveletFreqHz] = useState(25);
+  // Manual wavelet-frequency override -- null means "auto-optimize over the
+  // full frequency grid" (the default), matching WellSeismicTie.tsx.
+  const [manualFreqHz, setManualFreqHz] = useState<number | null>(null);
+  const [freqDraft, setFreqDraft] = useState<string>("");
   const activeWellId = useAppStore((s) => s.activeWellId);
 
   // Seed/redirect from the dashboard's shared active well -- a manual pick
@@ -57,12 +63,26 @@ export default function WellTieView() {
     if (activeWellId) setWellId(activeWellId);
   }, [activeWellId]);
 
+  // A newly selected well starts back at auto-optimize.
+  useEffect(() => {
+    setManualFreqHz(null);
+  }, [wellId]);
+
   const tieQuery = useQuery({
-    queryKey: ["seismic-viz-well-tie", wellId, waveletFreqHz],
-    queryFn: () => getWellTieViz(wellId!, waveletFreqHz),
+    queryKey: ["seismic-viz-well-tie", wellId, manualFreqHz],
+    queryFn: () => getWellTieViz(wellId!, manualFreqHz ?? undefined),
     enabled: Boolean(wellId),
     retry: false,
   });
+
+  useEffect(() => {
+    if (tieQuery.data) setFreqDraft(tieQuery.data.wavelet_freq_hz.toFixed(1));
+  }, [tieQuery.data]);
+
+  function applyFreqDraft() {
+    const v = parseFloat(freqDraft);
+    if (!Number.isNaN(v) && v > 0) setManualFreqHz(v);
+  }
 
   const realRms = tieQuery.data ? rms(tieQuery.data.real_trace) : 1;
   const synRms = tieQuery.data ? rms(tieQuery.data.synthetic) : 1;
@@ -88,17 +108,37 @@ export default function WellTieView() {
           ))}
         </select>
 
-        <label className="flex items-center gap-2 text-xs font-semibold text-ink-muted">
-          Wavelet frequency (Hz)
-          <input
-            type="number"
-            min={1}
-            max={200}
-            value={waveletFreqHz}
-            onChange={(e) => setWaveletFreqHz(Number(e.target.value) || 25)}
-            className="w-20 text-xs border border-border-strong rounded-lg px-2 py-1"
-          />
-        </label>
+        <span className="text-xs font-semibold text-ink-muted">Wavelet frequency</span>
+        <input
+          type="number"
+          step={0.5}
+          min={1}
+          value={freqDraft}
+          onChange={(e) => setFreqDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") applyFreqDraft();
+          }}
+          className="w-24 text-sm border border-border-strong rounded-lg px-2 py-1"
+        />
+        <span className="text-xs text-ink-faint">Hz</span>
+        <button
+          type="button"
+          onClick={applyFreqDraft}
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-accent text-white hover:opacity-90 transition-opacity"
+        >
+          Apply
+        </button>
+        <button
+          type="button"
+          onClick={() => setManualFreqHz(null)}
+          disabled={manualFreqHz === null}
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-border-strong text-ink-muted disabled:opacity-40 disabled:cursor-not-allowed hover:bg-surface-sunken transition-colors"
+        >
+          Auto-optimize
+        </button>
+        {manualFreqHz !== null && (
+          <span className="text-xs text-orange-strong font-medium">Manual override</span>
+        )}
       </div>
 
       {!wellId && (
@@ -121,14 +161,26 @@ export default function WellTieView() {
             {tieQuery.data.note}
           </div>
 
+          {isLowConfidenceTie(tieQuery.data.correlation, tieQuery.data.boundary_pinned) && (
+            <div className="text-danger text-xs">
+              ⚠{" "}
+              {tieQuery.data.boundary_pinned
+                ? "Shift pinned to search edge — likely spurious, not a genuine tie"
+                : `Low-confidence tie — correlation ${tieQuery.data.correlation.toFixed(3)} is below the 0.3 threshold`}
+            </div>
+          )}
+
           <div className="flex flex-wrap gap-4 text-xs font-semibold text-ink-muted">
             <span>
               Nearest inline/crossline: {tieQuery.data.nearest_inline} / {tieQuery.data.nearest_crossline}
             </span>
+            <span>Distance: {tieQuery.data.distance_m.toFixed(0)} m</span>
+            <span>corr={tieQuery.data.correlation.toFixed(3)}</span>
+            <span>{tieQuery.data.wavelet_freq_hz.toFixed(0)}Hz</span>
+            <span>pol={tieQuery.data.polarity > 0 ? "+1" : "-1"}</span>
             <span>
-              {tieQuery.data.tie_method === "manual_override"
-                ? "Distance: manual override"
-                : `Distance: ${tieQuery.data.distance_m?.toFixed(0)} m`}
+              shift={tieQuery.data.bulk_shift_ms >= 0 ? "+" : ""}
+              {tieQuery.data.bulk_shift_ms.toFixed(0)}ms
             </span>
           </div>
 

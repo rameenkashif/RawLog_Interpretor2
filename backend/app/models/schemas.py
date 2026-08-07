@@ -421,16 +421,23 @@ class TimeSliceResponse(BaseModel):
 
 class WellTieVizResponse(BaseModel):
     well_id: str
-    wavelet_freq_hz: float
+    wavelet_freq_hz: float = Field(..., description="Winning (or pinned, if freq_hz was given) Ricker frequency, Hz")
     twt_ms: list[float]
     synthetic: list[float]
     real_trace: list[float]
     nearest_inline: int
     nearest_crossline: int
-    distance_m: float | None = Field(None, description="None for a manual override (asserted directly, no residual)")
-    tie_method: str = Field("calibrated_fit", description="'calibrated_fit' or 'manual_override'")
+    distance_m: float
+    tie_method: str = Field("nearest_trace", description="Always 'nearest_trace' -- raw nearest-trace distance, see direct_tie_service.py")
+    correlation: float
+    polarity: int = Field(..., description="+1 (normal) or -1 (reversed)")
+    bulk_shift_ms: float
+    boundary_pinned: bool = Field(
+        ..., description="True if bulk_shift_ms landed within ~5% of max_shift_ms -- diagnostic of a spurious match, not a genuine tie"
+    )
+    max_shift_ms: float = Field(..., description="Bulk-shift search range half-width used, ms")
     note: str = Field(
-        ..., description="Simplifications/caveats in this tie (e.g. sonic-only depth-time conversion)"
+        ..., description="Describes this tie's depth-time source (DPTM curve, vendor or sonic-integration fallback) and search"
     )
 
 

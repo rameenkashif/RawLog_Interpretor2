@@ -50,7 +50,6 @@ logger = logging.getLogger("uvicorn.error")
 
 from app import segy_header_parser as shp
 from app import well_seismic_tie as wst
-from app.services import coordinate_calibration_service as ccs
 from app.services import well_service
 
 RAW_SEISMIC_DIR = Path(__file__).resolve().parents[2] / "data" / "seismic_raw"
@@ -892,71 +891,52 @@ class SegyVolume:
                 "trace across a likely CRS mismatch."
             )
 
-    def get_well_tie(self, well_id: str, wavelet_freq_hz: float = 25.0) -> dict:
-        # Reuses well_service (LAS loading/repository) and well_seismic_tie
-        # (impedance/reflectivity/Ricker-wavelet synthetic) rather than
-        # re-implementing either -- see tie_service.py for the analogous
-        # flow against the upload-pipeline's seismic data. Well location is
-        # resolved via coordinate_calibration_service, NOT a direct
-        # find_nearest_trace_index(well_x, well_y, source_x, source_y) call
-        # -- well and seismic coordinates are on different, unknown
-        # coordinate reference systems (see that module's docstring), so a
-        # raw distance comparison between them is meaningless without the
-        # calibrated transform.
-        well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent, before coordinate resolution
-        trace_idx, distance_m, tie_method = ccs.resolve_well_trace_index(self, well_id)
+    def get_well_tie(self, well_id: str, freq_hz: float | None = None) -> dict:
+        # Same algorithm as the main Seismic page's Well-to-Seismic Tie
+        # (tie_service.get_well_seismic_tie): the well's own DPTM curve
+        # (vendor-precomputed when the LAS carries one, else a sonic-
+        # integration fallback) jointly searched over Ricker wavelet
+        # frequency, polarity, and bulk time shift against the nearest real
+        # seismic trace -- applied to this feature's single active SEG-Y
+        # volume via direct_tie_service.resolve_direct_tie instead of an
+        # uploaded dataset, with checkshot-anchoring deliberately left off
+        # (use_checkshot=False) so this reproduces tie_service.py's exact
+        # (non-checkshot) behavior rather than direct_tie_service's own
+        # checkshot-augmented default (used elsewhere by
+        # spectral_property_prediction_service.py and
+        # section_well_log_service.py). Trace location is a raw nearest-
+        # trace distance (well_seismic_tie.find_nearest_trace_index), not
+        # coordinate_calibration_service's calibrated fit -- direct_tie_
+        # service's own docstring: proven more location-accurate on this
+        # survey's real field data.
+        from app.services import direct_tie_service as dts  # local: dts -> spectral_petro_correlation_service -> this module
 
-        curves_response = well_service.get_well_curves(well_id)
-        rows = curves_response["data"]
-
-        def _extract(curve_name: str) -> np.ndarray:
-            arr = np.array(
-                [row.get(curve_name) if row.get(curve_name) is not None else np.nan for row in rows],
-                dtype=float,
-            )
-            arr[arr <= -9999.0] = np.nan  # guard against LAS null sentinel leaking through
-            return arr
-
-        depth = _extract("DEPT")
-        dt_log = _extract("DT")
-        rhob = _extract("RHOB")
-
-        if not np.isfinite(dt_log).any():
-            raise MissingCurveError(well_id, "DT")
-        if not np.isfinite(rhob).any():
-            raise MissingCurveError(well_id, "RHOB")
-
-        result = wst.build_synthetic(
-            depth_m=depth,
-            dt_log=dt_log,
-            rhob=rhob,
-            seismic_dt_ms=self.sample_interval_ms,
-            seismic_twt_axis_ms=self.twt_axis_ms,
-            wavelet_freq_hz=wavelet_freq_hz,
-            dt_unit="us_per_ft",
-        )
-        real_trace = self._traces[trace_idx].astype(float)
+        result = dts.resolve_direct_tie(self, well_id, use_checkshot=False, freq_hz=freq_hz)
 
         note = (
-            "Depth-time relationship comes from integrating the sonic (DT) log only -- no "
-            "checkshot/VSP survey is available for this well, so this is a simplification "
-            "(accumulates sonic logging error with depth and ignores velocity anisotropy), "
-            "not a calibrated depth-time tie. Anchored to this survey's own first sample time "
-            "as a non-degenerate starting point (arbitrary, not physically derived), since the "
-            "sonic-integrated curve alone has no absolute time reference. "
-            "See well_seismic_tie.depth_to_twt."
+            "Depth-time relationship uses the well's own DPTM curve (vendor-precomputed when the "
+            "LAS carries one, else a sonic-integration approximation -- see petrophysics.compute_dptm), "
+            "jointly searched over Ricker wavelet frequency, polarity, and bulk time shift against the "
+            "nearest real seismic trace -- the same tie algorithm as the main Seismic page's "
+            "Well-to-Seismic Tie (tie_service.get_well_seismic_tie), applied here to this feature's "
+            "single active SEG-Y volume instead of an uploaded dataset."
         )
 
         return {
             "well_id": well_id,
-            "wavelet_freq_hz": wavelet_freq_hz,
-            "twt_ms": self.twt_axis_ms.tolist(),
-            "synthetic": result.synthetic.tolist(),
-            "real_trace": real_trace.tolist(),
-            "nearest_inline": int(self.inline[trace_idx]),
-            "nearest_crossline": int(self.crossline[trace_idx]),
-            "distance_m": distance_m,
-            "tie_method": tie_method,
+            "wavelet_freq_hz": result.best_freq_hz,
+            "twt_ms": result.time_ms.tolist(),
+            "synthetic": result.synthetic_amplitude.tolist(),
+            "real_trace": result.seismic_amplitude.tolist(),
+            "nearest_inline": result.inline_number,
+            "nearest_crossline": result.crossline_number,
+            "distance_m": result.distance_m,
+            "tie_method": "nearest_trace",
+            "correlation": result.correlation,
+            "polarity": result.polarity,
+            "bulk_shift_ms": result.bulk_shift_ms,
+            "boundary_pinned": result.boundary_pinned,
+            "max_shift_ms": result.max_shift_ms,
             "note": note,
         }
 

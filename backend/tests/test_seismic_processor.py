@@ -21,6 +21,7 @@ import pytest
 
 segyio = pytest.importorskip("segyio")
 
+from app import well_seismic_tie as wst
 from app.las_loader import FT_TO_M
 from app.repository import FileWellRepository
 from app.services import seismic_processor as sp
@@ -275,6 +276,20 @@ class TestWellTie:
         return FileWellRepository(base_dir=tmp_path / "wells")
 
     @pytest.fixture
+    def wide_volume(self, tmp_path) -> sp.SegyVolume:
+        # get_well_tie now ties against the well's own real DPTM curve
+        # directly (an absolute two-way-time reference, ~2101-2173 ms for
+        # Z-02 -- see data/raw/Z-02_raw.las), not the old build_synthetic
+        # path's arbitrary anchor-at-the-volume's-own-first-sample hack, so
+        # (unlike the narrow 2030-2040 ms `volume` fixture used elsewhere in
+        # this file) the tie tests below need a window that genuinely
+        # brackets that real range -- same reasoning as test_tie_service.py's
+        # _write_segy delay_ms/n_samples defaults.
+        path = tmp_path / "wide_test_survey.sgy"
+        _write_synthetic_segy(path, n_samples=200, delay_ms=2000)
+        return sp.SegyVolume(path)
+
+    @pytest.fixture
     def loaded_well(self, well_repo, monkeypatch):
         monkeypatch.setattr(
             well_service, "get_well_summary",
@@ -287,17 +302,21 @@ class TestWellTie:
         las_bytes = Z02_PATH.read_bytes()
         return well_service.process_and_store_las_bytes(las_bytes, "Z-02_raw.las", repo=well_repo)
 
-    def test_well_far_outside_survey_raises_crs_mismatch(self, volume, loaded_well):
-        # Z-02's real (unit-standardized) coordinates are ~700m past this
-        # synthetic test survey's narrow SourceX/Y range (by construction --
-        # see INLINES/CROSSLINES/source_x_base/source_y_base above) --
-        # get_well_tie must flag this as a likely CRS mismatch rather than
-        # silently tying to whatever the nearest (very distant) trace
-        # happens to be.
-        with pytest.raises(sp.CrsMismatchError):
+    def test_well_far_outside_survey_raises_clear_error(self, volume, loaded_well):
+        # Z-02's real (unit-standardized) coordinates are thousands of
+        # meters past this synthetic test survey's narrow SourceX/Y range
+        # (by construction -- see INLINES/CROSSLINES/source_x_base/
+        # source_y_base above). get_well_tie now uses the same raw
+        # nearest-trace resolution as tie_service.py (no CRS-calibrated
+        # fit, no CrsMismatchError -- see well_seismic_tie.
+        # find_nearest_trace_index's own docstring: a CRS mismatch isn't
+        # detected as such, it just returns an implausibly-far "nearest"
+        # trace), so this is caught by tie_config.yaml's
+        # max_tie_search_radius_m instead, as a generic TieError.
+        with pytest.raises(wst.TieError, match="outside max_tie_search_radius_m"):
             volume.get_well_tie(loaded_well.well_id)
 
-    def test_well_tie_succeeds_when_coordinates_align(self, volume, well_repo, monkeypatch):
+    def test_well_tie_succeeds_when_coordinates_align(self, wide_volume, well_repo, monkeypatch):
         monkeypatch.setattr(
             well_service, "get_well_summary",
             lambda well_id, repo=None, _f=well_service.get_well_summary: _f(well_id, repo=well_repo),
@@ -317,11 +336,34 @@ class TestWellTie:
         )
         assert result.well_x == pytest.approx(366840.0)
 
-        tie = volume.get_well_tie(result.well_id, wavelet_freq_hz=25.0)
+        tie = wide_volume.get_well_tie(result.well_id, freq_hz=25.0)
         assert tie["well_id"] == result.well_id
-        assert len(tie["twt_ms"]) == len(tie["synthetic"]) == len(tie["real_trace"]) == N_SAMPLES
+        assert len(tie["twt_ms"]) == len(tie["synthetic"]) == len(tie["real_trace"])
         assert tie["distance_m"] >= 0
-        assert "note" in tie and "sonic" in tie["note"].lower()
+        assert tie["wavelet_freq_hz"] == 25.0  # pinned, not auto-optimized
+        assert tie["polarity"] in (1, -1)
+        assert "note" in tie and "dptm" in tie["note"].lower()
+
+    def test_well_tie_auto_optimizes_without_freq_hz(self, wide_volume, well_repo, monkeypatch):
+        monkeypatch.setattr(
+            well_service, "get_well_summary",
+            lambda well_id, repo=None, _f=well_service.get_well_summary: _f(well_id, repo=well_repo),
+        )
+        monkeypatch.setattr(
+            well_service, "get_well_curves",
+            lambda well_id, repo=None, _f=well_service.get_well_curves: _f(well_id, repo=well_repo),
+        )
+        las_text = Z02_PATH.read_text()
+        las_text = _set_las_coordinate_meters(las_text, "X", 366840.0)
+        las_text = _set_las_coordinate_meters(las_text, "Y", 2950275.0)
+        result = well_service.process_and_store_las_bytes(
+            las_text.encode(), "Z-02_raw.las", repo=well_repo
+        )
+
+        tie = wide_volume.get_well_tie(result.well_id)
+        assert tie["wavelet_freq_hz"] > 0
+        assert -1.0 <= tie["correlation"] <= 1.0
+        assert tie["tie_method"] == "nearest_trace"
 
     def test_missing_dt_curve_raises_clear_error(self, well_repo, volume, monkeypatch):
         monkeypatch.setattr(
@@ -348,9 +390,13 @@ class TestWellTie:
         df["DT"] = np.nan
         well_repo.save_well(metadata, df)
 
-        with pytest.raises(sp.MissingCurveError) as exc_info:
+        # No dedicated pre-check for a missing DT curve anymore (matching
+        # tie_service.py, which has none either) -- it surfaces naturally as
+        # a TieError once there aren't enough valid DT/RHOB/time samples to
+        # build a reflectivity series (well_seismic_tie.
+        # reflectivity_from_time_axis).
+        with pytest.raises(wst.TieError, match="Too few valid"):
             volume.get_well_tie(result.well_id)
-        assert exc_info.value.curve == "DT"
 
 
 class TestSpectralDecomposition:

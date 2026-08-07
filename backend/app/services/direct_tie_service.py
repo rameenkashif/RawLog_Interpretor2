@@ -69,17 +69,36 @@ class DirectTieResult:
     polarity: int
     boundary_pinned: bool
     low_confidence: bool
+    max_shift_ms: float  # the search half-width actually used (residual window if checkshot-anchored, else the full statistical one)
+    n_used: int
+    time_ms: np.ndarray  # ready-to-plot tie curves, well's own reflectivity-interval length -- see FullWindowTieResult
+    synthetic_amplitude: np.ndarray
+    seismic_amplitude: np.ndarray
+    reflectivity: np.ndarray
     depth_m: np.ndarray  # sorted, deduped, DEPT<->DPTM-valid depth samples
     dptm_ms: np.ndarray  # paired DPTM (well's own unshifted time axis), same length as depth_m
-    tie_source: str  # "checkshot (N valid pt)" or "statistical_fallback (no valid checkshot)"
-    checkshot_anchor_shift_ms: float  # 0.0 when tie_source is the statistical fallback
+    tie_source: str  # "checkshot (N valid pt)", "statistical_fallback (no valid checkshot)", or "statistical" (use_checkshot=False)
+    checkshot_anchor_shift_ms: float  # 0.0 when tie_source isn't checkshot-anchored
     checkshot_n_valid_points: int
 
 
-def resolve_direct_tie(volume, well_id: str) -> DirectTieResult:
+def resolve_direct_tie(
+    volume, well_id: str, *, use_checkshot: bool = True, freq_hz: float | None = None
+) -> DirectTieResult:
     """Raises TieError/WellNotFoundError/SegyVolumeError on any failure --
     callers treat that as "excluded/unavailable", never silently proceed
-    on a well that couldn't actually be tied."""
+    on a well that couldn't actually be tied.
+
+    use_checkshot=False skips the checkshot lookup/anchor entirely (always
+    the full statistical search) -- for callers that specifically want
+    tie_service.get_well_seismic_tie's exact (dataset-based) behavior
+    reproduced against this single active volume, not this module's own
+    checkshot-augmented default.
+
+    freq_hz pins the frequency search to this single candidate (polarity/
+    shift are still optimized around it), same manual-override meaning as
+    tie_service.get_well_seismic_tie's freq_hz.
+    """
     config = _load_tie_config()
     max_radius_m = config.get("max_tie_search_radius_m")
     fallback_max_shift_ms = float(config.get("tie_search_max_shift_ms", wst.DEFAULT_TIE_SEARCH_MAX_SHIFT_MS))
@@ -112,21 +131,28 @@ def resolve_direct_tie(volume, well_id: str) -> DirectTieResult:
     valid_logs = (
         np.isfinite(depth) & np.isfinite(dt_log) & np.isfinite(rhob) & np.isfinite(dptm) & (dt_log > 0) & (rhob > 0)
     )
-    checkshot_points = checkshot_service.get_checkshot_points(well_id)
-    anchor_shift_ms, n_valid_checkshots = wst.checkshot_anchor_shift(
-        checkshot_points, depth[valid_logs], dptm[valid_logs]
-    )
+    if use_checkshot:
+        checkshot_points = checkshot_service.get_checkshot_points(well_id)
+        anchor_shift_ms, n_valid_checkshots = wst.checkshot_anchor_shift(
+            checkshot_points, depth[valid_logs], dptm[valid_logs]
+        )
+    else:
+        anchor_shift_ms, n_valid_checkshots = 0.0, 0
+
     if n_valid_checkshots >= 1:
         search_max_shift_ms = wst.CHECKSHOT_RESIDUAL_SEARCH_MS
         tie_source = f"checkshot ({n_valid_checkshots} valid pt)"
     else:
         search_max_shift_ms = fallback_max_shift_ms
-        tie_source = "statistical_fallback (no valid checkshot)"
+        tie_source = "statistical_fallback (no valid checkshot)" if use_checkshot else "statistical"
 
     t_rc, rc = wst.reflectivity_from_time_axis(dptm + anchor_shift_ms, dt_log, rhob, volume.sample_interval_ms)
     real_trace = volume.get_trace(trace_idx)
+    search_kwargs = {"max_shift_ms": search_max_shift_ms}
+    if freq_hz is not None:
+        search_kwargs["candidate_freqs_hz"] = (float(freq_hz),)
     tie = wst.search_best_tie_full_window(
-        t_rc, rc, volume.twt_axis_ms, volume.sample_interval_ms, real_trace, max_shift_ms=search_max_shift_ms
+        t_rc, rc, volume.twt_axis_ms, volume.sample_interval_ms, real_trace, **search_kwargs
     )
     total_bulk_shift_ms = anchor_shift_ms + tie.bulk_shift_ms
     boundary_pinned = abs(tie.bulk_shift_ms) >= (1.0 - wst.BOUNDARY_PINNED_FRACTION) * search_max_shift_ms
@@ -160,6 +186,12 @@ def resolve_direct_tie(volume, well_id: str) -> DirectTieResult:
         polarity=tie.polarity,
         boundary_pinned=boundary_pinned,
         low_confidence=low_confidence,
+        max_shift_ms=search_max_shift_ms,
+        n_used=tie.n_used,
+        time_ms=tie.time_ms,
+        synthetic_amplitude=tie.synthetic_amplitude,
+        seismic_amplitude=tie.seismic_amplitude,
+        reflectivity=tie.reflectivity,
         depth_m=depth_v,
         dptm_ms=dptm_v,
         tie_source=tie_source,

@@ -347,8 +347,13 @@ export interface WellTieVizResponse {
   real_trace: number[];
   nearest_inline: number;
   nearest_crossline: number;
-  distance_m: number | null;
-  tie_method: "calibrated_fit" | "manual_override" | "direct_unvalidated";
+  distance_m: number;
+  tie_method: "nearest_trace";
+  correlation: number;
+  polarity: 1 | -1;
+  bulk_shift_ms: number;
+  boundary_pinned: boolean;
+  max_shift_ms: number;
   note: string;
 }
 
@@ -648,7 +653,7 @@ export interface SyntheticSeismogramResponse {
   nearest_inline: number;
   nearest_crossline: number;
   distance_m: number | null;
-  tie_method: "calibrated_fit" | "manual_override" | "direct_unvalidated";
+  tie_method: "nearest_trace";
   depth_m: number[];
   twt_ms: number[];
   acoustic_impedance: number[];
@@ -702,5 +707,5 @@ export interface NearestTraceResponse {
   inline: number;
   crossline: number;
   distance_m: number | null;
-  tie_method: "calibrated_fit" | "manual_override" | "direct_unvalidated";
+  tie_method: "nearest_trace";
 }

@@ -169,11 +169,16 @@ async def time_slice(time_ms: float = Query(..., description="Requested TWT in m
 @router.get("/well-tie/{well_id}", response_model=WellTieVizResponse)
 async def well_tie(
     well_id: str,
-    wavelet_freq_hz: float = Query(25.0, gt=0, description="Ricker wavelet dominant frequency, Hz"),
+    freq_hz: float | None = Query(
+        None,
+        gt=0,
+        description="Pin the tie to this single Ricker wavelet frequency instead of auto-optimizing "
+        "over the full frequency grid (polarity and bulk shift are still optimized around it).",
+    ),
 ) -> WellTieVizResponse:
     try:
         volume = sp.get_segy_volume()
-        return WellTieVizResponse(**volume.get_well_tie(well_id, wavelet_freq_hz=wavelet_freq_hz))
+        return WellTieVizResponse(**volume.get_well_tie(well_id, freq_hz=freq_hz))
     except Exception as exc:  # noqa: BLE001
         _handle(exc)
 

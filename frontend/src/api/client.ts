@@ -286,11 +286,11 @@ export async function getTimeSlice(timeMs: number): Promise<TimeSliceResponse> {
 
 export async function getWellTieViz(
   wellId: string,
-  waveletFreqHz?: number,
+  freqHz?: number,
 ): Promise<WellTieVizResponse> {
   const { data } = await http.get<WellTieVizResponse>(
     `/api/seismic/well-tie/${wellId}`,
-    { params: { wavelet_freq_hz: waveletFreqHz } },
+    { params: freqHz != null ? { freq_hz: freqHz } : {} },
   );
   return data;
 }

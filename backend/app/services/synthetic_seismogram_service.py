@@ -21,9 +21,9 @@ from __future__ import annotations
 import numpy as np
 
 from app import well_seismic_tie as wst
-from app.services import coordinate_calibration_service as ccs
 from app.services import seismic_processor as sp
 from app.services import well_service
+from app.services.tie_service import _load_config as _load_tie_config
 from app.synthetic_tie_repository import (
     TiePoint,
     TiePointSet,
@@ -131,13 +131,24 @@ def generate(
     volume = sp.get_segy_volume()
     well_summary = well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
 
-    # Well location resolved via coordinate_calibration_service, NOT a
-    # direct find_nearest_trace_index(well_x, well_y, source_x, source_y)
-    # call -- well and seismic coordinates are on different, unknown
-    # coordinate reference systems, so a raw distance comparison between
-    # them is meaningless without the calibrated transform (or an
-    # explicit manual override) -- see that module's docstring.
-    trace_idx, distance_m, tie_method = ccs.resolve_well_trace_index(volume, well_id)
+    # Raw nearest-trace distance (well_seismic_tie.find_nearest_trace_index),
+    # the same trace resolution the main Seismic page's Well-to-Seismic Tie
+    # uses (tie_service.py / direct_tie_service.py) -- not coordinate_
+    # calibration_service's calibrated fit this page used to rely on.
+    # direct_tie_service.py's own docstring: raw nearest-trace is proven
+    # more location-accurate on this survey's real field data than the
+    # calibrated fit is.
+    tie_config = _load_tie_config()
+    max_radius_m = tie_config.get("max_tie_search_radius_m")
+    if well_summary.well_x is None or well_summary.well_y is None:
+        raise wst.TieError(
+            f"Well '{well_id}' has no surface coordinates in its LAS header -- cannot locate it "
+            "on the seismic survey."
+        )
+    trace_idx, distance_m = wst.find_nearest_trace_index(
+        well_summary.well_x, well_summary.well_y, volume.source_x, volume.source_y, max_radius_m=max_radius_m
+    )
+    tie_method = "nearest_trace"
 
     curves_response = well_service.get_well_curves(well_id)
     rows = curves_response["data"]
@@ -147,6 +158,7 @@ def generate(
     nphi = _extract_curve(rows, "NPHI")
     vsh = _extract_curve(rows, "VSH")
     phie = _extract_curve(rows, "PHIE")
+    dptm = _extract_curve(rows, "DPTM")
 
     if not np.isfinite(dt_log).any():
         raise MissingCurveError(well_id, "DT")
@@ -179,18 +191,46 @@ def generate(
             "Too few valid DT/density samples after removing nulls/invalid values."
         )
 
-    # Anchor the well's own (0-based) sonic-integrated TWT to the seismic
-    # volume's own first sample time (its DelayRecordingTime) -- without
-    # this, the well's curve and the seismic's real (non-zero-delay) time
-    # axis have no overlap at all, and resampling later would silently
-    # produce an all-zero synthetic. This is only a reasonable datum if
-    # the delay actually corresponds to roughly "surface to the top of
-    # the logged interval" -- see cross_check_delay_datum, surfaced below
-    # as datum_check rather than silently trusted. Manual stretch/squeeze
-    # (applied below) refines it once a real tie is available.
+    # Datum check is an independent sanity-check of the SURVEY's own
+    # recording delay (does it plausibly correspond to "surface to the top
+    # of the logged interval"?), not of which depth-time curve we end up
+    # tying with below -- always computed, regardless of which of the two
+    # paths that is (see dashboard_upload_service.py, which gates well
+    # eligibility on datum_check.plausible unconditionally).
     t0_ms = float(volume.twt_axis_ms[0])
     datum_check = wst.cross_check_delay_datum(delay_ms=t0_ms, logged_top_depth_m=float(depth_v[0]))
-    twt_ms = wst.depth_to_twt(depth_v, dt_v, dt_unit="us_per_ft", t0_ms=t0_ms)
+
+    # Depth-time: prefer the well's own DPTM curve (vendor-precomputed when
+    # the LAS carries one, else petrophysics.compute_dptm's sonic-
+    # integration fallback -- the SAME curve and preference order the main
+    # Seismic page's Well-to-Seismic Tie uses, see tie_service.py), an
+    # absolute two-way-time reference, rather than this page's own
+    # from-scratch sonic integration arbitrarily anchored to the seismic
+    # volume's first sample time (kept below as a fallback for the rare
+    # case DPTM itself has too few valid samples for this well -- shouldn't
+    # normally happen, since compute_dptm produces something whenever DT
+    # does, but keeps this page working rather than hard-failing if it ever
+    # doesn't).
+    dptm_valid = valid & np.isfinite(dptm)
+    depth_dptm_v, dt_dptm_v, density_dptm_v, dptm_v = depth[dptm_valid], dt_log[dptm_valid], density[dptm_valid], dptm[dptm_valid]
+    if len(depth_dptm_v) >= 10:
+        order = np.argsort(dptm_v)
+        depth_v, dt_v, density_v, dptm_v = (
+            depth_dptm_v[order], dt_dptm_v[order], density_dptm_v[order], dptm_v[order]
+        )
+        keep = np.concatenate([[True], np.diff(dptm_v) > 1e-6])
+        depth_v, dt_v, density_v, dptm_v = depth_v[keep], dt_v[keep], density_v[keep], dptm_v[keep]
+        twt_ms = dptm_v
+        time_depth_note = (
+            "Depth-time relationship uses the well's own DPTM curve (vendor-precomputed when the "
+            "LAS carries one, else a sonic-integration approximation -- see petrophysics.compute_dptm), "
+            "the same source and preference order the main Seismic page's Well-to-Seismic Tie uses -- "
+            "not re-derived from scratch on this page."
+        )
+    else:
+        twt_ms = wst.depth_to_twt(depth_v, dt_v, dt_unit="us_per_ft", t0_ms=t0_ms)
+        time_depth_note = NO_CHECKSHOT_NOTE
+
     ai = wst.acoustic_impedance(dt_v, density_v, dt_unit="us_per_ft")
     refl = wst.reflectivity_series(ai)
     # Reflectivity is sparse (near-zero between reflectors) -- despike
@@ -215,28 +255,62 @@ def generate(
 
     polarity = 1
     tie_search_note: str | None = None
-    if auto_optimize_tie:
-        # Jointly searches wavelet frequency (ricker only -- statistical
-        # has none to sweep) and polarity, not just shift position -- see
-        # well_seismic_tie.search_best_tie for why position search alone
-        # can't fix a wrong frequency/polarity assumption. Opt-in: leaves
-        # the non-search path below completely unchanged when False, so
-        # this can't alter any existing tie unless explicitly requested.
+    if auto_optimize_tie and wavelet_method == "ricker":
+        # Same search as the main Seismic page's Well-to-Seismic Tie
+        # (well_seismic_tie.search_best_tie_full_window): Ricker frequency
+        # is jointly searched along with polarity and shift, scanning the
+        # ENTIRE seismic window rather than a local cross-correlation lag
+        # search around a rough starting position -- see that function's
+        # own docstring for why (without a checkshot, the well's time axis
+        # can plausibly sit anywhere in a wide window, even using a real
+        # DPTM curve).
+        search = wst.search_best_tie_full_window(
+            reg_twt_ms, refl_reg, volume.twt_axis_ms, dt_ms, real_trace, max_shift_ms=max_shift_ms
+        )
+        polarity = search.polarity
+        wavelet_freq_hz = search.best_freq_hz  # report the winning frequency, not the requested one
+        _, wavelet = wst.ricker_wavelet(wavelet_freq_hz, dt_ms / 1000.0)
+        wavelet = polarity * wavelet  # keep wavelet_amplitude/spectra consistent with the winning polarity
+        spectra = wst.wavelet_spectra(wavelet, dt_ms)
+
+        # search_best_tie_full_window only returns arrays covering the
+        # well's own reflectivity interval (a QC plot's window), not the
+        # whole seismic trace this chart displays -- rebuild the
+        # full-seismic-axis synthetic (unshifted and shifted) the same way
+        # the non-auto-optimize path below does, using the winning wavelet.
+        full_conv = np.convolve(refl_reg, wavelet, mode="full")
+        start = (len(full_conv) - len(refl_reg)) // 2
+        synthetic_reg = full_conv[start : start + len(refl_reg)]
+        synthetic_on_seismic_axis = np.interp(volume.twt_axis_ms, reg_twt_ms, synthetic_reg, left=0.0, right=0.0)
+        shifted_synthetic = np.interp(
+            volume.twt_axis_ms, reg_twt_ms + search.bulk_shift_ms, synthetic_reg, left=0.0, right=0.0
+        )
+        boundary_pinned = abs(search.bulk_shift_ms) >= (1.0 - wst.BOUNDARY_PINNED_FRACTION) * max_shift_ms
+        tie = {
+            "shifted_synthetic": shifted_synthetic,
+            "best_shift_ms": search.bulk_shift_ms,
+            "correlation": search.correlation,
+            "max_shift_ms": max_shift_ms,
+            "boundary_pinned": boundary_pinned,
+        }
+        tie_search_note = (
+            f"Auto-optimized (same search as the main Seismic page's Well-to-Seismic Tie): best fit is "
+            f"{wavelet_freq_hz:g} Hz Ricker at {'reversed' if polarity < 0 else 'normal'} polarity "
+            f"(r={search.correlation:.3f}, within +/-{max_shift_ms:g}ms)."
+        )
+    elif auto_optimize_tie:  # wavelet_method == "statistical" -- the full-window search is Ricker-only
         search = wst.search_best_tie(
             refl_reg,
             reg_twt_ms,
             volume.twt_axis_ms,
             dt_ms,
             real_trace,
-            candidate_freqs_hz=wst.DEFAULT_CANDIDATE_FREQS_HZ if wavelet_method == "ricker" else None,
-            fixed_wavelet=None if wavelet_method == "ricker" else wavelet,
+            candidate_freqs_hz=None,
+            fixed_wavelet=wavelet,
             search_polarity=True,
             max_shift_ms=max_shift_ms,
         )
         polarity = search.polarity
-        if wavelet_method == "ricker":
-            wavelet_freq_hz = search.wavelet_freq_hz  # report the winning frequency, not the requested one
-            _, wavelet = wst.ricker_wavelet(wavelet_freq_hz, dt_ms / 1000.0)
         wavelet = polarity * wavelet  # keep wavelet_amplitude/spectra consistent with the winning polarity
         spectra = wst.wavelet_spectra(wavelet, dt_ms)
         synthetic_on_seismic_axis = search.synthetic
@@ -247,10 +321,9 @@ def generate(
             "max_shift_ms": search.max_shift_ms,
             "boundary_pinned": search.boundary_pinned,
         }
-        freq_desc = f"{wavelet_freq_hz:g} Hz Ricker" if wavelet_method == "ricker" else "statistical wavelet"
         tie_search_note = (
-            f"Auto-optimized: searched {search.n_candidates_tried} (frequency, polarity) combinations "
-            f"within +/-{max_shift_ms:g}ms -- best fit is {freq_desc} at "
+            f"Auto-optimized: searched {search.n_candidates_tried} (position, polarity) combinations "
+            f"within +/-{max_shift_ms:g}ms -- best fit is the extracted statistical wavelet at "
             f"{'reversed' if polarity < 0 else 'normal'} polarity (r={search.correlation:.3f})."
         )
     else:
@@ -282,7 +355,7 @@ def generate(
             "td_stop_ratio": well_summary.td_stop_ratio,
         },
         "vertical_assumption_note": VERTICAL_ASSUMPTION_NOTE,
-        "time_depth_note": NO_CHECKSHOT_NOTE,
+        "time_depth_note": time_depth_note,
         "density_method": density_method,
         "density_note": density_note,
         "gardner_coefficients": gardner_coeffs,
@@ -356,15 +429,24 @@ def delete_tie_points(well_id: str) -> bool:
 
 def nearest_trace(well_id: str) -> dict:
     """Standalone nearest-trace lookup (without generating the full
-    synthetic), for a lightweight "where does this well tie to" check."""
+    synthetic), for a lightweight "where does this well tie to" check.
+    Same raw nearest-trace resolution as generate() -- see its comment."""
     volume = sp.get_segy_volume()
-    well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
-    trace_idx, distance_m, tie_method = ccs.resolve_well_trace_index(volume, well_id)
+    well_summary = well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
+    if well_summary.well_x is None or well_summary.well_y is None:
+        raise wst.TieError(
+            f"Well '{well_id}' has no surface coordinates in its LAS header -- cannot locate it "
+            "on the seismic survey."
+        )
+    max_radius_m = _load_tie_config().get("max_tie_search_radius_m")
+    trace_idx, distance_m = wst.find_nearest_trace_index(
+        well_summary.well_x, well_summary.well_y, volume.source_x, volume.source_y, max_radius_m=max_radius_m
+    )
     return {
         "well_id": well_id,
         "trace_index": trace_idx,
         "inline": int(volume.inline[trace_idx]),
         "crossline": int(volume.crossline[trace_idx]),
         "distance_m": distance_m,
-        "tie_method": tie_method,
+        "tie_method": "nearest_trace",
     }

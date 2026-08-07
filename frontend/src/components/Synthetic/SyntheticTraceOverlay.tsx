@@ -66,11 +66,7 @@ export default function SyntheticTraceOverlay({ result }: { result: SyntheticSei
           <span>
             Nearest inline/crossline: {result.nearest_inline} / {result.nearest_crossline}
           </span>
-          <span>
-            {result.tie_method === "manual_override"
-              ? "Distance: manual override"
-              : `Distance: ${result.distance_m?.toFixed(0)} m`}
-          </span>
+          <span>Distance: {result.distance_m?.toFixed(0)} m</span>
           <span>Best shift: {result.best_shift_ms.toFixed(1)} ms</span>
           <span className={result.correlation > 0.5 ? "text-success" : "text-orange-strong"}>
             Correlation: {result.correlation.toFixed(3)}
