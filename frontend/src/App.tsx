@@ -50,24 +50,14 @@ export default function App() {
 
           <div className="flex items-center gap-3 shrink-0">
             <ThemeToggle />
-            {/* Partner/vendor logos: GeoGraphix first, then LMKR. GeoGraphix's
-                source PNG has an opaque white plate baked in (not just a
-                transparent background) -- wrapped in a white chip so it
-                reads as an intentional badge rather than a stray white box
-                in dark mode; LMKR's artwork has no white fill and sits
-                directly on the header in either theme. */}
-            <div className="flex items-center gap-2 pl-3 border-l border-border">
-              <span className="inline-flex items-center rounded-md bg-white px-1.5 py-1">
-                <img
-                  src="/logos/geographix-logo.png"
-                  alt="GeoGraphix"
-                  className="h-5 w-auto object-contain"
-                />
-              </span>
+            {/* LMKR vendor logo -- artwork has no white fill baked in, so it
+                sits directly on the header in either theme with no chip
+                needed. */}
+            <div className="flex items-center pl-3 border-l border-border">
               <img
                 src="/logos/lmkr-logo.png"
                 alt="LMKR"
-                className="h-8 w-auto object-contain"
+                className="h-12 w-auto object-contain"
               />
             </div>
           </div>
