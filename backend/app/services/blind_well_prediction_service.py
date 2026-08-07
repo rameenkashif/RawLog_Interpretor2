@@ -72,6 +72,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
+# Imported eagerly (not inside _decision_gate/_make_base_models) so a missing
+# install is caught at router registration by main.py's try/except around
+# `from app.routers import prediction`, which disables just this module with
+# a clear log message, instead of surfacing as a raw 500 on the first
+# request that reaches it.
+from xgboost import XGBRegressor  # noqa: F401
+
 from app import well_seismic_tie as wst
 from app.services import well_service
 from app.services.spectral_petro_correlation_service import (
@@ -342,7 +349,6 @@ def _decision_gate(training_samples: list[_WellSamples], property_name: str, fea
     only. A strongly negative result here means the full stack is very
     unlikely to help -- surfaced as a diagnostic, not used to block."""
     from sklearn.metrics import r2_score
-    from xgboost import XGBRegressor
 
     k = feature_idxs[:3]
     if not k:
@@ -378,7 +384,6 @@ def _decision_gate(training_samples: list[_WellSamples], property_name: str, fea
 def _make_base_models() -> dict:
     from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
     from sklearn.linear_model import Ridge
-    from xgboost import XGBRegressor
 
     return {
         "xgboost": XGBRegressor(
