@@ -632,3 +632,79 @@ def run_blind_well_prediction(blind_well_id: str = DEFAULT_BLIND_WELL_ID) -> dic
         "neighborhood_radius_m": NEIGHBORHOOD_RADIUS_M,
         "results": results,
     }
+
+
+def render_blind_well_log_tracks(blind_well_id: str = DEFAULT_BLIND_WELL_ID) -> bytes:
+    """Static (Matplotlib) PNG: one well-log-style depth track per property
+    (VSH/PHIE/SWE), each with the blind well's own logged (real) curve
+    overlaid against the pipeline's predicted curve -- shallow depth at
+    top, same convention as the rest of the app's log/section viewers --
+    rather than the interactive Plotly line chart. Re-runs the full
+    pipeline itself (like tie_service.render_tie_section_image re-running
+    _compute_tie independently of the JSON tie endpoint), so this can be
+    requested on its own."""
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    result = run_blind_well_prediction(blind_well_id)
+    if result["status"] != "validated" or not result.get("results"):
+        raise BlindWellPredictionError(
+            result.get("message") or f"Blind well '{blind_well_id}' could not be validated."
+        )
+
+    results = result["results"]
+    n = len(PETRO_CURVES)
+    fig, axes = plt.subplots(1, n, figsize=(3.4 * n, 7), dpi=150, sharey=True)
+    axes = np.atleast_1d(axes)
+
+    any_curve = False
+    for ax, property_name in zip(axes, PETRO_CURVES):
+        r = results.get(property_name, {})
+        if r.get("status") != "validated":
+            ax.text(
+                0.5, 0.5, r.get("message") or "No result", ha="center", va="center",
+                wrap=True, fontsize=8, transform=ax.transAxes,
+            )
+            ax.set_title(property_name.upper(), fontsize=10)
+            ax.set_xticks([])
+            continue
+
+        depth = np.array(r["depth_m"])
+        y_true = np.array(r["y_true"])
+        y_pred = np.array(r["y_pred"])
+        order = np.argsort(depth)
+        depth, y_true, y_pred = depth[order], y_true[order], y_pred[order]
+
+        ax.plot(y_true, depth, color="#2563EB", linewidth=1.3, marker="o", markersize=3, label="Logged (real)")
+        ax.plot(
+            y_pred, depth, color="#EA580C", linewidth=1.3, marker="o", markersize=3, linestyle="--",
+            label="Predicted",
+        )
+        any_curve = True
+        r2 = r.get("blind_well_r2")
+        title = f"{property_name.upper()}\nblind R²={r2:.2f}" if r2 is not None else property_name.upper()
+        ax.set_title(title, fontsize=10)
+        ax.set_xlabel(property_name.upper())
+        ax.grid(True, alpha=0.3)
+
+    axes[0].set_ylabel("Depth (m)")
+    axes[0].invert_yaxis()  # shared y-axis -- inverts every track at once
+    if any_curve:
+        handles, labels = axes[0].get_legend_handles_labels()
+        if not handles:  # axes[0] itself may be the "no result" panel
+            for ax in axes:
+                handles, labels = ax.get_legend_handles_labels()
+                if handles:
+                    break
+        fig.legend(handles, labels, loc="upper center", ncol=2, bbox_to_anchor=(0.5, 1.04), frameon=False)
+    fig.suptitle(f"Blind well {blind_well_id} -- logged vs. predicted", y=1.1, fontsize=12)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()

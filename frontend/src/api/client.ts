@@ -457,6 +457,18 @@ export async function getBlindWellPrediction(blindWellId?: string): Promise<Blin
   return data;
 }
 
+/** URL for the static (Matplotlib) PNG: one well-log-style depth track per
+ * property (VSH/PHIE/SWE), each with the blind well's own logged curve
+ * overlaid against the predicted curve -- see
+ * blind_well_prediction_service.render_blind_well_log_tracks. cacheBustKey
+ * (e.g. the query's dataUpdatedAt) forces a fresh image on re-run, since
+ * blind_well_id alone doesn't change between runs. */
+export function getBlindWellLogTracksUrl(blindWellId: string, cacheBustKey?: string | number): string {
+  const params = new URLSearchParams({ blind_well_id: blindWellId });
+  if (cacheBustKey != null) params.set("_t", String(cacheBustKey));
+  return `${BASE_URL}/api/prediction/blind-well/log-tracks?${params.toString()}`;
+}
+
 // -----------------------------------------------------------------------------
 // Synthetic Seismogram module
 // -----------------------------------------------------------------------------

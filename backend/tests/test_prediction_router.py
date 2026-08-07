@@ -96,3 +96,41 @@ class TestBlindWellEndpoint:
         monkeypatch.setattr(bwp, "run_blind_well_prediction", _fake)
         resp = client.get("/api/prediction/blind-well", params={"blind_well_id": "DOES_NOT_EXIST"})
         assert resp.status_code == 404
+
+
+class TestBlindWellLogTracksEndpoint:
+    def test_ok(self, client, monkeypatch):
+        png_bytes = b"\x89PNG\r\n\x1a\nfake"
+        monkeypatch.setattr(bwp, "render_blind_well_log_tracks", lambda blind_well_id="Z-02_RAW": png_bytes)
+        resp = client.get("/api/prediction/blind-well/log-tracks")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "image/png"
+        assert resp.content == png_bytes
+
+    def test_accepts_blind_well_id_query_param(self, client, monkeypatch):
+        seen = {}
+
+        def _fake(blind_well_id="Z-02_RAW"):
+            seen["blind_well_id"] = blind_well_id
+            return b"\x89PNG\r\n\x1a\nfake"
+
+        monkeypatch.setattr(bwp, "render_blind_well_log_tracks", _fake)
+        resp = client.get("/api/prediction/blind-well/log-tracks", params={"blind_well_id": "Z-05_RAW"})
+        assert resp.status_code == 200
+        assert seen["blind_well_id"] == "Z-05_RAW"
+
+    def test_unvalidated_result_is_422(self, client, monkeypatch):
+        def _fake(blind_well_id="Z-02_RAW"):
+            raise bwp.BlindWellPredictionError("no usable tie")
+
+        monkeypatch.setattr(bwp, "render_blind_well_log_tracks", _fake)
+        resp = client.get("/api/prediction/blind-well/log-tracks")
+        assert resp.status_code == 422
+
+    def test_unknown_well_is_404(self, client, monkeypatch):
+        def _fake(blind_well_id="Z-02_RAW"):
+            raise WellNotFoundError(blind_well_id)
+
+        monkeypatch.setattr(bwp, "render_blind_well_log_tracks", _fake)
+        resp = client.get("/api/prediction/blind-well/log-tracks", params={"blind_well_id": "DOES_NOT_EXIST"})
+        assert resp.status_code == 404

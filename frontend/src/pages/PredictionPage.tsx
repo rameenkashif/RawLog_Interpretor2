@@ -2,10 +2,8 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AxiosError } from "axios";
-import Plot from "react-plotly.js";
-import { getBlindWellPrediction } from "@/api/client";
+import { getBlindWellPrediction, getBlindWellLogTracksUrl } from "@/api/client";
 import type { BlindWellPropertyResult, SpectralPropertyName } from "@/api/types";
-import { useChartColors, usePlotlyLayout } from "@/styles/tokens";
 import ChatPanel from "@/components/ChatPanel";
 
 function errorMessage(error: unknown): string {
@@ -45,8 +43,6 @@ function MetricBadge({ label, value, tone }: { label: string; value: string; ton
 }
 
 function PropertyPanel({ property, result }: { property: SpectralPropertyName; result: BlindWellPropertyResult }) {
-  const colors = useChartColors();
-  const plotlyLayout = usePlotlyLayout();
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   if (result.status !== "validated") {
@@ -60,11 +56,6 @@ function PropertyPanel({ property, result }: { property: SpectralPropertyName; r
     );
   }
 
-  const chartData = result.depth_m.map((d, i) => ({
-    depth: d,
-    real: result.y_true[i],
-    pred: result.y_pred[i],
-  }));
   const rmseFmt = result.blind_well_rmse !== null ? result.blind_well_rmse.toFixed(3) : "—";
 
   return (
@@ -82,43 +73,6 @@ function PropertyPanel({ property, result }: { property: SpectralPropertyName; r
         {result.n_training_samples.toLocaleString()} training samples (neighborhood-expanded) ·{" "}
         {result.n_blind_samples} blind-well samples
       </p>
-
-      <div className="border border-border rounded-lg p-1.5">
-        <Plot
-          data={[
-            {
-              x: chartData.map((d) => d.real),
-              y: chartData.map((d) => d.depth),
-              type: "scatter",
-              mode: "lines+markers",
-              name: "Logged (real)",
-              line: { color: colors.accent, width: 1.5 },
-              marker: { size: 4 },
-            },
-            {
-              x: chartData.map((d) => d.pred),
-              y: chartData.map((d) => d.depth),
-              type: "scatter",
-              mode: "lines+markers",
-              name: "Predicted",
-              line: { color: colors.orange, width: 1.5 },
-              marker: { size: 4 },
-            },
-          ]}
-          layout={{
-            ...plotlyLayout,
-            autosize: true,
-            height: 420,
-            xaxis: { ...plotlyLayout.xaxis, title: { text: property.toUpperCase() } },
-            yaxis: { ...plotlyLayout.yaxis, title: { text: "Depth (m)" }, autorange: "reversed" },
-            legend: { orientation: "h", x: 0.5, xanchor: "center", y: 1.08, yanchor: "bottom" },
-            margin: { t: 30, r: 15, b: 45, l: 55 },
-          }}
-          style={{ width: "100%" }}
-          useResizeHandler
-          config={{ displaylogo: false }}
-        />
-      </div>
 
       <div>
         <button
@@ -263,6 +217,17 @@ export default function PredictionPage() {
                 ))}
               </ul>
             </details>
+          )}
+
+          {query.data.results && query.data.blind_well_id && (
+            <div className="bg-surface border border-border rounded-xl p-4 shadow-card space-y-2">
+              <h2 className="text-sm font-semibold text-ink">Logged vs. predicted -- well-log tracks</h2>
+              <img
+                src={getBlindWellLogTracksUrl(query.data.blind_well_id, query.dataUpdatedAt)}
+                alt={`Blind well ${query.data.blind_well_id}: logged vs. predicted VSH/PHIE/SWE depth tracks`}
+                className="w-full rounded-lg border border-border bg-surface-sunken"
+              />
+            </div>
           )}
 
           {query.data.results && (

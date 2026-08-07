@@ -11,7 +11,7 @@ participates in any training step).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from app.models.schemas import BlindWellPredictionResponse
 from app.services import blind_well_prediction_service as bwp
@@ -39,5 +39,20 @@ async def blind_well_prediction(
 ) -> BlindWellPredictionResponse:
     try:
         return BlindWellPredictionResponse(**bwp.run_blind_well_prediction(blind_well_id))
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/blind-well/log-tracks")
+async def blind_well_log_tracks(
+    blind_well_id: str = Query(bwp.DEFAULT_BLIND_WELL_ID, description="Same meaning as GET /blind-well's."),
+) -> Response:
+    """Static (Matplotlib) PNG: one well-log-style depth track per property
+    (VSH/PHIE/SWE), each with the blind well's own logged curve overlaid
+    against the predicted curve -- see
+    blind_well_prediction_service.render_blind_well_log_tracks."""
+    try:
+        png_bytes = bwp.render_blind_well_log_tracks(blind_well_id)
+        return Response(content=png_bytes, media_type="image/png")
     except Exception as exc:  # noqa: BLE001
         _handle(exc)

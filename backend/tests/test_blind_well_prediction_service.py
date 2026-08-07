@@ -324,3 +324,74 @@ class TestRunBlindWellPredictionOrchestration:
         assert len(result["results"]["vsh"]["y_true"]) == len(result["results"]["vsh"]["y_pred"])
         # phie is all-NaN for the blind well in this fixture.
         assert result["results"]["phie"]["status"] in ("insufficient_data", "no_stable_features", "blind_well_no_valid_samples")
+
+
+def _validated_prediction_result(blind_well_id: str = "BLIND") -> dict:
+    """A minimal but well-formed run_blind_well_prediction()-shaped dict,
+    for testing render_blind_well_log_tracks without re-running the whole
+    pipeline (that's already covered by TestRunBlindWellPredictionOrchestration)."""
+    return {
+        "status": "validated",
+        "message": None,
+        "blind_well_id": blind_well_id,
+        "training_well_ids": ["A", "B", "C"],
+        "excluded_wells": [],
+        "neighborhood_radius_m": bwp.NEIGHBORHOOD_RADIUS_M,
+        "results": {
+            "vsh": {
+                "status": "validated",
+                "blind_well_r2": 0.42,
+                "depth_m": [3500.0, 3500.5, 3501.0],
+                "y_true": [0.3, 0.35, 0.4],
+                "y_pred": [0.28, 0.31, 0.36],
+            },
+            "phie": {
+                "status": "validated",
+                "blind_well_r2": -0.1,
+                "depth_m": [3500.0, 3500.5, 3501.0],
+                "y_true": [0.1, 0.12, 0.11],
+                "y_pred": [0.15, 0.14, 0.13],
+            },
+            "swe": {"status": "no_stable_features", "message": "no stable feature"},
+        },
+    }
+
+
+class TestRenderBlindWellLogTracks:
+    def test_returns_a_png(self, monkeypatch):
+        monkeypatch.setattr(bwp, "run_blind_well_prediction", lambda blind_well_id: _validated_prediction_result(blind_well_id))
+        png_bytes = bwp.render_blind_well_log_tracks("BLIND")
+        assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_propagates_blind_well_id(self, monkeypatch):
+        seen = {}
+
+        def _fake(blind_well_id):
+            seen["blind_well_id"] = blind_well_id
+            return _validated_prediction_result(blind_well_id)
+
+        monkeypatch.setattr(bwp, "run_blind_well_prediction", _fake)
+        bwp.render_blind_well_log_tracks("Z-05_RAW")
+        assert seen["blind_well_id"] == "Z-05_RAW"
+
+    def test_raises_when_overall_status_not_validated(self, monkeypatch):
+        monkeypatch.setattr(
+            bwp, "run_blind_well_prediction",
+            lambda blind_well_id: {"status": "blind_well_unusable", "message": "no usable tie", "results": None},
+        )
+        with pytest.raises(bwp.BlindWellPredictionError, match="no usable tie"):
+            bwp.render_blind_well_log_tracks("BLIND")
+
+    def test_still_renders_when_every_property_unvalidated(self, monkeypatch):
+        """No stable features anywhere -- every track panel falls back to a
+        text message instead of a curve, but the PNG itself must still
+        render without crashing (see the any_curve-guarded legend logic)."""
+        result = _validated_prediction_result()
+        result["results"] = {
+            "vsh": {"status": "no_stable_features", "message": "no stable feature"},
+            "phie": {"status": "insufficient_data", "message": "too few samples"},
+            "swe": {"status": "no_stable_features", "message": "no stable feature"},
+        }
+        monkeypatch.setattr(bwp, "run_blind_well_prediction", lambda blind_well_id: result)
+        png_bytes = bwp.render_blind_well_log_tracks("BLIND")
+        assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
