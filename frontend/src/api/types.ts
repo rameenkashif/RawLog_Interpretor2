@@ -588,6 +588,49 @@ export interface SpectralPropertyModelResponse {
   results: Record<SpectralPropertyName, Record<SpectralPropertyMethod, SpectralPropertyMethodResult | null>> | null;
 }
 
+// -----------------------------------------------------------------------------
+// Blind-well prediction (neighborhood-expanded CWT/SSWT + instantaneous
+// attributes -> stacked VSH/PHIE/SWE prediction, validated by holding one
+// well out entirely -- see blind_well_prediction_service.py).
+// -----------------------------------------------------------------------------
+export interface BlindWellExcludedWell {
+  well_id: string;
+  reason: string;
+}
+
+export interface BlindWellFeatureDiagnostic {
+  feature: string;
+  pooled_corr: number | null;
+  stable: boolean;
+  selected: boolean;
+}
+
+export interface BlindWellPropertyResult {
+  status: "validated" | "insufficient_data" | "no_stable_features" | "blind_well_no_valid_samples";
+  message: string | null;
+  selected_features: string[];
+  feature_diagnostics: BlindWellFeatureDiagnostic[];
+  decision_gate_r2: number | null;
+  stack_loocv_r2: number | null;
+  blind_well_r2: number | null;
+  blind_well_rmse: number | null;
+  n_training_samples: number;
+  n_blind_samples: number;
+  depth_m: number[];
+  y_true: number[];
+  y_pred: number[];
+}
+
+export interface BlindWellPredictionResponse {
+  status: "validated" | "blind_well_unusable" | "insufficient_data";
+  message: string | null;
+  blind_well_id: string | null;
+  training_well_ids: string[];
+  excluded_wells: BlindWellExcludedWell[];
+  neighborhood_radius_m: number | null;
+  results: Record<SpectralPropertyName, BlindWellPropertyResult> | null;
+}
+
 export const CURVE_NAMES = [
   "DEPT",
   "GR",

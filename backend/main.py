@@ -107,6 +107,22 @@ except Exception as exc:  # noqa: BLE001
         exc,
     )
 
+# Blind-well prediction module (neighborhood-expanded CWT/SSWT stacking
+# ensemble) -- reuses seismic_processor.SegyVolume plus scikit-learn/
+# xgboost, so it gets the same defensive import treatment.
+try:
+    from app.routers import prediction
+
+    app.include_router(prediction.router)
+except Exception as exc:  # noqa: BLE001
+    logger.warning(
+        "Blind-Well Prediction module failed to load and its endpoints will be "
+        "unavailable (GET /api/prediction/*). This is usually caused by a missing "
+        "dependency -- run `pip install -r requirements.txt` (needs segyio + xgboost) "
+        "and restart. Underlying error: %s",
+        exc,
+    )
+
 
 @app.get("/health")
 async def health() -> dict[str, str]:

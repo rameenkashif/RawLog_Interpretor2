@@ -81,6 +81,7 @@ class _DirectTieResult:
     features at the resolved trace without re-resolving anything."""
 
     ctx: _WellTieContext
+    trace_idx: int
     correlation: float
     bulk_shift_ms: float
     best_freq_hz: float
@@ -141,6 +142,7 @@ def _resolve_direct_tie(volume, well_id: str) -> _DirectTieResult:
     )
     return _DirectTieResult(
         ctx=ctx,
+        trace_idx=result.trace_idx,
         correlation=result.correlation,
         bulk_shift_ms=result.bulk_shift_ms,
         best_freq_hz=result.best_freq_hz,

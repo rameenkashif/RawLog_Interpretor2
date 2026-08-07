@@ -145,12 +145,12 @@ class TestEligibleWells:
         def _fake_resolve(volume, well_id):
             if well_id == "GOOD":
                 return sppp._DirectTieResult(
-                    ctx=_fake_ctx(well_id), correlation=0.9, bulk_shift_ms=5.0,
+                    ctx=_fake_ctx(well_id), trace_idx=0, correlation=0.9, bulk_shift_ms=5.0,
                     best_freq_hz=25.0, boundary_pinned=False, low_confidence=False,
                 )
             if well_id == "LOW_CONF":
                 return sppp._DirectTieResult(
-                    ctx=_fake_ctx(well_id), correlation=0.1, bulk_shift_ms=5.0,
+                    ctx=_fake_ctx(well_id), trace_idx=0, correlation=0.1, bulk_shift_ms=5.0,
                     best_freq_hz=25.0, boundary_pinned=False, low_confidence=True,
                 )
             raise sppp.wst.TieError("no coordinates available")
@@ -175,7 +175,7 @@ class TestEligibleWells:
 
         def _fake_resolve(volume, well_id):
             return sppp._DirectTieResult(
-                ctx=_fake_ctx(well_id), correlation=0.9, bulk_shift_ms=95.0,
+                ctx=_fake_ctx(well_id), trace_idx=0, correlation=0.9, bulk_shift_ms=95.0,
                 best_freq_hz=25.0, boundary_pinned=True, low_confidence=True,
             )
 

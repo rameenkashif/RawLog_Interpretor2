@@ -8,6 +8,7 @@
 import axios from "axios";
 import type {
   AmplitudeSpectrumResponse,
+  BlindWellPredictionResponse,
   ChatStreamEvent,
   CheckshotStatusResponse,
   CheckshotUploadResponse,
@@ -443,6 +444,16 @@ export async function getSpectralPropertyModel(): Promise<SpectralPropertyModelR
   const { data } = await http.get<SpectralPropertyModelResponse>(
     "/api/seismic/spectral-property-model",
   );
+  return data;
+}
+
+// -----------------------------------------------------------------------------
+// Blind-well prediction module
+// -----------------------------------------------------------------------------
+export async function getBlindWellPrediction(blindWellId?: string): Promise<BlindWellPredictionResponse> {
+  const { data } = await http.get<BlindWellPredictionResponse>("/api/prediction/blind-well", {
+    params: blindWellId ? { blind_well_id: blindWellId } : {},
+  });
   return data;
 }
 

@@ -10,6 +10,7 @@ ssqueezepy>=0.6.0  # optional: only needed for SSWT (include_sswt=true); importe
 openpyxl>=3.1.2  # checkshot workbook upload (services/checkshot_service.py); imported lazily, safe to omit
 pandas>=2.2.3
 scikit-learn>=1.5.2
+xgboost>=2.1.0  # blind_well_prediction_service.py's stacking base learner (sharp-edge/bed-boundary fit)
 pydantic>=2.8.2
 pydantic-settings>=2.4.0
 PyYAML>=6.0.2

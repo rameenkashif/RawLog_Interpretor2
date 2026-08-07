@@ -808,6 +808,59 @@ class SpectralPropertyModelResponse(BaseModel):
     )
 
 
+# -----------------------------------------------------------------------------
+# Blind-well prediction (neighborhood-expanded CWT/SSWT + instantaneous
+# attributes -> stacked VSH/PHIE/SWE prediction, validated by holding one
+# well out ENTIRELY -- not leave-one-well-out averaged across every well,
+# see blind_well_prediction_service.py).
+# -----------------------------------------------------------------------------
+class BlindWellExcludedWell(BaseModel):
+    well_id: str
+    reason: str = Field(..., description="Why this well was excluded -- never silently dropped")
+
+
+class BlindWellFeatureDiagnostic(BaseModel):
+    feature: str
+    pooled_corr: float | None = Field(None, description="Mean per-well Pearson correlation against the target")
+    stable: bool = Field(..., description="Correlation sign agrees across every training well, not just pooled")
+    selected: bool
+
+
+class BlindWellPropertyResult(BaseModel):
+    status: str = Field(
+        ..., description="'validated', 'insufficient_data', 'no_stable_features', or 'blind_well_no_valid_samples'"
+    )
+    message: str | None = None
+    selected_features: list[str] = Field(default_factory=list)
+    feature_diagnostics: list[BlindWellFeatureDiagnostic] = Field(default_factory=list)
+    decision_gate_r2: float | None = Field(
+        None,
+        description="Cheap sanity check: single XGBoost, top-3 features, leave-one-well-out across TRAINING wells only -- if still negative, the full stack is unlikely to help",
+    )
+    stack_loocv_r2: float | None = Field(
+        None, description="The full stack's own leave-one-well-out R^2 across training wells (honest, out-of-fold)"
+    )
+    blind_well_r2: float | None = Field(None, description="R^2 on the held-out blind well's own logged interval -- never used in training")
+    blind_well_rmse: float | None = None
+    n_training_samples: int = 0
+    n_blind_samples: int = 0
+    depth_m: list[float] = Field(default_factory=list)
+    y_true: list[float] = Field(default_factory=list, description="Blind well's actual logged values")
+    y_pred: list[float] = Field(default_factory=list, description="Blind well's predicted values, same order as y_true")
+
+
+class BlindWellPredictionResponse(BaseModel):
+    status: str = Field(..., description="'validated', 'blind_well_unusable', or 'insufficient_data'")
+    message: str | None = None
+    blind_well_id: str | None = None
+    training_well_ids: list[str] = Field(default_factory=list)
+    excluded_wells: list[BlindWellExcludedWell] = Field(default_factory=list)
+    neighborhood_radius_m: float | None = None
+    results: dict[str, BlindWellPropertyResult] | None = Field(
+        None, description="{'vsh'|'phie'|'swe': result} -- present only when status='validated'"
+    )
+
+
 class CheckshotUploadResponse(BaseModel):
     wells: dict[str, int] = Field(..., description="well_id -> number of checkshot points stored")
 
