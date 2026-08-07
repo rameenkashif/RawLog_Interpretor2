@@ -120,6 +120,43 @@ class TestGenerateEndpoint:
         sp._volume_cache.clear()
 
 
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+class TestImageEndpoints:
+    def test_impedance_image_ok(self, client):
+        resp = client.get("/api/synthetic/Z-02_RAW/impedance-image")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "image/png"
+        assert resp.content[:8] == PNG_MAGIC
+
+    def test_wavelet_image_ok(self, client):
+        resp = client.get(
+            "/api/synthetic/Z-02_RAW/wavelet-image",
+            params={"wavelet_method": "ricker", "wavelet_freq_hz": 30},
+        )
+        assert resp.status_code == 200
+        assert resp.content[:8] == PNG_MAGIC
+
+    def test_trace_overlay_image_ok_both_domains(self, client):
+        for domain in ("time", "frequency"):
+            resp = client.get(
+                "/api/synthetic/Z-02_RAW/trace-overlay-image", params={"domain": domain}
+            )
+            assert resp.status_code == 200
+            assert resp.content[:8] == PNG_MAGIC
+
+    def test_trace_overlay_image_bad_domain_is_422(self, client):
+        resp = client.get(
+            "/api/synthetic/Z-02_RAW/trace-overlay-image", params={"domain": "bogus"}
+        )
+        assert resp.status_code == 422
+
+    def test_unknown_well_is_404(self, client):
+        resp = client.get("/api/synthetic/DOES_NOT_EXIST/impedance-image")
+        assert resp.status_code == 404
+
+
 class TestNearestTraceEndpoint:
     def test_ok(self, client):
         resp = client.get("/api/synthetic/Z-02_RAW/nearest-trace")

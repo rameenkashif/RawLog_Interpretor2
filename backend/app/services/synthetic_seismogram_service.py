@@ -404,6 +404,139 @@ def generate(
     }
 
 
+def _rms(values) -> float:
+    """Same DISPLAY-only normalization as the frontend's rms() helpers
+    (SyntheticTraceOverlay.tsx / Seismic/WellTieView.tsx) -- floored to
+    avoid a divide-by-zero blowup on a degenerate all-zero trace."""
+    arr = np.asarray(values, dtype=float)
+    r = float(np.sqrt(np.mean(arr**2))) if arr.size else 0.0
+    return r if r > 1e-12 else 1.0
+
+
+def render_impedance_image(well_id: str, **generate_kwargs) -> bytes:
+    """PNG: acoustic impedance and reflectivity depth tracks -- same figure
+    as AcousticImpedanceChart.tsx, rendered server-side with Matplotlib.
+    generate_kwargs: same keyword arguments as generate() (wavelet_method,
+    wavelet_freq_hz, density_method, apply_saved_tie, max_shift_ms,
+    auto_optimize_tie), so the image matches whatever the interactive page
+    is currently showing."""
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    result = generate(well_id, **generate_kwargs)
+
+    fig, (ax_ai, ax_rc) = plt.subplots(1, 2, figsize=(9, 6), dpi=150, sharey=True)
+
+    ax_ai.plot(result["acoustic_impedance"], result["depth_m"], color="#2563EB", linewidth=1)
+    ax_ai.set_xlabel("Acoustic Impedance")
+    ax_ai.set_ylabel("Depth (m)")
+    ax_ai.invert_yaxis()
+    ax_ai.grid(alpha=0.3)
+
+    ax_rc.plot(result["reflectivity"], result["reflectivity_depth_m"], color="#F97316", linewidth=0.8)
+    ax_rc.axvline(0, color="0.6", linewidth=0.6)
+    ax_rc.set_xlabel("Reflectivity")
+    ax_rc.grid(alpha=0.3)
+
+    fig.suptitle(f"{well_id} — Acoustic Impedance & Reflectivity", fontsize=11)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def render_wavelet_image(well_id: str, **generate_kwargs) -> bytes:
+    """PNG: wavelet time-domain amplitude plus amplitude/phase spectra --
+    same 3-panel figure as WaveletView.tsx."""
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    result = generate(well_id, **generate_kwargs)
+
+    fig, (ax_t, ax_amp, ax_phase) = plt.subplots(1, 3, figsize=(13, 4), dpi=150)
+
+    ax_t.plot(result["wavelet_t_ms"], result["wavelet_amplitude"], color="#2563EB", linewidth=1.2)
+    ax_t.set_title(f"Wavelet ({result['wavelet_method']})", fontsize=10)
+    ax_t.set_xlabel("Time (ms)")
+    ax_t.grid(alpha=0.3)
+
+    ax_amp.plot(result["wavelet_spectrum_freq_hz"], result["wavelet_spectrum_amplitude"], color="#2563EB", linewidth=1.2)
+    ax_amp.set_title("Amplitude Spectrum", fontsize=10)
+    ax_amp.set_xlabel("Frequency (Hz)")
+    ax_amp.grid(alpha=0.3)
+
+    ax_phase.plot(result["wavelet_spectrum_freq_hz"], result["wavelet_spectrum_phase_deg"], color="#F97316", linewidth=1.2)
+    ax_phase.set_title("Phase Spectrum", fontsize=10)
+    ax_phase.set_xlabel("Frequency (Hz)")
+    ax_phase.set_ylabel("deg")
+    ax_phase.grid(alpha=0.3)
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def render_trace_overlay_image(well_id: str, domain: str = "time", **generate_kwargs) -> bytes:
+    """PNG: synthetic-vs-real trace overlay, time or frequency domain --
+    same figure as SyntheticTraceOverlay.tsx, each curve independently
+    RMS-normalized for DISPLAY only (see that component's docstring for why
+    -- the synthetic and the raw SEG-Y trace have no reason to share an
+    amplitude scale)."""
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if domain not in ("time", "frequency"):
+        raise SyntheticSeismogramError(f"Unknown domain '{domain}' -- expected 'time' or 'frequency'.")
+
+    result = generate(well_id, **generate_kwargs)
+
+    if domain == "time":
+        x = result["seismic_twt_ms"]
+        real, synthetic = result["real_trace"], result["shifted_synthetic"]
+        xlabel = "Two-Way Time (ms)"
+    else:
+        x = result["trace_spectrum_freq_hz"]
+        real, synthetic = result["real_trace_spectrum_amplitude"], result["synthetic_spectrum_amplitude"]
+        xlabel = "Frequency (Hz)"
+    real_rms, syn_rms = _rms(real), _rms(synthetic)
+    real_norm = np.asarray(real, dtype=float) / real_rms
+    syn_norm = np.asarray(synthetic, dtype=float) / syn_rms
+
+    fig, ax = plt.subplots(figsize=(11, 5), dpi=150)
+    ax.plot(x, real_norm, color="#2563EB", linewidth=1.3, label="Real trace")
+    ax.plot(x, syn_norm, color="#F97316", linewidth=1.3, label="Synthetic (shifted)")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Amplitude (RMS-normalized)" if domain == "time" else "Spectral Amplitude (RMS-normalized)")
+    ax.axhline(0, color="0.6", linewidth=0.6)
+    ax.legend(loc="upper right", fontsize=9)
+    ax.grid(alpha=0.3)
+    pol = " -- reversed polarity" if result["polarity"] < 0 else ""
+    ax.set_title(
+        f"{well_id} — corr={result['correlation']:.3f}, shift={result['best_shift_ms']:.1f}ms{pol}", fontsize=11
+    )
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
 def save_tie_points(well_id: str, points: list[dict], wavelet_method: str, wavelet_freq_hz: float) -> TiePointSet:
     """Persist manual stretch/squeeze control points for a well so they
     survive across sessions instead of being recomputed from scratch."""

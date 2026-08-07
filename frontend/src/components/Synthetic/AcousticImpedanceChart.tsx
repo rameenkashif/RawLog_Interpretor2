@@ -1,68 +1,24 @@
-import { useMemo } from "react";
-import Plot from "react-plotly.js";
-import type { Data, Layout } from "plotly.js";
+import { getSyntheticImageUrl } from "@/api/client";
 import type { SyntheticSeismogramResponse } from "@/api/types";
-import { useChartColors, type ChartColors } from "@/styles/tokens";
-
-function axisStyle(colors: ChartColors) {
-  return {
-    gridcolor: colors.gridLine,
-    linecolor: colors.borderStrong,
-    tickfont: { color: colors.inkMuted },
-  };
-}
 
 /**
  * Acoustic impedance (depth domain) and reflectivity (depth + time domain)
- * -- two side-by-side depth tracks like a classic log display, using
- * Plotly for the shared reversed-depth-axis convention already used
- * elsewhere in the app (LogTrackViewer.tsx).
+ * -- two side-by-side depth tracks like a classic log display, rendered
+ * server-side (Matplotlib) via synthetic_seismogram_service.
+ * render_impedance_image so every chart on this page comes from the same
+ * static-image convention (see WaveletView.tsx / SyntheticTraceOverlay.tsx).
  */
 export default function AcousticImpedanceChart({ result }: { result: SyntheticSeismogramResponse }) {
-  const colors = useChartColors();
-  const { data, layout } = useMemo(() => buildFigure(result, colors), [result, colors]);
+  const src = getSyntheticImageUrl(result.well_id, "impedance", {
+    waveletMethod: result.wavelet_method,
+    waveletFreqHz: result.wavelet_freq_hz,
+    densityMethod: result.density_method,
+    autoOptimizeTie: result.auto_optimize_tie,
+  });
 
   return (
     <div className="bg-surface border border-border rounded-xl p-2 shadow-card">
-      <Plot data={data} layout={layout} style={{ width: "100%", height: "460px" }} config={{ displaylogo: false, responsive: true }} />
+      <img src={src} alt={`${result.well_id} acoustic impedance and reflectivity`} className="w-full h-auto" />
     </div>
   );
-}
-
-function buildFigure(result: SyntheticSeismogramResponse, colors: ChartColors): { data: Data[]; layout: Partial<Layout> } {
-  const AXIS_STYLE = axisStyle(colors);
-  const aiTrace = {
-    type: "scatter",
-    mode: "lines",
-    name: "Acoustic Impedance",
-    x: result.acoustic_impedance,
-    y: result.depth_m,
-    line: { color: colors.accent, width: 1.2 },
-    xaxis: "x",
-    yaxis: "y",
-  } as Data;
-
-  const rcTrace = {
-    type: "scatter",
-    mode: "lines",
-    name: "Reflectivity",
-    x: result.reflectivity,
-    y: result.reflectivity_depth_m,
-    line: { color: colors.orange, width: 1 },
-    xaxis: "x2",
-    yaxis: "y",
-  } as Data;
-
-  const layout: Partial<Layout> = {
-    paper_bgcolor: colors.surface,
-    plot_bgcolor: colors.surface,
-    font: { color: colors.ink, family: "Inter, system-ui, sans-serif" },
-    margin: { t: 30, r: 20, b: 40, l: 60 },
-    xaxis: { title: { text: "Acoustic Impedance" }, domain: [0, 0.46], ...AXIS_STYLE },
-    xaxis2: { title: { text: "Reflectivity" }, domain: [0.54, 1], anchor: "y", ...AXIS_STYLE },
-    yaxis: { title: { text: "Depth (m)" }, autorange: "reversed", ...AXIS_STYLE },
-    showlegend: false,
-  };
-
-  return { data: [aiTrace, rcTrace], layout };
 }

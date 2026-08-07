@@ -514,6 +514,34 @@ export function getSyntheticExportUrl(
   return `${BASE_URL}/api/synthetic/${wellId}/export?${params.toString()}`;
 }
 
+/** URL for one of the Synthetic Seismogram page's static (Matplotlib) PNGs
+ * -- same query params as generateSyntheticSeismogram, so the image matches
+ * whatever the interactive controls are currently set to. `domain` only
+ * applies to "trace-overlay" (ignored otherwise). See
+ * synthetic_seismogram_service.render_impedance_image/render_wavelet_image/
+ * render_trace_overlay_image. */
+export function getSyntheticImageUrl(
+  wellId: string,
+  kind: "impedance" | "wavelet" | "trace-overlay",
+  opts: {
+    waveletMethod?: WaveletMethod;
+    waveletFreqHz?: number;
+    densityMethod?: DensityMethod;
+    applySavedTie?: boolean;
+    autoOptimizeTie?: boolean;
+    domain?: "time" | "frequency";
+  } = {},
+): string {
+  const params = new URLSearchParams();
+  if (opts.waveletMethod) params.set("wavelet_method", opts.waveletMethod);
+  if (opts.waveletFreqHz) params.set("wavelet_freq_hz", String(opts.waveletFreqHz));
+  if (opts.densityMethod) params.set("density_method", opts.densityMethod);
+  if (opts.applySavedTie != null) params.set("apply_saved_tie", String(opts.applySavedTie));
+  if (opts.autoOptimizeTie) params.set("auto_optimize_tie", String(opts.autoOptimizeTie));
+  if (kind === "trace-overlay" && opts.domain) params.set("domain", opts.domain);
+  return `${BASE_URL}/api/synthetic/${wellId}/${kind}-image?${params.toString()}`;
+}
+
 /**
  * Streams the /chat SSE endpoint, invoking `onEvent` for each parsed event
  * as it arrives. Returns a function that aborts the stream early if called.

@@ -22,7 +22,7 @@ from __future__ import annotations
 import csv
 import io
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
 from app.models.schemas import (
@@ -82,6 +82,93 @@ async def generate(
             auto_optimize_tie=auto_optimize_tie,
         )
         return SyntheticSeismogramResponse(**result)
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/{well_id}/impedance-image")
+async def impedance_image(
+    well_id: str,
+    wavelet_method: str = Query("statistical"),
+    wavelet_freq_hz: float = Query(25.0, gt=0),
+    density_method: str = Query("rhob"),
+    apply_saved_tie: bool = Query(True),
+    max_shift_ms: float = Query(wst.DEFAULT_MAX_SHIFT_MS, gt=0),
+    auto_optimize_tie: bool = Query(False),
+) -> Response:
+    """Static (Matplotlib) PNG: acoustic impedance and reflectivity depth
+    tracks -- see synthetic_seismogram_service.render_impedance_image.
+    Same query params as GET /generate, so the image matches whatever the
+    interactive page is currently showing."""
+    try:
+        png_bytes = sss.render_impedance_image(
+            well_id,
+            wavelet_method=wavelet_method,
+            wavelet_freq_hz=wavelet_freq_hz,
+            density_method=density_method,
+            apply_saved_tie=apply_saved_tie,
+            max_shift_ms=max_shift_ms,
+            auto_optimize_tie=auto_optimize_tie,
+        )
+        return Response(content=png_bytes, media_type="image/png")
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/{well_id}/wavelet-image")
+async def wavelet_image(
+    well_id: str,
+    wavelet_method: str = Query("statistical"),
+    wavelet_freq_hz: float = Query(25.0, gt=0),
+    density_method: str = Query("rhob"),
+    apply_saved_tie: bool = Query(True),
+    max_shift_ms: float = Query(wst.DEFAULT_MAX_SHIFT_MS, gt=0),
+    auto_optimize_tie: bool = Query(False),
+) -> Response:
+    """Static (Matplotlib) PNG: wavelet time-domain amplitude plus
+    amplitude/phase spectra -- see
+    synthetic_seismogram_service.render_wavelet_image."""
+    try:
+        png_bytes = sss.render_wavelet_image(
+            well_id,
+            wavelet_method=wavelet_method,
+            wavelet_freq_hz=wavelet_freq_hz,
+            density_method=density_method,
+            apply_saved_tie=apply_saved_tie,
+            max_shift_ms=max_shift_ms,
+            auto_optimize_tie=auto_optimize_tie,
+        )
+        return Response(content=png_bytes, media_type="image/png")
+    except Exception as exc:  # noqa: BLE001
+        _handle(exc)
+
+
+@router.get("/{well_id}/trace-overlay-image")
+async def trace_overlay_image(
+    well_id: str,
+    domain: str = Query("time", description="'time' or 'frequency'"),
+    wavelet_method: str = Query("statistical"),
+    wavelet_freq_hz: float = Query(25.0, gt=0),
+    density_method: str = Query("rhob"),
+    apply_saved_tie: bool = Query(True),
+    max_shift_ms: float = Query(wst.DEFAULT_MAX_SHIFT_MS, gt=0),
+    auto_optimize_tie: bool = Query(False),
+) -> Response:
+    """Static (Matplotlib) PNG: synthetic-vs-real trace overlay, time or
+    frequency domain -- see
+    synthetic_seismogram_service.render_trace_overlay_image."""
+    try:
+        png_bytes = sss.render_trace_overlay_image(
+            well_id,
+            domain=domain,
+            wavelet_method=wavelet_method,
+            wavelet_freq_hz=wavelet_freq_hz,
+            density_method=density_method,
+            apply_saved_tie=apply_saved_tie,
+            max_shift_ms=max_shift_ms,
+            auto_optimize_tie=auto_optimize_tie,
+        )
+        return Response(content=png_bytes, media_type="image/png")
     except Exception as exc:  # noqa: BLE001
         _handle(exc)
 

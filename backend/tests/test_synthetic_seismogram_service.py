@@ -260,6 +260,43 @@ class TestGenerate:
         assert result["applied_tie_points"] == []
 
 
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+class TestRenderImages:
+    def test_impedance_image_returns_nonempty_png(self, aligned_well):
+        png_bytes = sss.render_impedance_image(aligned_well.well_id)
+        assert png_bytes[:8] == PNG_MAGIC
+        assert len(png_bytes) > 1000
+
+    def test_wavelet_image_returns_nonempty_png(self, aligned_well):
+        png_bytes = sss.render_wavelet_image(aligned_well.well_id, wavelet_method="ricker", wavelet_freq_hz=25.0)
+        assert png_bytes[:8] == PNG_MAGIC
+        assert len(png_bytes) > 1000
+
+    def test_trace_overlay_image_time_domain(self, aligned_well):
+        png_bytes = sss.render_trace_overlay_image(aligned_well.well_id, domain="time")
+        assert png_bytes[:8] == PNG_MAGIC
+        assert len(png_bytes) > 1000
+
+    def test_trace_overlay_image_frequency_domain(self, aligned_well):
+        png_bytes = sss.render_trace_overlay_image(aligned_well.well_id, domain="frequency")
+        assert png_bytes[:8] == PNG_MAGIC
+        assert len(png_bytes) > 1000
+
+    def test_trace_overlay_image_unknown_domain_raises(self, aligned_well):
+        with pytest.raises(sss.SyntheticSeismogramError):
+            sss.render_trace_overlay_image(aligned_well.well_id, domain="bogus")
+
+    def test_images_honor_generate_kwargs(self, aligned_well):
+        # Passing the same knobs /generate accepts (auto_optimize_tie here)
+        # should reach generate() unchanged, not silently ignore them.
+        png_bytes = sss.render_wavelet_image(
+            aligned_well.well_id, wavelet_method="ricker", wavelet_freq_hz=25.0, auto_optimize_tie=True
+        )
+        assert png_bytes[:8] == PNG_MAGIC
+
+
 class TestNearestTrace:
     def test_returns_geometry(self, aligned_well):
         result = sss.nearest_trace(aligned_well.well_id)
