@@ -3,12 +3,19 @@ well_zone_tie_service.py
 ----------------------------
 "Well-Seismic Tie" map: ties each well's reservoir zone (mean VSH within
 its Pay zone, per petrophysics.py's ZONES classification) to the seismic
-survey via real-world coordinates (well X/Y -> nearest trace, same
-find_nearest_trace_index used by the single-well synthetic seismogram
-tie), then spatially interpolates those per-well values across the full
-inline x crossline grid using inverse-distance weighting (IDW) so the
-handful of wells can be viewed as a continuous map with well locations
-overlaid -- e.g. a "Predicted VSH" style map.
+survey via real-world coordinates (well X/Y -> nearest trace, raw distance
+via well_seismic_tie.find_nearest_trace_index -- the same trace-resolution
+primitive every other tie in this app now uses, NOT coordinate_calibration_
+service's calibrated fit), then spatially interpolates those per-well
+values across the full inline x crossline grid using inverse-distance
+weighting (IDW) so the handful of wells can be viewed as a continuous map
+with well locations overlaid -- e.g. a "Predicted VSH" style map.
+
+This is spatial-only (mean_vsh_pay is a plain depth-domain aggregate over
+each well's own ZONES==Pay samples) -- no seismic time axis is involved,
+so unlike the DPTM tie used elsewhere, there's no frequency/polarity/shift
+search here to be consistent about, only which trace counts as "this
+well's own."
 
 IMPORTANT: with only a handful of wells, this is a purely geometric
 interpolation between known control points (nearest-well-wins-nearby,
@@ -26,10 +33,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from app import petrophysics as pp
-from app.coordinate_calibration import CoordinateCalibrationError
-from app.services import coordinate_calibration_service as ccs
+from app import well_seismic_tie as wst
 from app.services import seismic_processor as sp
 from app.services import well_service
+from app.services.tie_service import _load_config as _load_tie_config
 
 DEFAULT_IDW_POWER = 2.0
 MIN_WELLS_FOR_INTERPOLATION = 2
@@ -58,6 +65,7 @@ class _WellTiePoint:
 def _collect_tie_points(volume: sp.SegyVolume) -> tuple[list[_WellTiePoint], list[str]]:
     points: list[_WellTiePoint] = []
     warnings: list[str] = []
+    max_radius_m = _load_tie_config().get("max_tie_search_radius_m")
 
     for summary in well_service.list_well_summaries():
         well_id = summary.well_id
@@ -65,8 +73,10 @@ def _collect_tie_points(volume: sp.SegyVolume) -> tuple[list[_WellTiePoint], lis
             warnings.append(f"{well_id}: no surface coordinates in LAS header -- skipped.")
             continue
         try:
-            trace_idx, distance_m, _tie_method = ccs.resolve_well_trace_index(volume, well_id)
-        except (ccs.UnresolvedCoordinateError, CoordinateCalibrationError, sp.CrsMismatchError) as exc:
+            trace_idx, distance_m = wst.find_nearest_trace_index(
+                summary.well_x, summary.well_y, volume.source_x, volume.source_y, max_radius_m=max_radius_m
+            )
+        except wst.TieError as exc:
             warnings.append(f"{well_id}: {exc}")
             continue
 
@@ -79,7 +89,6 @@ def _collect_tie_points(volume: sp.SegyVolume) -> tuple[list[_WellTiePoint], lis
             warnings.append(f"{well_id}: no Pay-zone samples -- skipped.")
             continue
 
-        distance_m = distance_m if distance_m is not None else 0.0
         points.append(
             _WellTiePoint(
                 well_id=well_id,

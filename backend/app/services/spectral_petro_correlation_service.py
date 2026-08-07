@@ -16,14 +16,13 @@ parameterization:
   a single user-requested frequency -- see get_sswt_correlation.
 
 Pure orchestration, no new spectral or petrophysical computation lives
-here: reuses coordinate_calibration_service (well->trace tie, the same
-resolution used by the Well Tie / Synthetic Seismogram modules),
-well_seismic_tie.depth_to_twt (the same sonic-integration depth-time
-relationship SegyVolume.get_well_tie uses), well_service (VSH/PHIE/SWE
-are already computed and stored per well by app/petrophysics.py at LAS
-load time -- not recomputed here), and
-seismic_processor.get_spectral_decomposition_trace (the exact CWT/SWT/SSWT
-computation the Spectral Decomposition tab uses).
+here: reuses direct_tie_service.resolve_direct_tie (well->trace tie, the
+same DPTM-first + full-window-search resolution used by every other tie
+in this app -- the main Seismic page's Well-to-Seismic Tie, Well Tie, and
+Synthetic Seismogram), well_service (VSH/PHIE/SWE are already computed and
+stored per well by app/petrophysics.py at LAS load time -- not recomputed
+here), and seismic_processor.get_spectral_decomposition_trace (the exact
+CWT/SWT/SSWT computation the Spectral Decomposition tab uses).
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from app import well_seismic_tie as wst
-from app.services import coordinate_calibration_service as ccs
+from app.services import direct_tie_service as dts
 from app.services import seismic_processor as sp
 from app.services import well_service
 
@@ -43,9 +42,6 @@ from app.services import well_service
 # flag, not a hard failure (a short tie interval is still worth showing,
 # just flagged rather than hidden per the feature spec).
 MIN_RELIABLE_SAMPLES = 20
-# Minimum valid DT samples to trust a sonic-integrated depth-time curve at
-# all -- matches synthetic_seismogram_service's build_synthetic guard.
-MIN_DEPTH_TIME_SAMPLES = 10
 # Default frequency for the CWT-vs-SSWT comparison, matching the default
 # already used by the plain CWT/STFT frequency slider in SpectralDecompView.
 DEFAULT_SSWT_COMPARISON_FREQUENCY_HZ = 30.0
@@ -93,7 +89,7 @@ class _WellTieContext:
     """Everything both correlation paths (CWT-vs-SWT, CWT-vs-SSWT) need
     about a well's tie that doesn't depend on which spectral methods are
     being compared -- extracted so neither path duplicates tie resolution,
-    the sonic-integration depth-time relationship, or the seismic/logged
+    the DPTM-based depth-time relationship, or the seismic/logged
     time-window overlap."""
 
     well_id: str
@@ -110,59 +106,37 @@ class _WellTieContext:
 def _resolve_well_tie_context(
     volume: sp.SegyVolume, well_id: str, time_shift_ms: float = 0.0
 ) -> _WellTieContext:
-    """time_shift_ms: an optional additional correction on top of the raw
-    sonic-integrated depth-time relationship, e.g. a well's own
-    synthetic-seismogram cross-correlation best_shift_ms. Defaults to 0.0,
-    which is what every current caller below (the CWT-vs-SWT/SSWT
-    correlation views) passes -- spectral_property_prediction_service.py
-    no longer calls this function at all, it resolves its own direct
-    nearest-trace tie via _resolve_direct_tie instead (see that module's
-    docstring for why). Sign convention verified against
-    well_seismic_tie.cross_correlate_and_shift: a seismic-time sample t
-    corresponds to the well's own unshifted axis at t - best_shift_ms
-    (shifting the synthetic by +best_shift_ms is what aligns it to the
-    real trace), so the correction is subtracted from the seismic time
-    axis before the depth lookup below.
+    """Well->trace tie and depth-time relationship via
+    direct_tie_service.resolve_direct_tie (use_checkshot=False: the same
+    DPTM-first + full-window-search algorithm, and raw nearest-trace
+    resolution, as tie_service.get_well_seismic_tie on the main Seismic
+    page's Well-to-Seismic Tie -- see that function's docstring for why
+    checkshot-anchoring is deliberately left off here).
+
+    time_shift_ms: an optional additional correction ON TOP of the tie's
+    own auto-found bulk_shift_ms, e.g. a further manual refinement.
+    Defaults to 0.0, which is what every current caller below (the
+    CWT-vs-SWT/SSWT correlation views) passes. Sign convention verified
+    against well_seismic_tie.cross_correlate_and_shift: a seismic-time
+    sample t corresponds to the well's own unshifted axis at
+    t - total_shift_ms (shifting the synthetic by +total_shift_ms is what
+    aligns it to the real trace), so the correction is subtracted from the
+    seismic time axis before the depth lookup below.
     """
-    well_service.get_well_summary(well_id)  # raises WellNotFoundError if absent
-    # Well location resolved the same way as every other tie in this app
-    # (Well Tie, Synthetic Seismogram) -- NOT a raw distance comparison,
-    # see coordinate_calibration_service's docstring for why.
-    trace_idx, distance_m, tie_method = ccs.resolve_well_trace_index(volume, well_id)
-    inline_number = int(volume.inline[trace_idx])
-    crossline_number = int(volume.crossline[trace_idx])
+    result = dts.resolve_direct_tie(volume, well_id, use_checkshot=False)
+    total_shift_ms = result.bulk_shift_ms + time_shift_ms
 
     curves_response = well_service.get_well_curves(well_id)
     rows = curves_response["data"]
     depth = _extract_curve(rows, "DEPT")
-    dt_log = _extract_curve(rows, "DT")
-
-    if not np.isfinite(dt_log).any():
-        raise sp.MissingCurveError(well_id, "DT")
-
-    valid_dt = np.isfinite(depth) & np.isfinite(dt_log) & (dt_log > 0)
-    depth_v, dt_v = depth[valid_dt], dt_log[valid_dt]
-    if len(depth_v) < MIN_DEPTH_TIME_SAMPLES:
-        raise sp.SegyVolumeError(
-            f"Well '{well_id}' has too few valid DT samples ({len(depth_v)}) to build a "
-            f"depth-time relationship (need >= {MIN_DEPTH_TIME_SAMPLES})."
-        )
-
-    # Same sonic-integration depth-time relationship as the Well Tie module
-    # (SegyVolume.get_well_tie) and Synthetic Seismogram module, anchored
-    # at the seismic survey's own first sample time -- see
-    # well_seismic_tie.depth_to_twt.
-    t0_ms = float(volume.twt_axis_ms[0])
-    twt_ms_v = wst.depth_to_twt(depth_v, dt_v, dt_unit="us_per_ft", t0_ms=t0_ms)
 
     # Overlap between the seismic's own recorded time window and the
-    # logged interval's sonic-integrated time coverage (shift-corrected,
-    # see time_shift_ms above) -- only this window has both a real trace
-    # and a depth-time relationship to place the logs on, per the
-    # feature spec.
+    # logged interval's tied time coverage (shift-corrected, see
+    # time_shift_ms above) -- only this window has both a real trace and a
+    # depth-time relationship to place the logs on, per the feature spec.
     seismic_twt = volume.twt_axis_ms
-    well_axis_time = seismic_twt - time_shift_ms
-    overlap = (well_axis_time >= twt_ms_v[0]) & (well_axis_time <= twt_ms_v[-1])
+    well_axis_time = seismic_twt - total_shift_ms
+    overlap = (well_axis_time >= result.dptm_ms[0]) & (well_axis_time <= result.dptm_ms[-1])
     if not overlap.any():
         raise sp.SegyVolumeError(
             f"Well '{well_id}'s logged interval does not overlap the seismic survey's "
@@ -174,14 +148,14 @@ def _resolve_well_tie_context(
     # above -- the first step of the two-step interpolation
     # _property_series finishes (depth -> property value, against that
     # property's OWN null mask).
-    depth_at_time = np.interp(seismic_twt_sub - time_shift_ms, twt_ms_v, depth_v)
+    depth_at_time = np.interp(seismic_twt_sub - total_shift_ms, result.dptm_ms, result.depth_m)
 
     return _WellTieContext(
         well_id=well_id,
-        inline_number=inline_number,
-        crossline_number=crossline_number,
-        distance_m=distance_m,
-        tie_method=tie_method,
+        inline_number=result.inline_number,
+        crossline_number=result.crossline_number,
+        distance_m=result.distance_m,
+        tie_method="nearest_trace",
         rows=rows,
         depth=depth,
         depth_at_time=depth_at_time,
@@ -292,7 +266,7 @@ def get_correlation(
     for summary in well_service.list_well_summaries():
         try:
             well_results.append(_correlate_well(volume, summary.well_id, swt_level, wavelet, cwt_freq_idx))
-        except (ccs.UnresolvedCoordinateError, sp.SegyVolumeError):
+        except (wst.TieError, sp.SegyVolumeError):
             skipped.append(summary.well_id)
 
     averages = None
@@ -438,7 +412,7 @@ def get_sswt_correlation(
     for summary in well_service.list_well_summaries():
         try:
             well_results.append(_correlate_well_sswt(volume, summary.well_id, cwt_freq_idx, sswt_freq_idx))
-        except (ccs.UnresolvedCoordinateError, sp.SegyVolumeError):
+        except (wst.TieError, sp.SegyVolumeError):
             skipped.append(summary.well_id)
 
     averages = None

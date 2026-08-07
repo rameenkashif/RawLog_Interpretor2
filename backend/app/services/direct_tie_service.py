@@ -42,7 +42,6 @@ import numpy as np
 from app import well_seismic_tie as wst
 from app.services import checkshot_service
 from app.services.dashboard_upload_service import TIE_LOW_CONFIDENCE_THRESHOLD
-from app.services.spectral_petro_correlation_service import _extract_curve
 from app.services.tie_service import _load_config as _load_tie_config
 from app.services import well_service
 
@@ -99,6 +98,8 @@ def resolve_direct_tie(
     shift are still optimized around it), same manual-override meaning as
     tie_service.get_well_seismic_tie's freq_hz.
     """
+    from app.services.spectral_petro_correlation_service import _extract_curve  # local: breaks an import cycle
+
     config = _load_tie_config()
     max_radius_m = config.get("max_tie_search_radius_m")
     fallback_max_shift_ms = float(config.get("tie_search_max_shift_ms", wst.DEFAULT_TIE_SEARCH_MAX_SHIFT_MS))

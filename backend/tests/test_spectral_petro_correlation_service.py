@@ -20,6 +20,7 @@ import pytest
 
 segyio = pytest.importorskip("segyio")
 
+from app import well_seismic_tie as wst
 from app.repository import FileWellRepository
 from app.services import seismic_processor as sp
 from app.services import spectral_petro_correlation_service as spc
@@ -154,21 +155,27 @@ class TestSingleWellCorrelation:
         with pytest.raises(sp.SegyVolumeError):
             spc.get_correlation(well_id=aligned_well.well_id, all_wells=False, wavelet="bogus")
 
-    def test_missing_dt_raises_missing_curve(self, aligned_well, well_repo):
+    def test_missing_dt_raises_tie_error(self, aligned_well, well_repo):
+        # No dedicated pre-check for a missing DT curve anymore (matching
+        # tie_service.py/direct_tie_service.py, which have none either) --
+        # it surfaces naturally as a TieError once there aren't enough
+        # valid DT/RHOB/time samples to build a reflectivity series.
         metadata, df = well_repo.get_well(aligned_well.well_id)
         df["DT"] = np.nan
         well_repo.save_well(metadata, df)
-        with pytest.raises(sp.MissingCurveError) as exc_info:
+        with pytest.raises(wst.TieError, match="Too few valid"):
             spc.get_correlation(well_id=aligned_well.well_id, all_wells=False)
-        assert exc_info.value.curve == "DT"
 
-    def test_crs_mismatch_raises(self, well_repo):
+    def test_far_outside_survey_raises_clear_error(self, well_repo):
         # Unmodified real Z-02 -- its converted coordinates are far outside
-        # this test's narrow synthetic survey extent (same as
-        # test_synthetic_seismogram_service.py's analogous test).
+        # this test's narrow synthetic survey extent. Tie resolution now
+        # uses the same raw nearest-trace resolution as tie_service.py (no
+        # CRS-calibrated fit, no CrsMismatchError), so this is caught by
+        # tie_config.yaml's max_tie_search_radius_m instead, as a generic
+        # TieError -- see test_seismic_processor.py's analogous test.
         las_bytes = Z02_PATH.read_bytes()
         result = well_service.process_and_store_las_bytes(las_bytes, "Z-02_raw.las", repo=well_repo)
-        with pytest.raises(sp.CrsMismatchError):
+        with pytest.raises(wst.TieError, match="outside max_tie_search_radius_m"):
             spc.get_correlation(well_id=result.well_id, all_wells=False)
 
 
@@ -367,18 +374,17 @@ class TestSingleWellSswtCorrelation:
         with pytest.raises(well_service.WellNotFoundError):
             spc.get_sswt_correlation(well_id="DOES_NOT_EXIST", all_wells=False)
 
-    def test_missing_dt_raises_missing_curve(self, aligned_well, well_repo):
+    def test_missing_dt_raises_tie_error(self, aligned_well, well_repo):
         metadata, df = well_repo.get_well(aligned_well.well_id)
         df["DT"] = np.nan
         well_repo.save_well(metadata, df)
-        with pytest.raises(sp.MissingCurveError) as exc_info:
+        with pytest.raises(wst.TieError, match="Too few valid"):
             spc.get_sswt_correlation(well_id=aligned_well.well_id, all_wells=False)
-        assert exc_info.value.curve == "DT"
 
-    def test_crs_mismatch_raises(self, well_repo):
+    def test_far_outside_survey_raises_clear_error(self, well_repo):
         las_bytes = Z02_PATH.read_bytes()
         result = well_service.process_and_store_las_bytes(las_bytes, "Z-02_raw.las", repo=well_repo)
-        with pytest.raises(sp.CrsMismatchError):
+        with pytest.raises(wst.TieError, match="outside max_tie_search_radius_m"):
             spc.get_sswt_correlation(well_id=result.well_id, all_wells=False)
 
     def test_scatter_present_and_matches_pair_sample_counts(self, aligned_well):

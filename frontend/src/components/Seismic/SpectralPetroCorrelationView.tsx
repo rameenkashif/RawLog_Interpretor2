@@ -389,11 +389,9 @@ export default function SpectralPetroCorrelationView() {
                 Nearest inline/crossline: {singleSwtWell.nearest_inline} / {singleSwtWell.nearest_crossline}
               </span>
               <span>
-                {singleSwtWell.tie_method === "manual_override"
-                  ? "Distance: manual override"
-                  : singleSwtWell.distance_m !== null
-                    ? `Distance: ${singleSwtWell.distance_m.toFixed(0)} m`
-                    : "Distance: n/a"}
+                {singleSwtWell.distance_m !== null
+                  ? `Distance: ${singleSwtWell.distance_m.toFixed(0)} m`
+                  : "Distance: n/a"}
               </span>
               {singleSwtWell.low_sample_warning && <LowSampleBadge />}
             </div>
@@ -404,11 +402,9 @@ export default function SpectralPetroCorrelationView() {
                 Nearest inline/crossline: {singleSswtWell.nearest_inline} / {singleSswtWell.nearest_crossline}
               </span>
               <span>
-                {singleSswtWell.tie_method === "manual_override"
-                  ? "Distance: manual override"
-                  : singleSswtWell.distance_m !== null
-                    ? `Distance: ${singleSswtWell.distance_m.toFixed(0)} m`
-                    : "Distance: n/a"}
+                {singleSswtWell.distance_m !== null
+                  ? `Distance: ${singleSswtWell.distance_m.toFixed(0)} m`
+                  : "Distance: n/a"}
               </span>
               {singleSswtWell.low_sample_warning && <LowSampleBadge />}
             </div>

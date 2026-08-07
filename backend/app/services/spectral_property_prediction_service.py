@@ -95,8 +95,16 @@ def _resolve_direct_tie(volume, well_id: str) -> _DirectTieResult:
     mask + depth_at_time array this module's feature extraction needs.
     Raises TieError/WellNotFoundError/SegyVolumeError on any failure --
     callers treat that as "excluded", never silently proceed.
+
+    use_checkshot=False: exact tie_service.get_well_seismic_tie parity
+    (the SAME algorithm every other tie in this app now uses), not
+    direct_tie_service's own checkshot-augmented default -- a well with
+    checkshot data would otherwise get a different (checkshot-anchored)
+    tie here than on the main Seismic page's Well-to-Seismic Tie, silently
+    training this model on different alignment than the one that's been
+    validated per well.
     """
-    result = dts.resolve_direct_tie(volume, well_id)
+    result = dts.resolve_direct_tie(volume, well_id, use_checkshot=False)
 
     # ctx.rows/ctx.depth need the FULL (not DPTM-valid-only) curve rows,
     # so _property_series can apply each property's own independent null

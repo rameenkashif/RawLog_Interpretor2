@@ -73,7 +73,12 @@ def get_section_well_logs(orientation: str, line_number: int) -> dict:
     for summary in well_service.list_well_summaries():
         well_id = summary.well_id
         try:
-            result = dts.resolve_direct_tie(volume, well_id)
+            # use_checkshot=False: exact tie_service.get_well_seismic_tie
+            # parity (the SAME algorithm every other tie in this app now
+            # uses), not direct_tie_service's own checkshot-augmented
+            # default -- see spectral_property_prediction_service.py's
+            # identical reasoning.
+            result = dts.resolve_direct_tie(volume, well_id, use_checkshot=False)
         except (wst.TieError, well_service.WellNotFoundError) as exc:
             skipped.append({"well_id": well_id, "reason": str(exc)})
             continue
