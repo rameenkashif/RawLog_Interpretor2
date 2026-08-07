@@ -17,12 +17,11 @@ export function Badge({ tone, children }: { tone: "orange" | "accent" | "green" 
 /**
  * Prominent QC/caveat badges -- a geophysicist needs to see these before
  * trusting the tie, not have them buried in logs. Covers: vertical-well
- * assumption (no deviation survey), no-checkshot time-depth caveat,
- * coordinate unit standardization status, washout interval count, the
- * time-depth datum plausibility check, and the bulk-shift
- * boundary-pinned reliability flag -- a correlation number alone can't
- * distinguish a genuine tie from a spurious match against noise pinned
- * to the edge of the search window.
+ * assumption (no deviation survey), coordinate unit standardization
+ * status, washout interval count, the time-depth datum plausibility
+ * check, and the bulk-shift boundary-pinned reliability flag -- a
+ * correlation number alone can't distinguish a genuine tie from a
+ * spurious match against noise pinned to the edge of the search window.
  */
 export default function QcBadges({ result }: { result: SyntheticSeismogramResponse }) {
   const washoutCount = result.washout_flag.filter(Boolean).length;
@@ -31,7 +30,6 @@ export default function QcBadges({ result }: { result: SyntheticSeismogramRespon
   return (
     <div className="flex flex-wrap gap-2">
       <Badge tone="orange">Vertical assumption — no deviation survey</Badge>
-      <Badge tone="orange">No checkshot — sonic-integration time-depth only</Badge>
       {unit === "feet" && result.well_header.unit_conversion_applied && (
         <Badge tone="accent">
           Coordinates converted ft→m (TD/STOP ratio {result.well_header.td_stop_ratio?.toFixed(2)})
