@@ -256,6 +256,9 @@ export interface WellCalibrationReportItem {
   nearest_inline: number;
   nearest_crossline: number;
   nearest_trace_distance_m: number;
+  calibrated_fit_inline: number;
+  calibrated_fit_crossline: number;
+  calibrated_fit_distance_m: number;
   is_extrapolated: boolean;
   within_bin_tolerance: boolean;
   trustworthy: boolean;

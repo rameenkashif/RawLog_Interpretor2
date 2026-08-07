@@ -110,10 +110,15 @@ class TestGetCalibrationReport:
         assert len(reports) == 3
         by_id = {r.well_id: r for r in reports}
         assert by_id["W-LOW"].trustworthy is True
-        assert by_id["W-LOW"].nearest_inline == 382
-        assert by_id["W-LOW"].nearest_crossline == 46
-        assert by_id["W-HIGH"].nearest_inline == 386
-        assert by_id["W-HIGH"].nearest_crossline == 49
+        # calibrated_fit_inline/crossline: the calibration transform's own
+        # estimate (what this test is actually checking) -- nearest_inline/
+        # crossline is now the RAW nearest-trace tie, which is meaningless
+        # for these deliberately-mismatched-coordinate test wells (that's
+        # exactly the scenario the calibrated fit exists to handle).
+        assert by_id["W-LOW"].calibrated_fit_inline == 382
+        assert by_id["W-LOW"].calibrated_fit_crossline == 46
+        assert by_id["W-HIGH"].calibrated_fit_inline == 386
+        assert by_id["W-HIGH"].calibrated_fit_crossline == 49
         assert all(r.used_in_calibration for r in reports)
 
     def test_flags_well_added_after_calibration_was_established(

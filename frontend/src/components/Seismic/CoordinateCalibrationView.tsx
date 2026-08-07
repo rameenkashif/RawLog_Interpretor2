@@ -29,13 +29,13 @@ function TrustBadge({ well }: { well: WellCalibrationReportItem }) {
   if (well.trustworthy) {
     return (
       <span className="text-xs font-semibold px-2.5 py-1 rounded-full border border-success/30 bg-success-soft text-success">
-        Trustworthy
+        Calibrated fit: trustworthy
       </span>
     );
   }
   return (
     <span className="text-xs font-semibold px-2.5 py-1 rounded-full border border-danger/40 bg-danger-soft text-danger">
-      Unresolved{well.is_extrapolated ? " — extrapolated" : " — outside bin tolerance"}
+      Calibrated fit: unresolved{well.is_extrapolated ? " — extrapolated" : " — outside bin tolerance"}
     </span>
   );
 }
@@ -44,11 +44,17 @@ function TrustBadge({ well }: { well: WellCalibrationReportItem }) {
  * "Coordinate Calibration" view: surfaces the well<->seismic per-axis
  * linear coordinate fit's diagnostics (coordinate_calibration_service.py)
  * -- residual distance vs. survey bin spacing, extrapolation flag, and
- * whether each well is part of the calibration baseline -- plus a manual
- * tie-point override table, since fixes #4/#5 explicitly require this
- * NOT be a silent pass/fail: only a well flagged trustworthy (or with a
- * manual override) should have downstream tie/prediction workflows run
- * on it, and a user needs to see why before trusting a tie.
+ * whether each well is part of the calibration baseline -- alongside the
+ * RAW nearest-trace tie every other feature in this app actually uses
+ * (well_seismic_tie.find_nearest_trace_index, no transform), for direct
+ * comparison. Plus a manual tie-point override table for a well whose
+ * position genuinely needs a human-confirmed correction.
+ *
+ * The calibrated fit is no longer wired into any downstream tie/
+ * prediction workflow (see direct_tie_service.py's docstring: proven less
+ * location-accurate on this survey's real field data than raw distance) --
+ * this view keeps it purely as a diagnostic/comparison, not because
+ * anything still depends on its Trustworthy flag.
  */
 export default function CoordinateCalibrationView() {
   const queryClient = useQueryClient();
@@ -94,10 +100,11 @@ export default function CoordinateCalibrationView() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-xs text-ink-muted max-w-2xl leading-relaxed">
-          Well header X/Y and SEG-Y trace coordinates are on different, unknown coordinate reference
-          systems -- there is no real reprojection available, so this fits a 2-point-per-axis linear
-          approximation instead. Only trust a well flagged <span className="font-semibold">trustworthy</span>,
-          or one with a manual override; treat any other well&apos;s tie as unresolved.
+          "Tied inline/crossline" is the raw nearest-trace tie every other feature in this app uses
+          (no coordinate transform). Well header X/Y and SEG-Y trace coordinates are on different,
+          unknown coordinate reference systems, so this page also fits a 2-point-per-axis linear
+          approximation as an alternate/comparison method ("Calibrated fit" columns) -- shown for
+          audit purposes only, nothing downstream actually ties against it anymore.
         </p>
         <button
           onClick={() => recalibrateMutation.mutate()}
@@ -127,9 +134,11 @@ export default function CoordinateCalibrationView() {
               <thead>
                 <tr className="text-ink-faint border-b border-border">
                   <th className="py-1.5 pr-4 font-semibold">Well</th>
-                  <th className="py-1.5 pr-4 font-semibold">Status</th>
                   <th className="py-1.5 pr-4 font-semibold">Tied inline/crossline</th>
-                  <th className="py-1.5 pr-4 font-semibold">Residual (m)</th>
+                  <th className="py-1.5 pr-4 font-semibold">Distance (m)</th>
+                  <th className="py-1.5 pr-4 font-semibold">Calibrated fit inline/crossline</th>
+                  <th className="py-1.5 pr-4 font-semibold">Calibrated fit distance (m)</th>
+                  <th className="py-1.5 pr-4 font-semibold">Calibrated fit status</th>
                   <th className="py-1.5 pr-4 font-semibold">In calibration baseline</th>
                   <th className="py-1.5 pr-4 font-semibold">Manual override</th>
                 </tr>
@@ -145,13 +154,17 @@ export default function CoordinateCalibrationView() {
                   return (
                     <tr key={w.well_id} className="border-b border-border last:border-0 align-top">
                       <td className="py-2 pr-4 font-semibold text-ink">{w.well_name}</td>
-                      <td className="py-2 pr-4">
-                        <TrustBadge well={w} />
-                      </td>
-                      <td className="py-2 pr-4 text-ink-muted">
+                      <td className="py-2 pr-4 text-ink font-semibold">
                         {w.nearest_inline} / {w.nearest_crossline}
                       </td>
                       <td className="py-2 pr-4 text-ink-muted">{w.nearest_trace_distance_m.toFixed(0)}</td>
+                      <td className="py-2 pr-4 text-ink-faint">
+                        {w.calibrated_fit_inline} / {w.calibrated_fit_crossline}
+                      </td>
+                      <td className="py-2 pr-4 text-ink-faint">{w.calibrated_fit_distance_m.toFixed(0)}</td>
+                      <td className="py-2 pr-4">
+                        <TrustBadge well={w} />
+                      </td>
                       <td className="py-2 pr-4 text-ink-muted">{w.used_in_calibration ? "Yes" : "No"}</td>
                       <td className="py-2 pr-4">
                         <div className="flex flex-wrap items-center gap-1.5">

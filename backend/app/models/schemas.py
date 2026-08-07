@@ -473,14 +473,21 @@ class WellCalibrationReportItem(BaseModel):
     well_y: float
     transformed_x: float = Field(..., description="Well coordinate mapped into seismic-survey coordinate space by the calibration")
     transformed_y: float
-    nearest_inline: int
+    nearest_inline: int = Field(
+        ..., description="RAW nearest-trace tie (no transform) -- the same resolution every other tie in this app uses"
+    )
     nearest_crossline: int
     nearest_trace_distance_m: float
+    calibrated_fit_inline: int = Field(
+        ..., description="What the per-axis calibrated fit resolves to, for comparison only -- nothing downstream ties against this anymore"
+    )
+    calibrated_fit_crossline: int
+    calibrated_fit_distance_m: float
     is_extrapolated: bool = Field(
         ..., description="Coordinates fall outside both the calibration's fit range and the survey's own extent"
     )
-    within_bin_tolerance: bool = Field(..., description="Nearest-trace residual is within ~2x the survey's bin spacing")
-    trustworthy: bool = Field(..., description="within_bin_tolerance AND NOT is_extrapolated")
+    within_bin_tolerance: bool = Field(..., description="Calibrated-fit nearest-trace residual is within ~2x the survey's bin spacing")
+    trustworthy: bool = Field(..., description="within_bin_tolerance AND NOT is_extrapolated -- describes the calibrated fit, not the raw tie")
     used_in_calibration: bool = Field(..., description="This well was part of the calibration baseline's own fit")
     has_manual_override: bool
     override_inline: int | None = None

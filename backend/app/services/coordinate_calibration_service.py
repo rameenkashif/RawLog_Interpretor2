@@ -62,6 +62,16 @@ class UnresolvedCoordinateError(Exception):
 
 @dataclass
 class WellCalibrationReport:
+    """nearest_inline/nearest_crossline/nearest_trace_distance_m are the
+    RAW nearest-trace resolution (well_seismic_tie.find_nearest_trace_index
+    directly on the well's own X/Y, no transform) -- the same tie every
+    other feature in this app now uses (see direct_tie_service.py's
+    docstring: proven more location-accurate on this survey's real field
+    data than the calibrated fit). calibrated_fit_inline/crossline/
+    distance_m are the per-axis linear fit's own estimate, kept ONLY as a
+    diagnostic comparison -- nothing downstream actually ties against it
+    anymore (resolve_well_trace_index below has no remaining callers)."""
+
     well_id: str
     well_name: str
     well_x: float
@@ -71,6 +81,9 @@ class WellCalibrationReport:
     nearest_inline: int
     nearest_crossline: int
     nearest_trace_distance_m: float
+    calibrated_fit_inline: int
+    calibrated_fit_crossline: int
+    calibrated_fit_distance_m: float
     is_extrapolated: bool
     within_bin_tolerance: bool
     trustworthy: bool
@@ -174,6 +187,7 @@ def get_calibration_report(
     reports = []
     for summary, result in zip(summaries, results):
         override = override_repo.get_override(summary.well_id)
+        raw_idx, raw_dist = find_nearest_trace_index(summary.well_x, summary.well_y, volume.source_x, volume.source_y)
         reports.append(
             WellCalibrationReport(
                 well_id=summary.well_id,
@@ -182,9 +196,12 @@ def get_calibration_report(
                 well_y=result.well_y,
                 transformed_x=result.transformed_x,
                 transformed_y=result.transformed_y,
-                nearest_inline=int(volume.inline[result.nearest_trace_index]),
-                nearest_crossline=int(volume.crossline[result.nearest_trace_index]),
-                nearest_trace_distance_m=result.nearest_trace_distance_m,
+                nearest_inline=int(volume.inline[raw_idx]),
+                nearest_crossline=int(volume.crossline[raw_idx]),
+                nearest_trace_distance_m=raw_dist,
+                calibrated_fit_inline=int(volume.inline[result.nearest_trace_index]),
+                calibrated_fit_crossline=int(volume.crossline[result.nearest_trace_index]),
+                calibrated_fit_distance_m=result.nearest_trace_distance_m,
                 is_extrapolated=result.is_extrapolated,
                 within_bin_tolerance=result.within_bin_tolerance,
                 trustworthy=result.trustworthy,
