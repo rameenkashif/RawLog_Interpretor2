@@ -262,16 +262,33 @@ def render_tie_section_image(well_id: str, dataset_id: str, freq_hz: float | Non
     idxs = idxs[order]
     xl_full = trace_crossline_f[idxs]
 
-    # Zoom to a window of traces straddling the well's own trace rather than
-    # the whole inline -- a multi-kilometre inline squeezes the handful of
-    # traces that actually matter for this tie into an unreadable sliver.
-    HALF_WINDOW_TRACES = 20
+    # Zoom to a small window of traces straddling the well's own trace
+    # rather than the whole inline -- a multi-kilometre inline squeezes the
+    # handful of traces that actually matter for this tie into an
+    # unreadable sliver. Kept tight (a handful of traces either side) so
+    # the well's own synthetic wiggle dominates the panel rather than
+    # disappearing into a wide section.
+    HALF_WINDOW_TRACES = 6
     center_pos = int(np.argmin(np.abs(xl_full - crossline)))
     lo = max(0, center_pos - HALF_WINDOW_TRACES)
     hi = min(len(idxs), center_pos + HALF_WINDOW_TRACES + 1)
     window_idxs = idxs[lo:hi]
     xl_axis = trace_crossline_f[window_idxs]
-    amplitude = traces[window_idxs].T.astype(float)  # (n_samples, n_traces_in_window)
+    amplitude_full = traces[window_idxs].T.astype(float)  # (n_samples, n_traces_in_window)
+
+    # Zoom vertically to the well's own tied interval too (plus a little
+    # padding), not the seismic volume's entire recorded time range --
+    # a synthetic covering ~100ms of log otherwise gets lost inside a
+    # multi-second recording window.
+    pad_ms = max(float(tie.time_ms.max() - tie.time_ms.min()) * 0.4, 20.0)
+    y_lo = float(tie.time_ms.min()) - pad_ms
+    y_hi = float(tie.time_ms.max()) + pad_ms
+    time_mask = (twt_axis_ms >= y_lo) & (twt_axis_ms <= y_hi)
+    if time_mask.sum() < 2:
+        time_mask = np.ones_like(twt_axis_ms, dtype=bool)
+        y_lo, y_hi = float(twt_axis_ms.min()), float(twt_axis_ms.max())
+    twt_axis_ms = twt_axis_ms[time_mask]
+    amplitude = amplitude_full[time_mask, :]
     max_abs = float(np.abs(amplitude).max()) or 1e-6
 
     _, wavelet = ricker_wavelet(tie.best_freq_hz, seismic_dt_ms / 1000.0)
@@ -291,7 +308,7 @@ def render_tie_section_image(well_id: str, dataset_id: str, freq_hz: float | Non
     mesh = ax_sec.pcolormesh(
         xl_axis, twt_axis_ms, amplitude, cmap="seismic", vmin=-max_abs, vmax=max_abs, shading="auto"
     )
-    ax_sec.invert_yaxis()
+    ax_sec.set_ylim(y_hi, y_lo)  # bottom=later time, top=earlier -- axis reads top-down like the wavelet panel
     ax_sec.set_xlabel("Crossline")
     ax_sec.set_title(f"Inline {inline} -- synthetic vs. seismic at {well_id}")
     fig.colorbar(mesh, ax=ax_sec, label="Amplitude", pad=0.01)
