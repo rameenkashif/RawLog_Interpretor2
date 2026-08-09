@@ -845,6 +845,10 @@ class BlindWellPropertyResult(BaseModel):
     n_training_samples: int = 0
     n_blind_samples: int = 0
     depth_m: list[float] = Field(default_factory=list)
+    time_ms: list[float] = Field(
+        default_factory=list,
+        description="Seismic two-way time (ms) for each sample, same order as depth_m/y_true/y_pred",
+    )
     y_true: list[float] = Field(default_factory=list, description="Blind well's actual logged values")
     y_pred: list[float] = Field(default_factory=list, description="Blind well's predicted values, same order as y_true")
 

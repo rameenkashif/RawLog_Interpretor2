@@ -617,6 +617,7 @@ export interface BlindWellPropertyResult {
   n_training_samples: number;
   n_blind_samples: number;
   depth_m: number[];
+  time_ms: number[];
   y_true: number[];
   y_pred: number[];
 }

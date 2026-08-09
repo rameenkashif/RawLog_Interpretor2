@@ -309,9 +309,12 @@ class TestRunBlindWellPredictionOrchestration:
         blind_X = np.random.default_rng(99).normal(size=(15, len(bwp.FEATURE_NAMES)))
         blind_y = {"vsh": blind_X[:, 0] * 5.0, "phie": np.full(15, np.nan), "swe": np.random.default_rng(1).normal(size=15)}
         blind_depth = np.arange(15, dtype=float)
+        blind_time = blind_depth * 2.0 + 2000.0
 
         monkeypatch.setattr(bwp, "_extract_well_samples", _fake_extract_well_samples)
-        monkeypatch.setattr(bwp, "_extract_center_trace_samples", lambda volume, tie: (blind_X, blind_y, blind_depth))
+        monkeypatch.setattr(
+            bwp, "_extract_center_trace_samples", lambda volume, tie: (blind_X, blind_y, blind_depth, blind_time)
+        )
 
         result = bwp.run_blind_well_prediction("BLIND")
 
@@ -322,6 +325,7 @@ class TestRunBlindWellPredictionOrchestration:
         assert result["results"]["vsh"]["status"] == "validated"
         assert result["results"]["vsh"]["blind_well_r2"] is not None
         assert len(result["results"]["vsh"]["y_true"]) == len(result["results"]["vsh"]["y_pred"])
+        assert len(result["results"]["vsh"]["time_ms"]) == len(result["results"]["vsh"]["y_true"])
         # phie is all-NaN for the blind well in this fixture.
         assert result["results"]["phie"]["status"] in ("insufficient_data", "no_stable_features", "blind_well_no_valid_samples")
 
@@ -342,6 +346,7 @@ def _validated_prediction_result(blind_well_id: str = "BLIND") -> dict:
                 "status": "validated",
                 "blind_well_r2": 0.42,
                 "depth_m": [3500.0, 3500.5, 3501.0],
+                "time_ms": [2030.0, 2050.0, 2070.0],
                 "y_true": [0.3, 0.35, 0.4],
                 "y_pred": [0.28, 0.31, 0.36],
             },
@@ -349,6 +354,7 @@ def _validated_prediction_result(blind_well_id: str = "BLIND") -> dict:
                 "status": "validated",
                 "blind_well_r2": -0.1,
                 "depth_m": [3500.0, 3500.5, 3501.0],
+                "time_ms": [2030.0, 2050.0, 2070.0],
                 "y_true": [0.1, 0.12, 0.11],
                 "y_pred": [0.15, 0.14, 0.13],
             },
@@ -394,4 +400,64 @@ class TestRenderBlindWellLogTracks:
         }
         monkeypatch.setattr(bwp, "run_blind_well_prediction", lambda blind_well_id: result)
         png_bytes = bwp.render_blind_well_log_tracks("BLIND")
+        assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+class _FakeSectionVolume:
+    """Minimal stand-in for SegyVolume's inline/crossline + get_inline_section
+    surface -- just enough for render_blind_well_section_maps's own logic
+    (window-zoom + strip overlay), not a real SEG-Y read."""
+
+    inline = np.array([100, 100, 100, 100, 100])
+    crossline = np.array([10, 11, 12, 13, 14])
+
+    def get_inline_section(self, inline_number: int) -> dict:
+        twt = np.array([2000.0, 2020.0, 2040.0, 2060.0, 2080.0, 2100.0])
+        amp = np.random.default_rng(0).normal(size=(6, 5))
+        return {
+            "crossline_axis": self.crossline.tolist(),
+            "twt_axis_ms": twt.tolist(),
+            "amplitude": amp.tolist(),
+        }
+
+
+class _FakeSectionTie:
+    trace_idx = 2  # crossline=12
+
+    class ctx:
+        overlap = np.array([False, True, True, True, True, False])
+
+
+class TestRenderBlindWellSectionMaps:
+    def _patch_volume_and_tie(self, monkeypatch):
+        from app.services import seismic_processor as sp_mod
+
+        monkeypatch.setattr(sp_mod, "get_segy_volume", lambda: _FakeSectionVolume())
+        monkeypatch.setattr(bwp, "_resolve_direct_tie", lambda volume, well_id: _FakeSectionTie())
+
+    def test_returns_a_png(self, monkeypatch):
+        monkeypatch.setattr(bwp, "run_blind_well_prediction", lambda blind_well_id: _validated_prediction_result(blind_well_id))
+        self._patch_volume_and_tie(monkeypatch)
+        png_bytes = bwp.render_blind_well_section_maps("BLIND")
+        assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_raises_when_overall_status_not_validated(self, monkeypatch):
+        monkeypatch.setattr(
+            bwp, "run_blind_well_prediction",
+            lambda blind_well_id: {"status": "insufficient_data", "message": "too few wells", "results": None},
+        )
+        self._patch_volume_and_tie(monkeypatch)
+        with pytest.raises(bwp.BlindWellPredictionError, match="too few wells"):
+            bwp.render_blind_well_section_maps("BLIND")
+
+    def test_still_renders_when_every_property_unvalidated(self, monkeypatch):
+        result = _validated_prediction_result()
+        result["results"] = {
+            "vsh": {"status": "no_stable_features", "message": "no stable feature"},
+            "phie": {"status": "insufficient_data", "message": "too few samples"},
+            "swe": {"status": "no_stable_features", "message": "no stable feature"},
+        }
+        monkeypatch.setattr(bwp, "run_blind_well_prediction", lambda blind_well_id: result)
+        self._patch_volume_and_tie(monkeypatch)
+        png_bytes = bwp.render_blind_well_section_maps("BLIND")
         assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"

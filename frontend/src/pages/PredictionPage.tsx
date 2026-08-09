@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AxiosError } from "axios";
-import { getBlindWellPrediction, getBlindWellLogTracksUrl } from "@/api/client";
+import { getBlindWellPrediction, getBlindWellLogTracksUrl, getBlindWellSectionMapsUrl } from "@/api/client";
 import type { BlindWellPropertyResult, SpectralPropertyName } from "@/api/types";
 import ChatPanel from "@/components/ChatPanel";
 
@@ -225,6 +225,21 @@ export default function PredictionPage() {
               <img
                 src={getBlindWellLogTracksUrl(query.data.blind_well_id, query.dataUpdatedAt)}
                 alt={`Blind well ${query.data.blind_well_id}: logged vs. predicted VSH/PHIE/SWE depth tracks`}
+                className="w-full rounded-lg border border-border bg-surface-sunken"
+              />
+            </div>
+          )}
+
+          {query.data.results && query.data.blind_well_id && (
+            <div className="bg-surface border border-border rounded-xl p-4 shadow-card space-y-2">
+              <h2 className="text-sm font-semibold text-ink">Logged vs. predicted -- mapped onto the inline section</h2>
+              <p className="text-xs text-ink-faint">
+                Each property drawn as a colored strip at the well's own crossline, over its inline seismic section --
+                true (logged) on the left, predicted on the right.
+              </p>
+              <img
+                src={getBlindWellSectionMapsUrl(query.data.blind_well_id, query.dataUpdatedAt)}
+                alt={`Blind well ${query.data.blind_well_id}: true vs. predicted VSH/PHIE/SWE mapped onto the inline seismic section`}
                 className="w-full rounded-lg border border-border bg-surface-sunken"
               />
             </div>

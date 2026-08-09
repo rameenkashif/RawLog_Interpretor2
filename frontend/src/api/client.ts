@@ -469,6 +469,17 @@ export function getBlindWellLogTracksUrl(blindWellId: string, cacheBustKey?: str
   return `${BASE_URL}/api/prediction/blind-well/log-tracks?${params.toString()}`;
 }
 
+/** URL for the static (Matplotlib) PNG: for each property (VSH/PHIE/SWE),
+ * the blind well's inline seismic section with the property mapped onto it
+ * as a colored vertical strip at the well's own crossline -- TRUE (logged)
+ * vs. PREDICTED side by side -- see
+ * blind_well_prediction_service.render_blind_well_section_maps. */
+export function getBlindWellSectionMapsUrl(blindWellId: string, cacheBustKey?: string | number): string {
+  const params = new URLSearchParams({ blind_well_id: blindWellId });
+  if (cacheBustKey != null) params.set("_t", String(cacheBustKey));
+  return `${BASE_URL}/api/prediction/blind-well/section-maps?${params.toString()}`;
+}
+
 // -----------------------------------------------------------------------------
 // Synthetic Seismogram module
 // -----------------------------------------------------------------------------

@@ -272,16 +272,20 @@ def _extract_well_samples(volume, tie: _DirectTieResult) -> _WellSamples | None:
 
 def _extract_center_trace_samples(
     volume, tie: _DirectTieResult
-) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndarray] | None:
+) -> tuple[np.ndarray, dict[str, np.ndarray], np.ndarray, np.ndarray] | None:
     """Just the well's own tied trace, no neighborhood -- for the BLIND
     well, whose real logged values only exist at its own depths, not its
-    neighbors'. Returns (X, y_per_property, depth_m)."""
+    neighbors'. Returns (X, y_per_property, depth_m, time_ms) -- time_ms is
+    the seismic two-way time (ms) for each depth_m/y sample (same overlap
+    window, same order), so a caller can place these samples back onto a
+    seismic section without re-deriving the tie."""
     ctx = tie.ctx
     X = _trace_sample_features(volume, tie.trace_idx, ctx)
     if X is None:
         return None
     y = {name: _property_series(ctx, name) for name in PETRO_CURVES}
-    return X, y, ctx.depth_at_time
+    time_ms = volume.twt_axis_ms[ctx.overlap]
+    return X, y, ctx.depth_at_time, time_ms
 
 
 def _select_features(training_samples: list[_WellSamples], property_name: str) -> tuple[list[int], list[dict]]:
@@ -550,7 +554,7 @@ def run_blind_well_prediction(blind_well_id: str = DEFAULT_BLIND_WELL_ID) -> dic
             "neighborhood_radius_m": NEIGHBORHOOD_RADIUS_M,
             "results": None,
         }
-    X_blind, y_blind, depth_blind = blind_extract
+    X_blind, y_blind, depth_blind, time_blind = blind_extract
 
     from sklearn.metrics import mean_squared_error, r2_score
 
@@ -619,6 +623,7 @@ def run_blind_well_prediction(blind_well_id: str = DEFAULT_BLIND_WELL_ID) -> dic
             "n_training_samples": int(len(y_train_all)),
             "n_blind_samples": int(valid_blind.sum()),
             "depth_m": depth_blind[valid_blind].tolist(),
+            "time_ms": time_blind[valid_blind].tolist(),
             "y_true": y_blind_valid.tolist(),
             "y_pred": y_blind_pred.tolist(),
         }
@@ -702,6 +707,130 @@ def render_blind_well_log_tracks(blind_well_id: str = DEFAULT_BLIND_WELL_ID) -> 
                     break
         fig.legend(handles, labels, loc="upper center", ncol=2, bbox_to_anchor=(0.5, 1.04), frameon=False)
     fig.suptitle(f"Blind well {blind_well_id} -- logged vs. predicted", y=1.1, fontsize=12)
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def render_blind_well_section_maps(blind_well_id: str = DEFAULT_BLIND_WELL_ID) -> bytes:
+    """Static (Matplotlib) PNG: for each property (VSH/PHIE/SWE), the
+    blind well's own inline seismic section (same zoomed-window style as
+    tie_service.render_tie_section_image) with the property "mapped onto"
+    the section as a colored vertical strip at the well's own crossline --
+    TRUE (logged) on the left, PREDICTED on the right, sharing one color
+    scale per property so the two panels are directly comparable. Re-runs
+    the pipeline AND re-resolves the tie itself, independent of the JSON/
+    log-tracks endpoints (same recomputation convention those use)."""
+    import io
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from app.services import seismic_processor as sp_mod
+
+    result = run_blind_well_prediction(blind_well_id)
+    if result["status"] != "validated" or not result.get("results"):
+        raise BlindWellPredictionError(
+            result.get("message") or f"Blind well '{blind_well_id}' could not be validated."
+        )
+    results = result["results"]
+
+    volume = sp_mod.get_segy_volume()
+    tie = _resolve_direct_tie(volume, blind_well_id)
+    inline = int(volume.inline[tie.trace_idx])
+    crossline = int(volume.crossline[tie.trace_idx])
+
+    section = volume.get_inline_section(inline)
+    xl_full = np.array(section["crossline_axis"], dtype=float)
+    twt_full = np.array(section["twt_axis_ms"], dtype=float)
+    amp_full = np.array(section["amplitude"], dtype=float)  # (n_samples, n_traces)
+
+    # Zoom to a small window of traces straddling the well, same convention
+    # as render_tie_section_image -- the full inline dwarfs the handful of
+    # traces that matter here.
+    HALF_WINDOW_TRACES = 8
+    center_pos = int(np.argmin(np.abs(xl_full - crossline)))
+    lo = max(0, center_pos - HALF_WINDOW_TRACES)
+    hi = min(len(xl_full), center_pos + HALF_WINDOW_TRACES + 1)
+    xl_axis = xl_full[lo:hi]
+    amp_window = amp_full[:, lo:hi]
+
+    overlap_time = twt_full[tie.ctx.overlap]
+    pad_ms = max(float(overlap_time.max() - overlap_time.min()) * 0.25, 20.0)
+    y_lo = float(overlap_time.min()) - pad_ms
+    y_hi = float(overlap_time.max()) + pad_ms
+    time_mask = (twt_full >= y_lo) & (twt_full <= y_hi)
+    if time_mask.sum() < 2:
+        time_mask = np.ones_like(twt_full, dtype=bool)
+        y_lo, y_hi = float(twt_full.min()), float(twt_full.max())
+    twt_axis = twt_full[time_mask]
+    amplitude = amp_window[time_mask, :]
+    max_abs = float(np.abs(amplitude).max()) or 1e-6
+
+    trace_spacing = float(np.median(np.abs(np.diff(xl_axis)))) if len(xl_axis) > 1 else 1.0
+    strip_half_width = trace_spacing * 1.5
+    strip_cmap = plt.get_cmap("YlOrBr")
+
+    def _edges_from_centers(centers: np.ndarray) -> np.ndarray:
+        """pcolormesh's shading='flat' wants cell EDGES (len N+1), not
+        centers -- the strip's colored blocks are one per logged/predicted
+        sample, so each sample's center needs a half-step boundary on
+        either side."""
+        if len(centers) == 1:
+            return np.array([centers[0] - 0.5, centers[0] + 0.5])
+        mid = (centers[:-1] + centers[1:]) / 2.0
+        first_edge = centers[0] - (mid[0] - centers[0])
+        last_edge = centers[-1] + (centers[-1] - mid[-1])
+        return np.concatenate([[first_edge], mid, [last_edge]])
+
+    n = len(PETRO_CURVES)
+    fig, axes = plt.subplots(n, 2, figsize=(9, 3.6 * n), dpi=150, sharex=True, sharey=True, squeeze=False)
+
+    last_mesh = None
+    for row, property_name in enumerate(PETRO_CURVES):
+        r = results.get(property_name, {})
+        ax_true, ax_pred = axes[row, 0], axes[row, 1]
+        for ax in (ax_true, ax_pred):
+            ax.pcolormesh(xl_axis, twt_axis, amplitude, cmap="seismic", vmin=-max_abs, vmax=max_abs, shading="auto")
+            ax.axvline(crossline, color="0.2", linestyle=":", linewidth=0.8)
+
+        if r.get("status") != "validated" or not r.get("time_ms"):
+            for ax, label in ((ax_true, "TRUE"), (ax_pred, "PREDICTED")):
+                ax.set_title(f"{label} {property_name.upper()} -- {r.get('message') or 'no result'}", fontsize=8)
+            continue
+
+        time_ms = np.array(r["time_ms"])
+        y_true = np.array(r["y_true"])
+        y_pred = np.array(r["y_pred"])
+        order = np.argsort(time_ms)
+        time_ms, y_true, y_pred = time_ms[order], y_true[order], y_pred[order]
+        time_edges = _edges_from_centers(time_ms)
+        x_edges = [crossline - strip_half_width, crossline + strip_half_width]
+
+        vmin = float(min(y_true.min(), y_pred.min()))
+        vmax = float(max(y_true.max(), y_pred.max()))
+        if vmax <= vmin:
+            vmax = vmin + 1e-6
+
+        for ax, values, label in ((ax_true, y_true, "TRUE"), (ax_pred, y_pred, "PREDICTED")):
+            last_mesh = ax.pcolormesh(
+                x_edges, time_edges, values[:, None],
+                cmap=strip_cmap, vmin=vmin, vmax=vmax, shading="flat",
+            )
+            ax.set_title(f"{label} {property_name.upper()}", fontsize=9)
+        fig.colorbar(last_mesh, ax=ax_pred, label=property_name.upper(), pad=0.02, fraction=0.06)
+
+    for ax in axes[-1, :]:
+        ax.set_xlabel("Crossline")
+    for row in range(n):
+        axes[row, 0].set_ylabel("Time (ms)")
+    axes[0, 0].set_ylim(y_hi, y_lo)  # shared y-axis -- sets every panel at once, top-down like a section
+    fig.suptitle(f"Blind well {blind_well_id} (inline {inline}) -- property mapped onto section", y=1.0, fontsize=12)
     fig.tight_layout()
 
     buf = io.BytesIO()
