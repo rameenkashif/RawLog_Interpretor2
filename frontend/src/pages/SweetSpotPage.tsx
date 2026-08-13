@@ -88,13 +88,18 @@ function TargetDiagnosticChip({
  */
 export default function SweetSpotPage() {
   const [triggered, setTriggered] = useState(false);
+  // Bumped on every "Re-train" click -- changing the queryKey forces a
+  // fresh fetch, and refresh=true (any bump beyond the initial 0) tells
+  // the backend to bypass its in-memory/on-disk cascade cache and
+  // actually retrain instead of just re-returning the cached result.
+  const [refreshCount, setRefreshCount] = useState(0);
   const [property, setProperty] = useState<SweetSpotPropertyName>("gr");
 
   const surveyQuery = useQuery({ queryKey: ["survey-info"], queryFn: getSurveyInfo });
 
   const trainQuery = useQuery({
-    queryKey: ["sweet-spot-train"],
-    queryFn: () => trainSweetSpot(),
+    queryKey: ["sweet-spot-train", refreshCount],
+    queryFn: () => trainSweetSpot(undefined, refreshCount > 0),
     enabled: triggered,
     retry: false,
   });
@@ -127,7 +132,7 @@ export default function SweetSpotPage() {
 
       <div className="flex flex-wrap items-center gap-3">
         <button
-          onClick={() => setTriggered(true)}
+          onClick={() => (triggered ? setRefreshCount((c) => c + 1) : setTriggered(true))}
           disabled={trainQuery.isFetching}
           className="text-xs font-semibold px-4 py-2 rounded-full bg-brand-gradient text-white shadow-card disabled:opacity-50"
         >

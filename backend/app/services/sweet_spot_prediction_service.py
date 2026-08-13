@@ -19,8 +19,12 @@ region-local scaling rule.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
+from app import petrophysics as pp
+from app.repository import MODELS_DIR
 from app.services.sweet_spot_calibration import apply_calibration, per_well_zscore_features
 from app.services.sweet_spot_feature_engine import CURATED_FEATURES, compute_feature_pool
 from app.services.sweet_spot_model_service import MIN_TRAINING_WELLS, train_sweet_spot_cascade
@@ -48,6 +52,18 @@ class SweetSpotPredictionError(Exception):
 
 
 _trained_cascade_cache: dict[str, dict] = {}
+
+
+def _cascade_cache_path(blind_well_id: str) -> Path:
+    """On-disk path for a trained cascade, gitignored (backend/data/models/
+    *.joblib, same convention well_service.get_core_perm_model() already
+    uses) -- lets a 'validated' cascade survive a server restart without
+    retraining. Never checked into git: the cascade is trained from
+    whatever seismic/well data happens to be locally ingested, so a
+    committed file would silently be trained against the wrong data on
+    anyone else's machine."""
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in blind_well_id)
+    return MODELS_DIR / f"sweet_spot_cascade_{safe_id}.joblib"
 
 
 def _apply_facies_blend(phys_pred: np.ndarray, X_valid: np.ndarray, result) -> np.ndarray:
@@ -175,11 +191,22 @@ def get_or_train_cascade(blind_well_id: str = DEFAULT_BLIND_WELL_ID, refresh: bo
     usable tie, then diagnostically evaluates ONLY blind_well_id -- which
     never participates in any training/selection step. status is always
     one of 'validated', 'blind_well_unusable', or 'insufficient_data'.
-    Cached per blind_well_id (an expensive, deliberately-triggered
-    action, same convention as blind_well_prediction_service's own
-    result); pass refresh=True to force retraining."""
+    Cached per blind_well_id, in-memory first then on disk (an expensive,
+    deliberately-triggered action, same convention as
+    blind_well_prediction_service's own result); pass refresh=True to
+    force retraining even if a cached/persisted result exists."""
     if not refresh and blind_well_id in _trained_cascade_cache:
         return _trained_cascade_cache[blind_well_id]
+
+    cache_path = _cascade_cache_path(blind_well_id)
+    if not refresh and cache_path.exists():
+        try:
+            result = pp.load_model(cache_path)
+        except Exception:
+            result = None  # stale/corrupt cache file -- fall through and retrain
+        if result is not None:
+            _trained_cascade_cache[blind_well_id] = result
+            return result
 
     from app.services import seismic_processor as sp_mod
     from app.services import well_service
@@ -230,6 +257,10 @@ def get_or_train_cascade(blind_well_id: str = DEFAULT_BLIND_WELL_ID, refresh: bo
         "blind_results": blind_results,
     }
     _trained_cascade_cache[blind_well_id] = result
+    try:
+        pp.save_model(result, cache_path)
+    except Exception:
+        pass  # disk persistence is a convenience -- don't fail the request over it
     return result
 
 

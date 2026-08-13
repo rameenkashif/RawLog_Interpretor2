@@ -126,7 +126,7 @@ def volume(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _cheap_pool_and_config(monkeypatch):
+def _cheap_pool_and_config(monkeypatch, tmp_path):
     monkeypatch.setattr(
         sms, "_make_base_templates",
         lambda: {"ridge": lambda: Ridge(alpha=1.0), "rf_tiny": lambda: RandomForestRegressor(n_estimators=20, max_depth=3, random_state=42)},
@@ -134,6 +134,12 @@ def _cheap_pool_and_config(monkeypatch):
     from app.services import sweet_spot_training_data as sstd
     monkeypatch.setattr(sstd, "_load_tie_config", lambda: {"max_tie_search_radius_m": 1000.0})
     monkeypatch.setattr(sstd, "get_well_config", lambda well_id: {"zones": {"vsh_max": 0.4}})
+    # Redirect the on-disk cascade cache to a per-test tmp dir -- without
+    # this, every test would read/write the real backend/data/models/
+    # directory and could load another test's stale cascade (trained
+    # against a totally different synthetic volume/well set) instead of
+    # actually training.
+    monkeypatch.setattr(ssp, "MODELS_DIR", tmp_path / "models")
     ssp._trained_cascade_cache.clear()
     yield
     ssp._trained_cascade_cache.clear()
@@ -173,6 +179,66 @@ class TestGetOrTrainCascade:
         _patch_wells(monkeypatch)
         with pytest.raises(WellNotFoundError):
             ssp.get_or_train_cascade("DOES_NOT_EXIST")
+
+    def test_validated_result_persisted_to_disk(self, volume, monkeypatch):
+        monkeypatch.setattr("app.services.seismic_processor.get_segy_volume", lambda: volume)
+        _patch_wells(monkeypatch)
+
+        ssp.get_or_train_cascade("Z-02_RAW")
+        assert ssp._cascade_cache_path("Z-02_RAW").exists()
+
+    def test_loads_from_disk_without_retraining_after_memory_cache_cleared(self, volume, monkeypatch):
+        monkeypatch.setattr("app.services.seismic_processor.get_segy_volume", lambda: volume)
+        _patch_wells(monkeypatch)
+
+        first = ssp.get_or_train_cascade("Z-02_RAW")
+        ssp._trained_cascade_cache.clear()  # simulate a server restart (memory cache lost, disk file remains)
+
+        calls = []
+        real_train = ssp.train_sweet_spot_cascade
+
+        def _spy(*args, **kwargs):
+            calls.append(1)
+            return real_train(*args, **kwargs)
+
+        monkeypatch.setattr(ssp, "train_sweet_spot_cascade", _spy)
+
+        second = ssp.get_or_train_cascade("Z-02_RAW")
+        assert calls == []  # loaded from disk, never retrained
+        assert second["status"] == "validated"
+        assert second is not first  # a freshly-deserialized object, not the same instance
+        assert set(second["training_well_ids"]) == set(first["training_well_ids"])
+
+    def test_refresh_retrains_even_with_disk_cache_present(self, volume, monkeypatch):
+        monkeypatch.setattr("app.services.seismic_processor.get_segy_volume", lambda: volume)
+        _patch_wells(monkeypatch)
+
+        ssp.get_or_train_cascade("Z-02_RAW")
+        ssp._trained_cascade_cache.clear()
+
+        calls = []
+        real_train = ssp.train_sweet_spot_cascade
+
+        def _spy(*args, **kwargs):
+            calls.append(1)
+            return real_train(*args, **kwargs)
+
+        monkeypatch.setattr(ssp, "train_sweet_spot_cascade", _spy)
+
+        result = ssp.get_or_train_cascade("Z-02_RAW", refresh=True)
+        assert calls == [1]
+        assert result["status"] == "validated"
+
+    def test_corrupt_disk_cache_falls_back_to_retraining(self, volume, monkeypatch):
+        monkeypatch.setattr("app.services.seismic_processor.get_segy_volume", lambda: volume)
+        _patch_wells(monkeypatch)
+
+        cache_path = ssp._cascade_cache_path("Z-02_RAW")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(b"not a valid joblib file")
+
+        result = ssp.get_or_train_cascade("Z-02_RAW")
+        assert result["status"] == "validated"
 
 
 class TestPredictRegion:
