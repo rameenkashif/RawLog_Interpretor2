@@ -4,6 +4,7 @@ import WellDetailPage from "./pages/WellDetailPage";
 import SeismicPage from "./pages/SeismicPage";
 import SyntheticSeismogramPage from "./pages/SyntheticSeismogramPage";
 import PredictionPage from "./pages/PredictionPage";
+import SweetSpotPage from "./pages/SweetSpotPage";
 import ErrorBoundary from "./components/ErrorBoundary";
 import ThemeToggle from "./components/ThemeToggle";
 
@@ -49,6 +50,9 @@ export default function App() {
               <NavLink to="/prediction" className={navLinkClass}>
                 Prediction
               </NavLink>
+              <NavLink to="/sweet-spot" className={navLinkClass}>
+                Sweet Spot
+              </NavLink>
             </nav>
           </div>
 
@@ -77,6 +81,7 @@ export default function App() {
             <Route path="/seismic" element={<SeismicPage />} />
             <Route path="/synthetic" element={<SyntheticSeismogramPage />} />
             <Route path="/prediction" element={<PredictionPage />} />
+            <Route path="/sweet-spot" element={<SweetSpotPage />} />
           </Routes>
         </ErrorBoundary>
       </main>

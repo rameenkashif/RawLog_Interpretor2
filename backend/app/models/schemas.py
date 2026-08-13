@@ -865,6 +865,59 @@ class BlindWellPredictionResponse(BaseModel):
     )
 
 
+class SweetSpotExcludedWell(BaseModel):
+    well_id: str
+    reason: str = Field(..., description="Why this well was excluded -- never silently dropped")
+
+
+class SweetSpotTargetResult(BaseModel):
+    status: str = Field(
+        ..., description="'validated', 'insufficient_data', or 'blind_well_no_valid_samples'"
+    )
+    message: str | None = None
+    model_name: str | None = Field(None, description="Winning model template from the 11-candidate pool")
+    cv_r2: float | None = Field(
+        None,
+        description="Selection metric: leave-one-group-out CV R^2 across training wells (physical units) -- the ONLY thing model selection uses",
+    )
+    facies_alpha: float | None = Field(
+        None,
+        description="Facies-modulation blend weight if the winning candidate used one (GR/VSH/PHIE/SWE only, one of 0/.25/.5/.75/1.0); None otherwise",
+    )
+    blind_well_r2: float | None = Field(
+        None, description="R^2 on the held-out blind well's own logged interval -- never used in training or selection"
+    )
+    blind_well_rmse: float | None = None
+    n_blind_samples: int = 0
+    depth_m: list[float] = Field(default_factory=list)
+    time_ms: list[float] = Field(default_factory=list)
+    y_true: list[float] = Field(default_factory=list, description="Blind well's actual logged values")
+    y_pred: list[float] = Field(default_factory=list, description="Blind well's predicted values, same order as y_true")
+
+
+class SweetSpotTrainingResponse(BaseModel):
+    status: str = Field(..., description="'validated', 'blind_well_unusable', or 'insufficient_data'")
+    message: str | None = None
+    blind_well_id: str | None = None
+    training_well_ids: list[str] = Field(default_factory=list)
+    excluded_wells: list[SweetSpotExcludedWell] = Field(default_factory=list)
+    feature_names: list[str] = Field(default_factory=list, description="The curated 22-feature set used for training")
+    results: dict[str, SweetSpotTargetResult] | None = Field(
+        None,
+        description="{'ai'|'dt'|'phit'|'gr'|'rhob'|'vsh'|'phie'|'swe': result} -- present only when status='validated'",
+    )
+
+
+class SweetSpotRegionPredictionResponse(BaseModel):
+    blind_well_id: str
+    inline_axis: list[int]
+    crossline_axis: list[int]
+    twt_axis_ms: list[float]
+    predictions: dict[str, list[list[float]]] = Field(
+        ..., description="property -> (n_time x n_traces) predicted grid, NaN where not scoreable"
+    )
+
+
 class CheckshotUploadResponse(BaseModel):
     wells: dict[str, int] = Field(..., description="well_id -> number of checkshot points stored")
 

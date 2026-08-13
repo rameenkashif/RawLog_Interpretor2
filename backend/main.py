@@ -123,6 +123,23 @@ except Exception as exc:  # noqa: BLE001
         exc,
     )
 
+# Sweet-Spot prediction (V11-style 2-stage cascade: phase-rotated well tie,
+# curated 22-feature engine, dynamic calibration, LOGO-CV model selection
+# across an 11-template pool incl. LightGBM, facies modulation) -- same
+# defensive import treatment as the other optional/heavy modules above.
+try:
+    from app.routers import sweet_spot
+
+    app.include_router(sweet_spot.router)
+except Exception as exc:  # noqa: BLE001
+    logger.warning(
+        "Sweet-Spot Prediction module failed to load and its endpoints will be "
+        "unavailable (GET /api/sweet-spot/*). This is usually caused by a missing "
+        "dependency -- run `pip install -r requirements.txt` (needs segyio + xgboost + "
+        "lightgbm) and restart. Underlying error: %s",
+        exc,
+    )
+
 
 @app.get("/health")
 async def health() -> dict[str, str]:

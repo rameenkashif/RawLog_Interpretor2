@@ -444,6 +444,87 @@ class SegyVolume:
             "amplitude": grid.tolist(),
         }
 
+    def _traces_from_sub_idx(self, sub_idx: np.ndarray) -> np.ndarray:
+        """(n_il, n_xl, n_samples) raw amplitude array for a sub-grid of
+        trace indices (as sliced from self._grid_trace_idx) -- gap cells
+        (-1) become NaN, same convention as get_time_slice's grid."""
+        traces = np.full(sub_idx.shape + (self.n_samples,), np.nan, dtype=float)
+        valid = sub_idx >= 0
+        traces[valid] = self._traces[sub_idx[valid]]
+        return traces
+
+    def get_region_traces(self, inline_range: tuple[int, int], crossline_range: tuple[int, int]) -> dict:
+        """Rectangular (inline x crossline) sub-grid of raw traces, via a
+        slice of self._grid_trace_idx -- for the sweet-spot prediction
+        module's region-based feature extraction (see
+        sweet_spot_feature_engine.py), not a JSON-serializable API
+        response like get_inline_section's dict: 'traces' is returned as a
+        raw (n_il, n_xl, n_samples) ndarray, gap cells NaN-filled, so
+        callers can vectorize feature computation directly rather than
+        re-parsing a .tolist()'d array back into numpy."""
+        il_lo, il_hi = inline_range
+        xl_lo, xl_hi = crossline_range
+        if il_lo > il_hi or xl_lo > xl_hi:
+            raise SegyVolumeError(
+                f"Invalid region: inline_range={inline_range}, crossline_range={crossline_range} "
+                "(each range's first value must be <= its second)."
+            )
+
+        il_mask = (self._inlines_sorted >= il_lo) & (self._inlines_sorted <= il_hi)
+        xl_mask = (self._crosslines_sorted >= xl_lo) & (self._crosslines_sorted <= xl_hi)
+        if not il_mask.any() or not xl_mask.any():
+            raise SegyVolumeError(
+                f"No inlines/crosslines fall within inline_range={inline_range}, "
+                f"crossline_range={crossline_range}. Valid ranges: inline {self.inline_min}-"
+                f"{self.inline_max}, crossline {self.crossline_min}-{self.crossline_max}."
+            )
+
+        inline_axis = self._inlines_sorted[il_mask]
+        crossline_axis = self._crosslines_sorted[xl_mask]
+        sub_idx = self._grid_trace_idx[np.ix_(il_mask, xl_mask)]
+
+        return {
+            "inline_axis": inline_axis.tolist(),
+            "crossline_axis": crossline_axis.tolist(),
+            "twt_axis_ms": self.twt_axis_ms.tolist(),
+            "traces": self._traces_from_sub_idx(sub_idx),
+        }
+
+    def get_trace_neighbors_3x3(self, inline_number: int, crossline_number: int) -> dict:
+        """Center trace + up to 8 immediate neighbors, one step each
+        direction in the SORTED inline/crossline axes (not a fixed +/-1
+        header-value assumption -- real inline/crossline numbering can
+        skip) -- degrades gracefully to fewer than 9 at survey edges.
+        Raises SegyVolumeError if (inline_number, crossline_number) isn't
+        itself a real position in the survey."""
+        il_pos = int(np.searchsorted(self._inlines_sorted, inline_number))
+        if not (0 <= il_pos < len(self._inlines_sorted) and self._inlines_sorted[il_pos] == inline_number):
+            raise SegyVolumeError(
+                f"Inline {inline_number} not found. Valid range: {self.inline_min}-{self.inline_max}."
+            )
+        xl_pos = int(np.searchsorted(self._crosslines_sorted, crossline_number))
+        if not (0 <= xl_pos < len(self._crosslines_sorted) and self._crosslines_sorted[xl_pos] == crossline_number):
+            raise SegyVolumeError(
+                f"Crossline {crossline_number} not found. Valid range: {self.crossline_min}-{self.crossline_max}."
+            )
+
+        il_lo, il_hi = max(0, il_pos - 1), min(len(self._inlines_sorted) - 1, il_pos + 1)
+        xl_lo, xl_hi = max(0, xl_pos - 1), min(len(self._crosslines_sorted) - 1, xl_pos + 1)
+
+        sub_idx = self._grid_trace_idx[il_lo : il_hi + 1, xl_lo : xl_hi + 1]
+        inline_axis = self._inlines_sorted[il_lo : il_hi + 1]
+        crossline_axis = self._crosslines_sorted[xl_lo : xl_hi + 1]
+
+        return {
+            "inline_axis": inline_axis.tolist(),
+            "crossline_axis": crossline_axis.tolist(),
+            "twt_axis_ms": self.twt_axis_ms.tolist(),
+            "traces": self._traces_from_sub_idx(sub_idx),
+            "trace_idx_grid": sub_idx,  # -1 for a gap cell
+            "center_il_pos": il_pos - il_lo,  # this trace's position within the returned sub-grid
+            "center_xl_pos": xl_pos - xl_lo,
+        }
+
     def get_amplitude_spectrum(
         self, inline_number: int | None = None, max_traces: int = DEFAULT_SPECTRUM_SAMPLE_TRACES
     ) -> dict:

@@ -632,6 +632,49 @@ export interface BlindWellPredictionResponse {
   results: Record<SpectralPropertyName, BlindWellPropertyResult> | null;
 }
 
+// -----------------------------------------------------------------------------
+// Sweet-Spot prediction (V11-style 2-stage cascade)
+// -----------------------------------------------------------------------------
+export type SweetSpotPropertyName = "ai" | "dt" | "phit" | "gr" | "rhob" | "vsh" | "phie" | "swe";
+
+export interface SweetSpotExcludedWell {
+  well_id: string;
+  reason: string;
+}
+
+export interface SweetSpotTargetResult {
+  status: "validated" | "insufficient_data" | "blind_well_no_valid_samples";
+  message: string | null;
+  model_name: string | null;
+  cv_r2: number | null;
+  facies_alpha: number | null;
+  blind_well_r2: number | null;
+  blind_well_rmse: number | null;
+  n_blind_samples: number;
+  depth_m: number[];
+  time_ms: number[];
+  y_true: number[];
+  y_pred: number[];
+}
+
+export interface SweetSpotTrainingResponse {
+  status: "validated" | "blind_well_unusable" | "insufficient_data";
+  message: string | null;
+  blind_well_id: string | null;
+  training_well_ids: string[];
+  excluded_wells: SweetSpotExcludedWell[];
+  feature_names: string[];
+  results: Record<SweetSpotPropertyName, SweetSpotTargetResult> | null;
+}
+
+export interface SweetSpotRegionPredictionResponse {
+  blind_well_id: string;
+  inline_axis: number[];
+  crossline_axis: number[];
+  twt_axis_ms: number[];
+  predictions: Record<string, (number | null)[][]>;
+}
+
 export const CURVE_NAMES = [
   "DEPT",
   "GR",

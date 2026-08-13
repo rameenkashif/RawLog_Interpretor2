@@ -224,6 +224,79 @@ class TestTimeSlice:
         assert ts["time_ms"] == 2040.0  # DELAY_MS + (N_SAMPLES-1)*INTERVAL_MS
 
 
+class TestGetRegionTraces:
+    """get_region_traces -- rectangular inline x crossline sub-grid, for
+    the sweet-spot prediction module's region-based feature extraction."""
+
+    def test_shape_and_axes(self, volume):
+        region = volume.get_region_traces((383, 385), (47, 48))
+        assert region["inline_axis"] == [383, 384, 385]
+        assert region["crossline_axis"] == [47, 48]
+        assert region["traces"].shape == (3, 2, N_SAMPLES)
+        assert len(region["twt_axis_ms"]) == N_SAMPLES
+
+    def test_full_survey_extent(self, volume):
+        region = volume.get_region_traces((INLINES[0], INLINES[-1]), (CROSSLINES[0], CROSSLINES[-1]))
+        assert region["traces"].shape == (len(INLINES), len(CROSSLINES), N_SAMPLES)
+        assert not np.isnan(region["traces"]).any()  # this survey has no gaps
+
+    def test_range_outside_survey_raises(self, volume):
+        with pytest.raises(sp.SegyVolumeError, match="No inlines/crosslines"):
+            volume.get_region_traces((9000, 9010), (47, 48))
+
+    def test_inverted_range_raises(self, volume):
+        with pytest.raises(sp.SegyVolumeError, match="Invalid region"):
+            volume.get_region_traces((385, 383), (47, 48))
+
+    def test_single_inline_single_crossline(self, volume):
+        region = volume.get_region_traces((384, 384), (47, 47))
+        assert region["traces"].shape == (1, 1, N_SAMPLES)
+
+
+class TestGetTraceNeighbors3x3:
+    """get_trace_neighbors_3x3 -- center trace + up to 8 neighbors via the
+    sorted inline/crossline axes, for the sweet-spot module's doc-specified
+    3x3 training-data neighborhood."""
+
+    def test_interior_trace_gets_full_3x3(self, volume):
+        nb = volume.get_trace_neighbors_3x3(384, 47)
+        assert nb["inline_axis"] == [383, 384, 385]
+        assert nb["crossline_axis"] == [46, 47, 48]
+        assert nb["traces"].shape == (3, 3, N_SAMPLES)
+        assert nb["center_il_pos"] == 1
+        assert nb["center_xl_pos"] == 1
+
+    def test_center_position_indexes_the_requested_trace(self, volume):
+        nb = volume.get_trace_neighbors_3x3(384, 47)
+        center_trace = nb["traces"][nb["center_il_pos"], nb["center_xl_pos"], :]
+        direct_trace = volume.get_trace(volume._inline_index[384][list(volume.crossline[volume._inline_index[384]]).index(47)])
+        np.testing.assert_allclose(center_trace, direct_trace)
+
+    def test_corner_trace_degrades_to_2x2(self, volume):
+        nb = volume.get_trace_neighbors_3x3(INLINES[0], CROSSLINES[0])
+        assert nb["traces"].shape == (2, 2, N_SAMPLES)
+        assert nb["center_il_pos"] == 0
+        assert nb["center_xl_pos"] == 0
+
+    def test_edge_trace_degrades_to_2x3(self, volume):
+        nb = volume.get_trace_neighbors_3x3(INLINES[0], CROSSLINES[1])
+        assert nb["traces"].shape == (2, 3, N_SAMPLES)
+        assert nb["center_il_pos"] == 0
+        assert nb["center_xl_pos"] == 1
+
+    def test_unknown_inline_raises(self, volume):
+        with pytest.raises(sp.SegyVolumeError, match="Inline 9999 not found"):
+            volume.get_trace_neighbors_3x3(9999, CROSSLINES[0])
+
+    def test_unknown_crossline_raises(self, volume):
+        with pytest.raises(sp.SegyVolumeError, match="Crossline 9999 not found"):
+            volume.get_trace_neighbors_3x3(INLINES[0], 9999)
+
+    def test_trace_idx_grid_gap_is_negative_one_free_on_this_dense_survey(self, volume):
+        nb = volume.get_trace_neighbors_3x3(384, 47)
+        assert (nb["trace_idx_grid"] >= 0).all()
+
+
 class TestWindowedCoverage:
     """Some real surveys are exported as a horizon-windowed extraction
     rather than a raw full cube -- each trace is only "live" in a window

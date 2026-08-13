@@ -22,8 +22,11 @@ from app.well_seismic_tie import (
     reflectivity_series,
     ricker_wavelet,
     rock_physics_density,
+    rotate_wavelet_phase,
+    refine_tie_warp,
     search_best_tie,
     search_best_tie_full_window,
+    search_best_tie_full_window_phase_grid,
     washout_qc_flag,
     wavelet_spectra,
 )
@@ -819,3 +822,191 @@ class TestCheckshotAnchorShift:
         from app.well_seismic_tie import DEFAULT_TIE_SEARCH_MAX_SHIFT_MS
 
         assert CHECKSHOT_RESIDUAL_SEARCH_MS < DEFAULT_TIE_SEARCH_MAX_SHIFT_MS
+
+
+class TestRotateWaveletPhase:
+    def test_zero_degrees_leaves_wavelet_unchanged(self):
+        _, wav = ricker_wavelet(25.0, 0.002)
+        rotated = rotate_wavelet_phase(wav, 0.0)
+        np.testing.assert_allclose(rotated, wav, atol=1e-8)
+
+    def test_180_degrees_negates_wavelet(self):
+        _, wav = ricker_wavelet(25.0, 0.002)
+        rotated = rotate_wavelet_phase(wav, 180.0)
+        np.testing.assert_allclose(rotated, -wav, atol=1e-8)
+
+    def test_360_degrees_matches_zero_degrees(self):
+        _, wav = ricker_wavelet(25.0, 0.002)
+        r0 = rotate_wavelet_phase(wav, 0.0)
+        r360 = rotate_wavelet_phase(wav, 360.0)
+        np.testing.assert_allclose(r0, r360, atol=1e-6)
+
+
+class TestSearchBestTieFullWindowPhaseGrid:
+    """search_best_tie_full_window_phase_grid extends
+    search_best_tie_full_window with a continuous phase-rotation search
+    (the source doc's 11 freq x 24 phase x 41 shift grid) -- convolution is
+    hoisted out of the phase loop via the Hilbert-transform-commutes-with-
+    convolution identity, so these tests also guard that optimization's
+    correctness against a known embedded (freq, phase, shift)."""
+
+    def _embed_known_tie(self, freq_hz: float, phase_deg: float, shift_ms: float, noise_std: float = 0.01, seed: int = 0):
+        rng = np.random.default_rng(seed)
+        dt_ms = 2.0
+        t_rc = np.arange(2000.0, 2120.0, dt_ms)
+        rc = np.zeros(len(t_rc))
+        rc[[10, 25, 40, 50]] = [0.1, -0.15, 0.08, -0.05]
+
+        _, wav = ricker_wavelet(freq_hz, dt_ms / 1000.0, min(0.100, max(0.030, 0.6 * len(rc) * dt_ms / 1000.0)))
+        wav = rotate_wavelet_phase(wav, phase_deg)
+        full = np.convolve(rc, wav, mode="full")
+        start = (len(full) - len(rc)) // 2
+        synth = full[start : start + len(rc)]
+        synth = synth - synth.mean()
+        if synth.std() > 0:
+            synth = synth / synth.std()
+
+        seismic_twt_ms = np.arange(1900.0, 2300.0, dt_ms)
+        t_shifted = t_rc + shift_ms
+        real_trace = np.interp(seismic_twt_ms, t_shifted, synth, left=0.0, right=0.0)
+        real_trace = real_trace + rng.normal(0, noise_std, len(real_trace))
+        return t_rc, rc, seismic_twt_ms, dt_ms, real_trace
+
+    # Small grids for test speed -- the exact-grid-size behavior (11x24x41)
+    # is checked separately below via n_candidates_tried on the defaults.
+    _FREQS = (20.0, 30.0, 40.0)
+    _PHASES = (0.0, 90.0, 180.0, 270.0)
+    _SHIFTS = tuple(float(s) for s in np.linspace(-20.0, 20.0, 21))
+
+    def test_recovers_known_freq_phase_shift(self):
+        t_rc, rc, seismic_twt_ms, dt_ms, real_trace = self._embed_known_tie(
+            freq_hz=30.0, phase_deg=90.0, shift_ms=10.0
+        )
+        result = search_best_tie_full_window_phase_grid(
+            t_rc, rc, seismic_twt_ms, dt_ms, real_trace,
+            candidate_freqs_hz=self._FREQS, phase_steps_deg=self._PHASES, shift_steps_ms=self._SHIFTS,
+        )
+        assert result.best_freq_hz == 30.0
+        assert result.phase_deg == 90.0
+        assert result.bulk_shift_ms == pytest.approx(10.0, abs=dt_ms)
+        assert result.correlation > 0.9
+
+    def test_180_degree_phase_matches_negative_polarity(self):
+        t_rc, rc, seismic_twt_ms, dt_ms, real_trace = self._embed_known_tie(
+            freq_hz=20.0, phase_deg=180.0, shift_ms=0.0
+        )
+        result = search_best_tie_full_window_phase_grid(
+            t_rc, rc, seismic_twt_ms, dt_ms, real_trace,
+            candidate_freqs_hz=self._FREQS, phase_steps_deg=self._PHASES, shift_steps_ms=self._SHIFTS,
+        )
+        assert result.phase_deg == 180.0
+        assert result.polarity == -1
+
+    def test_0_degree_phase_matches_positive_polarity(self):
+        t_rc, rc, seismic_twt_ms, dt_ms, real_trace = self._embed_known_tie(
+            freq_hz=20.0, phase_deg=0.0, shift_ms=0.0
+        )
+        result = search_best_tie_full_window_phase_grid(
+            t_rc, rc, seismic_twt_ms, dt_ms, real_trace,
+            candidate_freqs_hz=self._FREQS, phase_steps_deg=self._PHASES, shift_steps_ms=self._SHIFTS,
+        )
+        assert result.phase_deg == 0.0
+        assert result.polarity == 1
+
+    def test_n_candidates_tried_matches_grid_size(self):
+        t_rc, rc, seismic_twt_ms, dt_ms, real_trace = self._embed_known_tie(
+            freq_hz=30.0, phase_deg=0.0, shift_ms=0.0
+        )
+        result = search_best_tie_full_window_phase_grid(
+            t_rc, rc, seismic_twt_ms, dt_ms, real_trace,
+            candidate_freqs_hz=self._FREQS, phase_steps_deg=self._PHASES, shift_steps_ms=self._SHIFTS,
+        )
+        assert result.n_candidates_tried == len(self._FREQS) * len(self._PHASES) * len(self._SHIFTS)
+
+    def test_default_grid_matches_doc_spec_size(self):
+        from app.well_seismic_tie import (
+            PHASE_GRID_FREQS_HZ, PHASE_GRID_PHASE_STEPS_DEG, PHASE_GRID_SHIFT_STEPS_MS,
+        )
+        assert len(PHASE_GRID_FREQS_HZ) == 11
+        assert len(PHASE_GRID_PHASE_STEPS_DEG) == 24
+        assert len(PHASE_GRID_SHIFT_STEPS_MS) == 41
+
+    def test_too_short_reflectivity_raises(self):
+        with pytest.raises(TieError):
+            search_best_tie_full_window_phase_grid(
+                np.array([2000.0, 2002.0]), np.array([0.1, 0.2]), np.arange(1900.0, 2100.0, 2.0), 2.0,
+                np.random.default_rng(0).normal(0, 1, 100),
+            )
+
+    def test_no_overlap_raises(self):
+        t_rc = np.arange(2000.0, 2050.0, 2.0)
+        rc = np.zeros(len(t_rc))
+        rc[5] = 0.1
+        seismic_twt_ms = np.arange(0.0, 50.0, 2.0)
+        real_trace = np.random.default_rng(0).normal(0, 1, len(seismic_twt_ms))
+        with pytest.raises(TieError):
+            search_best_tie_full_window_phase_grid(
+                t_rc, rc, seismic_twt_ms, 2.0, real_trace,
+                candidate_freqs_hz=self._FREQS, phase_steps_deg=self._PHASES, shift_steps_ms=self._SHIFTS,
+            )
+
+
+class TestRefineTieWarp:
+    def test_refined_correlation_never_worse_than_input(self):
+        rng = np.random.default_rng(4)
+        dt_ms = 2.0
+        t_rc = np.arange(2000.0, 2120.0, dt_ms)
+        rc = np.zeros(len(t_rc))
+        rc[[10, 25, 40, 50]] = [0.1, -0.15, 0.08, -0.05]
+        _, wav = ricker_wavelet(30.0, dt_ms / 1000.0, 0.06)
+        full = np.convolve(rc, wav, mode="full")
+        start = (len(full) - len(rc)) // 2
+        synth = full[start : start + len(rc)]
+        synth = synth - synth.mean()
+        synth = synth / synth.std()
+
+        seismic_twt_ms = np.arange(1900.0, 2300.0, dt_ms)
+        # A mild NON-linear local drift on top of a bulk shift -- a single
+        # bulk shift can't fully correct this, but the warp should improve on it.
+        drift = np.linspace(0.0, 6.0, len(t_rc))
+        t_shifted = t_rc + 10.0 + drift
+        real_trace = np.interp(seismic_twt_ms, t_shifted, synth, left=0.0, right=0.0)
+        real_trace = real_trace + rng.normal(0, 0.02, len(real_trace))
+
+        best = search_best_tie_full_window_phase_grid(
+            t_rc, rc, seismic_twt_ms, dt_ms, real_trace,
+            candidate_freqs_hz=(20.0, 30.0, 40.0), phase_steps_deg=(0.0, 90.0, 180.0, 270.0),
+            shift_steps_ms=tuple(float(s) for s in np.linspace(-20.0, 20.0, 21)),
+        )
+        refined = refine_tie_warp(t_rc, rc, seismic_twt_ms, real_trace, best)
+        assert refined.correlation >= best.correlation - 1e-9
+
+    def test_preserves_reflectivity_and_freq_phase(self):
+        t_rc = np.arange(2000.0, 2120.0, 2.0)
+        rc = np.zeros(len(t_rc))
+        rc[10] = 0.1
+        seismic_twt_ms = np.arange(1900.0, 2300.0, 2.0)
+        real_trace = np.random.default_rng(0).normal(0, 1, len(seismic_twt_ms))
+        best = search_best_tie_full_window_phase_grid(
+            t_rc, rc, seismic_twt_ms, 2.0, real_trace,
+            candidate_freqs_hz=(20.0, 30.0), phase_steps_deg=(0.0, 180.0), shift_steps_ms=(0.0, 10.0),
+        )
+        refined = refine_tie_warp(t_rc, rc, seismic_twt_ms, real_trace, best)
+        assert refined.best_freq_hz == best.best_freq_hz
+        assert refined.phase_deg == best.phase_deg
+        np.testing.assert_allclose(refined.reflectivity, rc)
+
+    def test_too_few_samples_returns_input_unchanged(self):
+        t_rc = np.array([2000.0, 2002.0])
+        rc = np.array([0.1, -0.1])
+        seismic_twt_ms = np.arange(1900.0, 2100.0, 2.0)
+        real_trace = np.random.default_rng(0).normal(0, 1, len(seismic_twt_ms))
+        full_rc = np.zeros(60)
+        full_rc[30] = 0.1
+        best = search_best_tie_full_window_phase_grid(
+            np.arange(2000.0, 2120.0, 2.0), full_rc, seismic_twt_ms, 2.0, real_trace,
+            candidate_freqs_hz=(20.0,), phase_steps_deg=(0.0,), shift_steps_ms=(0.0,),
+        )
+        # n_control_points defaults to 4, well over len(t_rc)=2 here.
+        refined = refine_tie_warp(t_rc, rc, seismic_twt_ms, real_trace, best)
+        assert refined is best

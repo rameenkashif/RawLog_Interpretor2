@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.optimize import curve_fit
-from scipy.signal import correlate
+from scipy.signal import correlate, hilbert
 
 
 class TieError(Exception):
@@ -957,4 +957,230 @@ def search_best_tie_full_window(
         synthetic_amplitude=best["synth"],
         seismic_amplitude=seismic_amplitude,
         reflectivity=rc,
+    )
+
+
+# ---- Phase-rotated grid-search tie (sweet-spot-prediction module) ----------
+# A separate, more exhaustive tie search than search_best_tie_full_window
+# above: adds a continuous wavelet-phase-rotation dimension (not just the
+# +/-1 polarity special case) on top of the same frequency x shift search.
+# Kept fully additive -- direct_tie_service and every page that resolves a
+# well tie today keep calling search_best_tie_full_window/search_best_tie
+# unchanged; this is opt-in, called only from sweet_spot_training_data.py's
+# offline training-data construction (a per-well, one-time cost, not a
+# per-request one), where the ~11k-combination grid is worth the extra
+# accuracy the doc's own headline 0.994 correlation result relies on.
+def rotate_wavelet_phase(wavelet: np.ndarray, phase_deg: float) -> np.ndarray:
+    """Constant-phase rotation of a wavelet via its analytic signal:
+    w_theta = cos(theta)*w + sin(theta)*Im(hilbert(w)) -- the standard
+    zero-phase-to-mixed-phase rotation used in well-tie wavelet analysis.
+    theta=0 leaves w unchanged; theta=180 gives exactly -w, i.e. this
+    generalizes search_best_tie_full_window's polarity=+/-1 special case
+    to a continuous sweep rather than replacing it."""
+    theta = np.deg2rad(phase_deg)
+    quad = np.imag(hilbert(wavelet))
+    return np.cos(theta) * wavelet + np.sin(theta) * quad
+
+
+@dataclass
+class PhaseTieResult(FullWindowTieResult):
+    """FullWindowTieResult plus the winning phase rotation and how many
+    (frequency, phase, shift) combinations were actually evaluated."""
+
+    phase_deg: float = 0.0
+    n_candidates_tried: int = 0
+
+
+# Matches the source doc's own grid exactly: 11 frequencies x 24 phase
+# steps x 41 shift steps = 10,824 combinations per well.
+PHASE_GRID_FREQS_HZ: tuple[float, ...] = (10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0)
+PHASE_GRID_PHASE_STEPS_DEG: tuple[float, ...] = tuple(float(p) for p in range(0, 360, 15))
+PHASE_GRID_SHIFT_STEPS_MS: tuple[float, ...] = tuple(float(s) for s in np.linspace(-40.0, 40.0, 41))
+
+
+def search_best_tie_full_window_phase_grid(
+    t_rc: np.ndarray,
+    rc: np.ndarray,
+    seismic_twt_axis_ms: np.ndarray,
+    seismic_dt_ms: float,
+    real_trace: np.ndarray,
+    candidate_freqs_hz: tuple[float, ...] = PHASE_GRID_FREQS_HZ,
+    phase_steps_deg: tuple[float, ...] = PHASE_GRID_PHASE_STEPS_DEG,
+    shift_steps_ms: tuple[float, ...] = PHASE_GRID_SHIFT_STEPS_MS,
+) -> PhaseTieResult:
+    """Jointly searches wavelet frequency, phase rotation, and bulk time
+    shift by absolute time against the full seismic window -- same overlap-
+    mask correlation structure as search_best_tie_full_window, with an
+    added phase dimension.
+
+    Convolution is hoisted out of the phase loop for speed: since the
+    Hilbert transform commutes with convolution (both are LTI operators),
+    rotate(convolve(rc, w), theta) == cos(theta)*convolve(rc, w) +
+    sin(theta)*convolve(rc, Im(hilbert(w))) -- so each frequency needs only
+    TWO convolutions (base + quadrature), not one per phase step. The
+    phase and shift loops are then cheap linear combinations + correlation
+    scans, keeping the full ~11k-combination grid fast enough to run
+    per-well as part of offline training-data construction.
+    """
+    rc = np.asarray(rc, dtype=float)
+    t_rc = np.asarray(t_rc, dtype=float)
+    if len(rc) < 5:
+        raise TieError("Reflectivity series too short for a full-window phase-grid tie search.")
+
+    wavelet_len_s = min(0.100, max(0.030, 0.6 * len(rc) * seismic_dt_ms / 1000.0))
+    min_needed = min(30, max(10, int(0.5 * len(t_rc))))
+
+    best: dict | None = None
+    n_tried = 0
+    for freq in candidate_freqs_hz:
+        _, wav = ricker_wavelet(freq, seismic_dt_ms / 1000.0, wavelet_len_s)
+        wav_quad = np.imag(hilbert(wav))
+
+        def _convolve_crop(kernel: np.ndarray) -> np.ndarray:
+            full = np.convolve(rc, kernel, mode="full")
+            start = (len(full) - len(rc)) // 2
+            return full[start : start + len(rc)]
+
+        base_synth = _convolve_crop(wav)
+        quad_synth = _convolve_crop(wav_quad)
+
+        for phase_deg in phase_steps_deg:
+            theta = np.deg2rad(phase_deg)
+            synth = np.cos(theta) * base_synth + np.sin(theta) * quad_synth
+            synth = synth - synth.mean()
+            if synth.std() > 0:
+                synth = synth / synth.std()
+
+            for shift_ms in shift_steps_ms:
+                n_tried += 1
+                t_shifted = t_rc + shift_ms
+                mask = (t_shifted >= seismic_twt_axis_ms[0]) & (t_shifted <= seismic_twt_axis_ms[-1])
+                if mask.sum() < min_needed:
+                    continue
+                seis_interp = np.interp(t_shifted[mask], seismic_twt_axis_ms, real_trace)
+                ss = synth[mask]
+                if seis_interp.std() == 0 or ss.std() == 0:
+                    continue
+                seis_n = (seis_interp - seis_interp.mean()) / seis_interp.std()
+                ss_n = (ss - ss.mean()) / ss.std()
+                corr = float(np.mean(seis_n * ss_n))
+                if best is None or corr > best["corr"]:
+                    best = dict(
+                        corr=corr,
+                        freq=float(freq),
+                        phase_deg=float(phase_deg),
+                        shift_ms=float(shift_ms),
+                        synth=synth,
+                        n_used=int(mask.sum()),
+                    )
+
+    if best is None:
+        raise TieError(
+            "No (frequency, phase, shift) combination produced enough overlap with the "
+            f"seismic window (need >= {min_needed} samples) -- check that the well's time axis "
+            "actually falls near the seismic's recorded TWT range."
+        )
+
+    time_ms_full = t_rc + best["shift_ms"]
+    seis_full = np.interp(time_ms_full, seismic_twt_axis_ms, real_trace)
+    seis_std = seis_full.std()
+    seismic_amplitude = (seis_full - seis_full.mean()) / seis_std if seis_std > 0 else seis_full - seis_full.mean()
+
+    # polarity is reported as the nearest +/-1 equivalent of the winning
+    # phase (0deg-ish -> +1, 180deg-ish -> -1) so PhaseTieResult stays a
+    # drop-in FullWindowTieResult for any code that only reads .polarity.
+    polarity = -1 if 90.0 < (best["phase_deg"] % 360.0) < 270.0 else 1
+
+    return PhaseTieResult(
+        best_freq_hz=best["freq"],
+        polarity=polarity,
+        bulk_shift_ms=best["shift_ms"],
+        correlation=best["corr"],
+        n_used=best["n_used"],
+        time_ms=time_ms_full,
+        synthetic_amplitude=best["synth"],
+        seismic_amplitude=seismic_amplitude,
+        reflectivity=rc,
+        phase_deg=best["phase_deg"],
+        n_candidates_tried=n_tried,
+    )
+
+
+def refine_tie_warp(
+    t_rc: np.ndarray,
+    rc: np.ndarray,
+    seismic_twt_axis_ms: np.ndarray,
+    real_trace: np.ndarray,
+    best: PhaseTieResult,
+    n_control_points: int = 4,
+    n_passes: int = 3,
+    max_warp_ms: float = 8.0,
+    warp_steps: int = 9,
+) -> PhaseTieResult:
+    """4-control-point smooth-warp refinement (coordinate descent), run
+    AFTER search_best_tie_full_window_phase_grid to locally fine-tune the
+    winning combination's time alignment beyond what a single bulk shift
+    can capture. Control points are evenly spaced in t_rc (the well's own
+    reflectivity time axis) and their per-point time offsets are
+    piecewise-linearly interpolated the same way apply_stretch_squeeze
+    already does -- offsets hold constant outside the control points'
+    range rather than extrapolating.
+
+    Each pass visits every control point once, in order, trying
+    warp_steps candidate offsets in [-max_warp_ms, max_warp_ms] for that
+    point alone (holding every other point's current offset fixed) and
+    keeping whichever offset maximizes correlation -- a standard
+    coordinate-descent sweep, repeated n_passes times so later points can
+    react to earlier ones' updates.
+    """
+    if len(t_rc) < n_control_points:
+        return best
+
+    control_t = np.linspace(float(t_rc[0]), float(t_rc[-1]), n_control_points)
+    offsets = np.zeros(n_control_points, dtype=float)
+    candidate_offsets = np.linspace(-max_warp_ms, max_warp_ms, warp_steps)
+
+    base_wavelet_time = t_rc + best.bulk_shift_ms  # pre-warp aligned axis
+    synth_unshifted = best.synthetic_amplitude
+
+    def _score(offsets_trial: np.ndarray) -> tuple[float, np.ndarray]:
+        warp_ms = np.interp(t_rc, control_t, offsets_trial)
+        t_warped = base_wavelet_time + warp_ms
+        seis_interp = np.interp(t_warped, seismic_twt_axis_ms, real_trace)
+        if seis_interp.std() == 0 or synth_unshifted.std() == 0:
+            return -1.0, t_warped
+        seis_n = (seis_interp - seis_interp.mean()) / seis_interp.std()
+        syn_n = (synth_unshifted - synth_unshifted.mean()) / synth_unshifted.std()
+        return float(np.mean(seis_n * syn_n)), t_warped
+
+    best_corr, _ = _score(offsets)
+    for _ in range(n_passes):
+        for i in range(n_control_points):
+            local_best_corr, local_best_offset = best_corr, offsets[i]
+            for candidate in candidate_offsets:
+                trial = offsets.copy()
+                trial[i] = candidate
+                corr, _ = _score(trial)
+                if corr > local_best_corr:
+                    local_best_corr, local_best_offset = corr, candidate
+            offsets[i] = local_best_offset
+            best_corr = local_best_corr
+
+    final_corr, t_warped = _score(offsets)
+    seis_full = np.interp(t_warped, seismic_twt_axis_ms, real_trace)
+    seis_std = seis_full.std()
+    seismic_amplitude = (seis_full - seis_full.mean()) / seis_std if seis_std > 0 else seis_full - seis_full.mean()
+
+    return PhaseTieResult(
+        best_freq_hz=best.best_freq_hz,
+        polarity=best.polarity,
+        bulk_shift_ms=best.bulk_shift_ms,
+        correlation=final_corr,
+        n_used=best.n_used,
+        time_ms=t_warped,
+        synthetic_amplitude=synth_unshifted,
+        seismic_amplitude=seismic_amplitude,
+        reflectivity=best.reflectivity,
+        phase_deg=best.phase_deg,
+        n_candidates_tried=best.n_candidates_tried,
     )

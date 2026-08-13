@@ -37,6 +37,8 @@ import type {
   SpectralTraceResponse,
   SswtPetroCorrelationResponse,
   SurveyInfoResponse,
+  SweetSpotRegionPredictionResponse,
+  SweetSpotTrainingResponse,
   SwtWavelet,
   SyntheticSeismogramResponse,
   TiePointsResponse,
@@ -478,6 +480,36 @@ export function getBlindWellSectionMapsUrl(blindWellId: string, cacheBustKey?: s
   const params = new URLSearchParams({ blind_well_id: blindWellId });
   if (cacheBustKey != null) params.set("_t", String(cacheBustKey));
   return `${BASE_URL}/api/prediction/blind-well/section-maps?${params.toString()}`;
+}
+
+// -----------------------------------------------------------------------------
+// Sweet-Spot prediction (V11-style 2-stage cascade)
+// -----------------------------------------------------------------------------
+export async function trainSweetSpot(blindWellId?: string, refresh?: boolean): Promise<SweetSpotTrainingResponse> {
+  const params: Record<string, string> = {};
+  if (blindWellId) params.blind_well_id = blindWellId;
+  if (refresh) params.refresh = "true";
+  const { data } = await http.get<SweetSpotTrainingResponse>("/api/sweet-spot/train", { params });
+  return data;
+}
+
+export async function getSweetSpotRegionPrediction(
+  inlineRange: [number, number],
+  crosslineRange: [number, number],
+  properties: string[],
+  blindWellId?: string,
+): Promise<SweetSpotRegionPredictionResponse> {
+  const { data } = await http.get<SweetSpotRegionPredictionResponse>("/api/sweet-spot/region-prediction", {
+    params: {
+      inline_min: inlineRange[0],
+      inline_max: inlineRange[1],
+      crossline_min: crosslineRange[0],
+      crossline_max: crosslineRange[1],
+      properties: properties.join(","),
+      ...(blindWellId ? { blind_well_id: blindWellId } : {}),
+    },
+  });
+  return data;
 }
 
 // -----------------------------------------------------------------------------
